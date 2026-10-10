@@ -1,1 +1,7 @@
 game/
+build/
+out/
+.cache/
+compile_commands.json
+# generated recompiled C (derived from the game; never commit)
+generated/

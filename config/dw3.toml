@@ -1,0 +1,43 @@
+# psxrecomp configuration for Digimon World 3 (USA, SLUS-01436)
+
+[game]
+name = "Digimon World 3"
+serial = "SLUS-01436"
+disc_sectors = 275317
+# SHA-1 of the .bin, verified before recompiling (fill in once confirmed across dumps).
+bin_sha1 = ""
+
+[exe]
+path = "SLUS_014.36"
+entry = 0x80010EC4
+text_addr = 0x80010000
+text_size = 0xE0000
+
+[disc]
+# Root of the hidden AAA/ directory tree (not linked from the ISO9660 root).
+hidden_root_lba = 473
+
+# Overlay load slots. "mode" base confirmed by jal/prologue voting (= end of exe BSS / crt0 heap start).
+# "stage" base is provisional: many WSTAG files are mostly script data; confirm with a runtime trace.
+[[overlay_slot]]
+name = "mode"
+base = 0x80082448
+files = ["AAA/PRO/CARDGAME.PRO", "AAA/PRO/CNTY_SEL.PRO", "AAA/PRO/FIELDSTG.PRO", "AAA/PRO/FIGHTSTG.PRO",
+         "AAA/PRO/SHOCKTST.PRO", "AAA/PRO/SOUNDTST.PRO", "AAA/PRO/STAGSLCT.PRO", "AAA/PRO/STCRDABM.PRO",
+         "AAA/PRO/STCRDDEK.PRO", "AAA/PRO/STCRDSHP.PRO", "AAA/PRO/STDGNAME.PRO", "AAA/PRO/STDWTITL.PRO",
+         "AAA/PRO/STFGTREP.PRO", "AAA/PRO/STGDGLAB.PRO", "AAA/PRO/STGMCARD.PRO", "AAA/PRO/STGTRAIN.PRO",
+         "AAA/PRO/STITSHOP.PRO", "AAA/PRO/STPLNMET.PRO", "AAA/PRO/STSTATUS.PRO"]
+
+[[overlay_slot]]
+name = "stage"
+base = 0x800A4CA4  # provisional
+files_glob = ["AAA/PRO/WSTAG*.PRO", "AAA/PRO/WFIGHT*.PRO"]
+
+# Exe image also carries a non-BSS segment at 0x800A4CA4-0x800EFDA4 (300 KB); purpose TBD.
+[[resident_segment]]
+start = 0x800A4CA4
+end = 0x800EFDA4
+
+# No internal calls or pointers: treated as data, not recompiled. Verify with a runtime trace.
+[overlay_data]
+files = ["AAA/PRO/SDIGIEDT.PRO", "AAA/PRO/SFSTDATA.PRO", "AAA/PRO/SMDLDATA.PRO"]
