@@ -1,3 +1,7 @@
 add_executable(dw3recomp main.cpp)
 target_link_libraries(dw3recomp PRIVATE dw3runtime SDL3::SDL3)
+if(DW3_HAVE_GENERATED)
+    target_link_libraries(dw3recomp PRIVATE dw3_generated)
+    target_compile_definitions(dw3recomp PRIVATE DW3_HAVE_GENERATED=1)
+endif()
 dw3_target_defaults(dw3recomp)

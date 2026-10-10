@@ -23,7 +23,9 @@ public:
     Bus();
 
     RecompContext& ctx() { return ctx_; }
+    uint8_t* scratchpad() { return scratchpad_.data(); }
     uint8_t* ram() { return ram_.data(); }
+    const uint8_t* ram() const { return ram_.data(); }
 
     void map_io(IoHandler h);
 

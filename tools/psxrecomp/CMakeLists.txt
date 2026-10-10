@@ -1,5 +1,7 @@
 add_library(psxrecomp_core STATIC
-    src/mips.cpp)
+    src/mips.cpp
+    src/analysis.cpp
+    src/emitter.cpp)
 target_include_directories(psxrecomp_core PUBLIC include)
 dw3_target_defaults(psxrecomp_core)
 

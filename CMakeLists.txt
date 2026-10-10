@@ -16,10 +16,35 @@ option(DW3_BUILD_APP "Build the game executable (requires recompiled sources)" O
 # Location of the user-supplied disc image. Never committed.
 set(DW3_GAME_DIR "${CMAKE_CURRENT_SOURCE_DIR}/game" CACHE PATH "Directory containing the Digimon World 3 (USA) bin/cue")
 
+# Recompiled game code, produced by `psxrecomp config/dw3.toml emit --out generated` (never committed).
+set(DW3_GENERATED_DIR "${CMAKE_CURRENT_SOURCE_DIR}/generated" CACHE PATH "psxrecomp output directory")
+
 add_subdirectory(tools/psxdisc)
 add_subdirectory(tools/dw3extract)
 add_subdirectory(tools/psxrecomp)
 add_subdirectory(runtime)
+
+if(EXISTS "${DW3_GENERATED_DIR}/sources.txt")
+    set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${DW3_GENERATED_DIR}/sources.txt")
+    file(STRINGS "${DW3_GENERATED_DIR}/sources.txt" DW3_GENERATED_NAMES)
+    list(TRANSFORM DW3_GENERATED_NAMES PREPEND "${DW3_GENERATED_DIR}/")
+    add_library(dw3_generated STATIC ${DW3_GENERATED_NAMES})
+    target_link_libraries(dw3_generated PUBLIC dw3runtime)
+    # Generated code is large and label-heavy; always optimise it and keep it quiet.
+    target_compile_options(dw3_generated PRIVATE $<$<C_COMPILER_ID:Clang,GNU>:-O1> $<$<C_COMPILER_ID:Clang,GNU>:-w> $<$<C_COMPILER_ID:MSVC>:/O1> $<$<C_COMPILER_ID:MSVC>:/w>)
+    set(DW3_HAVE_GENERATED ON)
+    message(STATUS "DW3: using recompiled code from ${DW3_GENERATED_DIR}")
+else()
+    set(DW3_HAVE_GENERATED OFF)
+    message(STATUS "DW3: no recompiled code found; run psxrecomp emit to generate it")
+endif()
+
+# Regenerate recompiled code: cmake --build <dir> --target recompile
+add_custom_target(recompile
+    COMMAND psxrecomp "${CMAKE_CURRENT_SOURCE_DIR}/config/dw3.toml" emit --out "${DW3_GENERATED_DIR}"
+    WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
+    DEPENDS psxrecomp
+    COMMENT "Recompiling game code with psxrecomp")
 
 if(DW3_BUILD_APP)
     add_subdirectory(app)

@@ -11,6 +11,7 @@
 #include <cstdlib>
 #include <string>
 
+#include "dw3/machine.h"
 #include "dw3/platform.h"
 
 int main(int argc, char** argv) {
@@ -24,6 +25,15 @@ int main(int argc, char** argv) {
 
     SDL_Log("DW3Recomp starting (os=%s arch=%s)", dw3::platform::os_name(dw3::platform::host_os()).data(),
             dw3::platform::arch_name(dw3::platform::host_arch()).data());
+
+#if DW3_HAVE_GENERATED
+    dw3::Machine machine({dw3_segments, dw3_segment_count});
+    std::size_t funcs = 0;
+    for (uint32_t i = 0; i < dw3_segment_count; ++i) funcs += dw3_segments[i].func_count;
+    SDL_Log("recompiled code: %u segments, %zu functions", dw3_segment_count, funcs);
+#else
+    SDL_Log("no recompiled code linked (run the 'recompile' target)");
+#endif
 
     if (!SDL_Init(SDL_INIT_VIDEO | SDL_INIT_EVENTS)) {
         SDL_Log("SDL_Init failed: %s", SDL_GetError());

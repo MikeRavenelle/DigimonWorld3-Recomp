@@ -7,8 +7,17 @@ disc_sectors = 275317
 # SHA-1 of the .bin, verified before recompiling (fill in once confirmed across dumps).
 bin_sha1 = ""
 
+[paths]
+extracted = "game/extracted"
+
 [exe]
 path = "SLUS_014.36"
+# End of .text/.data before BSS; function starts are only accepted below this.
+code_end = 0x8005C480
+# Extra function entry points.
+#   0x8002E824: resume point after setjmp() in libapi startIntr. The BIOS (HookEntryInt) "longjmps"
+#               here on every interrupt, so it must be callable on its own.
+functions = [0x8002E824]
 entry = 0x80010EC4
 text_addr = 0x80010000
 text_size = 0xE0000

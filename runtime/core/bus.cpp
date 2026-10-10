@@ -8,7 +8,7 @@ namespace dw3 {
 Bus::Bus() : ram_(DW3_RAM_SIZE, 0) {
     ctx_.ram = ram_.data();
     ctx_.scratchpad = scratchpad_.data();
-    ctx_.runtime = this;
+    ctx_.bus = this;
 }
 
 void Bus::map_io(IoHandler h) { io_.push_back(std::move(h)); }
@@ -56,9 +56,9 @@ void Bus::write(uint32_t addr, uint32_t value, int size) {
 }  // namespace dw3
 
 extern "C" uint32_t dw3_mem_read(RecompContext* ctx, uint32_t addr, int size) {
-    return static_cast<dw3::Bus*>(ctx->runtime)->read(addr, size);
+    return static_cast<dw3::Bus*>(ctx->bus)->read(addr, size);
 }
 
 extern "C" void dw3_mem_write(RecompContext* ctx, uint32_t addr, uint32_t value, int size) {
-    static_cast<dw3::Bus*>(ctx->runtime)->write(addr, value, size);
+    static_cast<dw3::Bus*>(ctx->bus)->write(addr, value, size);
 }
