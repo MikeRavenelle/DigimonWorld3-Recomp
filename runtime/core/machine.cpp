@@ -32,10 +32,26 @@ void fatal(const std::string& message) {
 }
 
 Machine::Machine(std::span<const RecompSegment> segments)
-    : segments_(segments), resident_(segments.size(), false), verified_(segments.size(), false) {
+    : sched_(bus_.ctx()),
+      irq_(bus_),
+      video_(sched_, irq_),
+      timers_(bus_, sched_, irq_, video_),
+      dma_(bus_, sched_, irq_),
+      segments_(segments),
+      resident_(segments.size(), false),
+      verified_(segments.size(), false) {
     ctx().machine = this;
-    ctx().next_event = INT64_MAX;
     if (!segments_.empty()) resident_[0] = verified_[0] = true;  // main executable
+    dma_.on_ram_written = [this](uint32_t addr, uint32_t len) { invalidate(addr, len); };
+    irq_.on_line_change = [this](bool line) {
+        set_cause_ip2(ctx(), line);
+        if (line) request_service();
+    };
+}
+
+void Machine::service_events() {
+    sched_.run_due();
+    if (on_interrupt && cpu_interrupt_deliverable(ctx(), irq_)) on_interrupt(ctx());
 }
 
 void Machine::load_segment_image(std::size_t index, std::span<const uint8_t> image) {
@@ -116,7 +132,7 @@ RecompFunc dw3_lookup_func(RecompContext* ctx, uint32_t addr) { return dw3::mach
 void dw3_service_events(RecompContext* ctx) {
     auto* m = dw3::machine_of(ctx);
     if (m->on_service_events) m->on_service_events(*ctx);
-    else ctx->next_event = INT64_MAX;
+    else m->service_events();
 }
 
 void dw3_syscall(RecompContext* ctx, uint32_t pc) {
@@ -141,12 +157,17 @@ void dw3_bios_call(RecompContext* ctx, uint32_t table, uint32_t fn) {
     m->on_bios_call(*ctx, table, fn);
 }
 
-void dw3_mtc0(RecompContext* ctx, uint32_t reg, uint32_t value) { ctx->cop0[reg & 31] = value; }
+void dw3_mtc0(RecompContext* ctx, uint32_t reg, uint32_t value) {
+    ctx->cop0[reg & 31] = value;
+    // Enabling interrupts with the line already high must deliver promptly.
+    if ((reg & 31) == 12 && ctx->machine) dw3::machine_of(ctx)->request_service();
+}
 
 void dw3_rfe(RecompContext* ctx) {
     // Pop the 3-level interrupt/mode stack in SR (bits 0-5).
     uint32_t sr = ctx->cop0[12];
     ctx->cop0[12] = (sr & ~0xFu) | ((sr >> 2) & 0xFu);
+    if (ctx->machine) dw3::machine_of(ctx)->request_service();
 }
 
 uint32_t dw3_gte_read_data(RecompContext* ctx, uint32_t reg) { return dw3::machine_of(ctx)->gte().read_data(reg); }

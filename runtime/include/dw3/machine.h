@@ -10,8 +10,13 @@
 #include <vector>
 
 #include "dw3/bus.h"
+#include "dw3/dma.h"
 #include "dw3/gte.h"
+#include "dw3/irq.h"
 #include "dw3/recomp.h"
+#include "dw3/scheduler.h"
+#include "dw3/timers.h"
+#include "dw3/video_timing.h"
 
 namespace dw3 {
 
@@ -29,7 +34,17 @@ public:
 
     Bus& bus() { return bus_; }
     Gte& gte() { return gte_; }
+    Scheduler& scheduler() { return sched_; }
+    IrqController& irq() { return irq_; }
+    VideoTiming& video() { return video_; }
+    Timers& timers() { return timers_; }
+    Dma& dma() { return dma_; }
     RecompContext& ctx() { return bus_.ctx(); }
+
+    // Runs due scheduler events, then delivers a pending CPU interrupt via on_interrupt.
+    void service_events();
+    // Forces an event check at the next opportunity (interrupt line raised, SR changed, ...).
+    void request_service() { ctx().next_event = ctx().cycles; }
 
     // Copies a segment image into RAM and marks it resident (used for MAIN at boot and by tests).
     void load_segment_image(std::size_t index, std::span<const uint8_t> image);
@@ -47,7 +62,10 @@ public:
 
     // BIOS dispatch hook (installed by the HLE BIOS). Default: fatal.
     std::function<void(RecompContext&, uint32_t table, uint32_t fn)> on_bios_call;
+    // Replaces service_events() entirely when set (unit tests).
     std::function<void(RecompContext&)> on_service_events;
+    // Called when an interrupt is deliverable (IRQ pending and SR allows it). Installed by the BIOS.
+    std::function<void(RecompContext&)> on_interrupt;
     std::function<void(RecompContext&, uint32_t pc)> on_syscall;
 
     // Diagnostics.
@@ -61,8 +79,14 @@ private:
         return phys(addr) >= phys(s.base) && phys(addr) < phys(s.base) + s.size;
     }
 
+    // Declaration order is construction order: hardware blocks depend on the bus and scheduler.
     Bus bus_;
     Gte gte_;
+    Scheduler sched_;
+    IrqController irq_;
+    VideoTiming video_;
+    Timers timers_;
+    Dma dma_;
     std::span<const RecompSegment> segments_;
     std::vector<bool> resident_;
     std::vector<bool> verified_;  // resident and confirmed since last invalidate
