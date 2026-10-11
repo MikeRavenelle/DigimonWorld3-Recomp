@@ -17,6 +17,7 @@
 #include "shaders/present.frag.h"
 #include "shaders/present.vert.h"
 #include "shaders/psx_draw.frag.h"
+#include "shaders/psx_draw_layer.frag.h"
 #include "shaders/psx_draw.vert.h"
 
 namespace {
@@ -34,6 +35,7 @@ TEST(Shaders, CompiledToSpirv) {
     using namespace dw3::shaders;
     EXPECT_TRUE(is_spirv(psx_draw_vert_spv, psx_draw_vert_spv_size));
     EXPECT_TRUE(is_spirv(psx_draw_frag_spv, psx_draw_frag_spv_size));
+    EXPECT_TRUE(is_spirv(psx_draw_layer_frag_spv, psx_draw_layer_frag_spv_size));
     EXPECT_TRUE(is_spirv(present_vert_spv, present_vert_spv_size));
     EXPECT_TRUE(is_spirv(present_frag_spv, present_frag_spv_size));
 }
@@ -212,9 +214,8 @@ TEST_P(HwCompare, LinesAreExact) {
     EXPECT_EQ(d.count, 0);
 }
 
-TEST_P(HwCompare, TrianglesMatchWithinRasterizationTolerance) {
-    // Edge coverage and attribute interpolation follow the GPU's rules, so a few edge pixels may differ.
-    Scene probe;
+TEST_P(HwCompare, TrianglesAreExact) {
+    // Colour and texel coordinates are evaluated from the software rasterizer's own planes.
     Diff d = run([](Rasterizer& r, std::vector<uint16_t>& v, DrawState& s) {
         PrimitiveFlags f;
         GpuVertex t0[3] = {gv(20, 20, 255, 0, 0), gv(200, 40, 255, 0, 0), gv(60, 200, 255, 0, 0)};
@@ -231,9 +232,7 @@ TEST_P(HwCompare, TrianglesMatchWithinRasterizationTolerance) {
                            gv(150, 200, 128, 128, 128, 0, 100)};
         r.triangle(v, s, f, t2);
     });
-    // About 100 of the ~60000 drawn pixels differ, all by one colour step: interpolation rounding.
-    EXPECT_LT(d.count, 200) << "differing pixels";
-    EXPECT_LE(d.max_channel, 1);
+    EXPECT_EQ(d.count, 0) << "differing pixels";
 }
 
 TEST_P(HwCompare, TransfersStayCoherentWithDraws) {
@@ -312,8 +311,7 @@ TEST_P(HwCompare, RandomPrimitives) {
             }
         }
     });
-    // Triangle edge pixels and interpolation rounding account for the differences.
-    EXPECT_LT(d.count, 400) << "differing pixels";
+    EXPECT_EQ(d.count, 0) << "differing pixels";
 }
 
 // Software reference for the two VRAM operations the Gpu front end performs on its array (the same row-by-row
@@ -481,7 +479,7 @@ TEST_P(HwScaled, UploadsAreReplicatedAndReadBackExactly) {
     ASSERT_EQ(img.size(), static_cast<std::size_t>(r.w * n) * r.h * n);
     int bad = 0;
     for (int y = 0; y < r.h * n; ++y)
-        for (int x = 0; x < r.w * n; ++x) bad += img[static_cast<std::size_t>(y) * r.w * n + x] != (v[(r.y + y / n) * kVramWidth + r.x + x / n] & 0x7FFF | (v[(r.y + y / n) * kVramWidth + r.x + x / n] & 0x8000));
+        for (int x = 0; x < r.w * n; ++x) bad += img[static_cast<std::size_t>(y) * r.w * n + x] != v[(r.y + y / n) * kVramWidth + r.x + x / n];
     EXPECT_EQ(bad, 0);
     std::vector<uint16_t> got(kPixels);
     hw->read_vram(got);
@@ -607,6 +605,427 @@ TEST_P(HwScaled, SemiTransparencyAndMaskWorkPerSubpixel) {
 }
 
 INSTANTIATE_TEST_SUITE_P(InternalRes, HwScaled, ::testing::Values(2, 3, 4, 8));
+
+// ---- display layer: true colour and texture filtering ---------------------------------------------------
+
+// 5-bit word -> the RGBA8 colour a default renderer shows for it.
+uint32_t expand_word(uint16_t w) {
+    auto e = [](uint32_t v) { return (v << 3) | (v >> 2); };
+    return e(w & 31) | (e((w >> 5) & 31) << 8) | (e((w >> 10) & 31) << 16) | 0xFF000000u;
+}
+int chan(uint32_t px, int c) { return static_cast<int>((px >> (8 * c)) & 255); }
+
+// Base of the display layer tests: a renderer with the given options, run against the software rasterizer.
+class HwLayerBase : public ::testing::TestWithParam<int> {
+protected:
+    virtual HwOptions options() const = 0;
+    void SetUp() override {
+        std::string error;
+        hw = HwRenderer::create(nullptr, {}, error, GetParam(), options());
+        if (!hw) GTEST_SKIP() << "no Vulkan device: " << error;
+        vram.assign(kPixels, 0);
+        ref.assign(kPixels, 0);
+        s.area_x2 = 319;
+        s.area_y2 = 299;
+    }
+    int scale() const { return GetParam(); }
+    // Draws on both renderers; the GPU's VRAM must stay equal to the software one.
+    template <typename F>
+    void draw(F fn) {
+        SoftRasterizer soft;
+        fn(soft, ref, s);
+        DrawState copy = s;
+        fn(*hw, vram, copy);
+    }
+    void upload() {
+        ref = vram;
+        hw->vram_written(vram, {});
+    }
+    // Game-visible state is identical to the software rasterizer's.
+    int vram_mismatches() {
+        std::vector<uint16_t> got(kPixels);
+        hw->read_vram(got);
+        return compare(ref, got).count;
+    }
+    // Colour shown for a native-pixel region, (w*N) x (h*N).
+    std::vector<uint32_t> shown(const VramRect& r) {
+        std::vector<uint32_t> img;
+        EXPECT_TRUE(hw->read_display(r, img));
+        return img;
+    }
+    // Colour shown at a subpixel of the region.
+    uint32_t at(const std::vector<uint32_t>& img, const VramRect& r, int sx, int sy) const {
+        return img[static_cast<std::size_t>(sy) * r.w * scale() + sx];
+    }
+    // Number of subpixels of the region that differ from the exact 5-bit colour of their native pixel.
+    int differs_from_exact(const VramRect& r) {
+        const auto img = shown(r);
+        std::vector<uint16_t> got(kPixels);
+        hw->read_vram(got);
+        int n = 0;
+        for (int y = 0; y < r.h * scale(); ++y)
+            for (int x = 0; x < r.w * scale(); ++x)
+                n += at(img, r, x, y) != expand_word(got[(r.y + y / scale()) * kVramWidth + r.x + x / scale()]);
+        return n;
+    }
+    // The random primitive mix of RandomPrimitives.
+    void random_mix() {
+        draw([](Rasterizer& r, std::vector<uint16_t>& v, DrawState& st) {
+            std::mt19937 rng(99);
+            auto rnd = [&](int lo, int hi) { return lo + static_cast<int>(rng() % static_cast<unsigned>(hi - lo + 1)); };
+            for (int i = 0; i < 400; ++i) {
+                st.depth = static_cast<TexDepth>(rnd(0, 2));
+                st.semi_mode = static_cast<uint8_t>(rnd(0, 3));
+                st.dither = rnd(0, 1);
+                st.set_mask = rnd(0, 7) == 0;
+                st.check_mask = rnd(0, 7) == 0;
+                PrimitiveFlags f;
+                f.textured = rnd(0, 1);
+                f.raw_texture = rnd(0, 3) == 0;
+                f.semi_transparent = rnd(0, 2) == 0;
+                f.clut = static_cast<uint16_t>(((480 + rnd(0, 3)) << 6) | rnd(0, 8));
+                const int x = rnd(0, 280), y = rnd(0, 200);
+                GpuVertex o = gv(x, y, rnd(0, 255), rnd(0, 255), rnd(0, 255), rnd(0, 120), rnd(0, 120));
+                if (i % 3 == 0) {
+                    r.rect(v, st, f, o, rnd(1, 40), rnd(1, 40));
+                } else if (i % 3 == 1) {
+                    r.line(v, st, f, o, gv(rnd(0, 300), rnd(0, 230), rnd(0, 255), rnd(0, 255), rnd(0, 255)));
+                } else {
+                    f.gouraud = rnd(0, 1);
+                    GpuVertex t[3] = {o, gv(x + rnd(5, 60), y + rnd(-10, 40), rnd(0, 255), rnd(0, 255), rnd(0, 255), rnd(0, 120), rnd(0, 120)),
+                                      gv(x + rnd(-10, 40), y + rnd(5, 60), rnd(0, 255), rnd(0, 255), rnd(0, 255), rnd(0, 120), rnd(0, 120))};
+                    r.triangle(v, st, f, t);
+                }
+            }
+        });
+    }
+    // Two triangles covering the box with the given corner texel coordinates (u0,v0 top-left, u1,v1 bottom-right).
+    static void quad(Rasterizer& r, std::vector<uint16_t>& v, const DrawState& st, const PrimitiveFlags& f, int x0, int y0,
+                     int x1, int y1, int u0, int v0, int u1, int v1) {
+        GpuVertex a[3] = {gv(x0, y0, 128, 128, 128, u0, v0), gv(x1, y0, 128, 128, 128, u1, v0), gv(x0, y1, 128, 128, 128, u0, v1)};
+        GpuVertex b[3] = {gv(x1, y0, 128, 128, 128, u1, v0), gv(x1, y1, 128, 128, 128, u1, v1), gv(x0, y1, 128, 128, 128, u0, v1)};
+        r.triangle(v, st, f, a);
+        r.triangle(v, st, f, b);
+    }
+
+    std::unique_ptr<HwRenderer> hw;
+    std::vector<uint16_t> vram, ref;
+    DrawState s;
+};
+
+class HwTrueColor : public HwLayerBase {
+protected:
+    HwOptions options() const override {
+        HwOptions o;
+        o.true_color = true;
+        return o;
+    }
+    // Horizontal red ramp: red = x - 0 over a large triangle (x up to 256).
+    void ramp(Rasterizer& r, std::vector<uint16_t>& v, const DrawState& st, int y0) {
+        PrimitiveFlags f;
+        f.gouraud = true;
+        GpuVertex t[3] = {gv(0, y0, 0, 0, 0), gv(256, y0, 255, 0, 0), gv(0, y0 + 40, 0, 0, 0)};
+        r.triangle(v, st, f, t);
+        GpuVertex u[3] = {gv(256, y0, 255, 0, 0), gv(256, y0 + 40, 255, 0, 0), gv(0, y0 + 40, 0, 0, 0)};
+        r.triangle(v, st, f, u);
+    }
+};
+
+TEST_P(HwTrueColor, GameVisibleVramStaysExact) {
+    upload();
+    random_mix();
+    EXPECT_EQ(vram_mismatches(), 0);
+}
+
+TEST_P(HwTrueColor, ShadedAreasKeepFullPrecisionWithoutDither) {
+    upload();
+    s.dither = true;
+    draw([&](Rasterizer& r, std::vector<uint16_t>& v, DrawState& st) { ramp(r, v, st, 10); });
+    EXPECT_EQ(vram_mismatches(), 0);  // the exact state still dithers and quantises
+    const VramRect row{20, 25, 200, 1};
+    const auto img = shown(row);
+    std::vector<int> reds;
+    for (int x = 0; x < row.w * scale(); ++x) reds.push_back(chan(at(img, row, x, 0), 0));
+    EXPECT_TRUE(std::is_sorted(reds.begin(), reds.end())) << "dither or quantisation noise";
+    std::sort(reds.begin(), reds.end());
+    reds.erase(std::unique(reds.begin(), reds.end()), reds.end());
+    EXPECT_GT(reds.size(), 150u) << "distinct red levels (a 5-bit image has at most 32)";
+}
+
+TEST_P(HwTrueColor, DrawnTexturesAreQuantisedAsOnTheConsole) {
+    upload();
+    draw([&](Rasterizer& r, std::vector<uint16_t>& v, DrawState& st) {
+        ramp(r, v, st, 256);
+        st.tex_base_x = 0;
+        st.tex_base_y = 256;
+        st.depth = TexDepth::Bit15;
+        PrimitiveFlags t;
+        t.textured = true;
+        t.raw_texture = true;
+        r.rect(v, st, t, gv(20, 100, 128, 128, 128, 0, 10), 200, 4);
+    });
+    EXPECT_EQ(vram_mismatches(), 0);
+    // The copy made through the texture only has 5-bit levels; the ramp it came from has more.
+    const VramRect copy{20, 100, 200, 1}, source{20, 270, 200, 1};
+    auto levels = [&](const VramRect& r) {
+        const auto img = shown(r);
+        std::vector<int> reds;
+        for (int x = 0; x < r.w * scale(); ++x) reds.push_back(chan(at(img, r, x, 0), 0));
+        std::sort(reds.begin(), reds.end());
+        reds.erase(std::unique(reds.begin(), reds.end()), reds.end());
+        return reds.size();
+    };
+    EXPECT_LE(levels(copy), 32u);
+    EXPECT_GT(levels(source), 100u);
+}
+
+TEST_P(HwTrueColor, SemiTransparencyBlendsWithTheFullPrecisionBackground) {
+    upload();
+    draw([&](Rasterizer& r, std::vector<uint16_t>& v, DrawState& st) { ramp(r, v, st, 10); });
+    const VramRect row{20, 25, 200, 2};
+    const auto before = shown(row);
+    draw([&](Rasterizer& r, std::vector<uint16_t>& v, DrawState& st) {
+        PrimitiveFlags f;
+        f.semi_transparent = true;
+        st.semi_mode = 0;
+        r.rect(v, st, f, gv(20, 24, 200, 0, 0), 200, 4);
+    });
+    EXPECT_EQ(vram_mismatches(), 0);
+    const auto after = shown(row);
+    int worst = 0;
+    for (int x = 0; x < row.w * scale(); ++x) {
+        const int expect = (chan(at(before, row, x, 0), 0) + 200) / 2;
+        worst = std::max(worst, std::abs(chan(at(after, row, x, 0), 0) - expect));
+    }
+    EXPECT_LE(worst, 1);
+}
+
+TEST_P(HwTrueColor, FillsAndUploadsOverEnhancedPixelsShowTheirExactColour) {
+    upload();
+    draw([&](Rasterizer& r, std::vector<uint16_t>& v, DrawState& st) { ramp(r, v, st, 10); });
+    ASSERT_TRUE(hw->vram_fill({40, 12, 20, 20}, 0x03E0));
+    for (int y = 12; y < 32; ++y)
+        for (int x = 40; x < 60; ++x) vram[y * kVramWidth + x] = ref[y * kVramWidth + x] = 0x03E0;
+    for (int y = 12; y < 32; ++y)
+        for (int x = 100; x < 120; ++x) vram[y * kVramWidth + x] = ref[y * kVramWidth + x] = 0x4210;
+    hw->vram_written(vram, {100, 12, 20, 20});
+    for (const VramRect& r : {VramRect{40, 12, 20, 20}, VramRect{100, 12, 20, 20}}) {
+        const auto img = shown(r);
+        const uint32_t want = expand_word(r.x == 40 ? 0x03E0 : 0x4210);
+        int bad = 0;
+        for (int y = 0; y < r.h * scale(); ++y)
+            for (int x = 0; x < r.w * scale(); ++x) bad += at(img, r, x, y) != want;
+        EXPECT_EQ(bad, 0) << "region at x " << r.x;
+    }
+}
+
+INSTANTIATE_TEST_SUITE_P(InternalRes, HwTrueColor, ::testing::Values(1, 2, 4));
+
+class HwBilinear : public HwLayerBase {
+protected:
+    HwOptions options() const override {
+        HwOptions o;
+        o.filter = TextureFilter::Bilinear;
+        return o;
+    }
+};
+
+TEST_P(HwBilinear, GameVisibleVramStaysExact) {
+    upload();
+    random_mix();
+    EXPECT_EQ(vram_mismatches(), 0);
+}
+
+TEST_P(HwBilinear, StretchedTexturesBlendThroughTheClut) {
+    // 8-bit texture, two texels: index 0 (red) and index 1 (blue) through the CLUT.
+    vram[512] = 0x0100;  // u = 0 -> index 0, u = 1 -> index 1
+    vram[480 * kVramWidth + 0] = 0x001F;
+    vram[480 * kVramWidth + 1] = 0x7C00;
+    upload();
+    s.tex_base_x = 512;
+    s.depth = TexDepth::Bit8;
+    PrimitiveFlags f;
+    f.textured = true;
+    f.raw_texture = true;
+    f.clut = static_cast<uint16_t>(480 << 6);
+    draw([&](Rasterizer& r, std::vector<uint16_t>& v, DrawState& st) { quad(r, v, st, f, 20, 20, 52, 24, 0, 0, 1, 0); });
+    EXPECT_EQ(vram_mismatches(), 0);  // exact state is the nearest texel
+    const VramRect row{20, 22, 32, 1};
+    const auto img = shown(row);
+    std::vector<int> reds, blues;
+    for (int x = 0; x < row.w * scale(); ++x) {
+        reds.push_back(chan(at(img, row, x, 0), 0));
+        blues.push_back(chan(at(img, row, x, 0), 2));
+    }
+    EXPECT_TRUE(std::is_sorted(reds.rbegin(), reds.rend())) << "red falls from texel 0 to texel 1";
+    EXPECT_TRUE(std::is_sorted(blues.begin(), blues.end()));
+    // Drawn pixels start where the nearest texel is opaque; in the middle the colours are mixed.
+    const int mid = row.w * scale() * 3 / 4;
+    EXPECT_GT(reds[mid], 20);
+    EXPECT_GT(blues[mid], 20);
+    EXPECT_GT(blues.back(), reds.back());
+}
+
+TEST_P(HwBilinear, TransparentTexelsLeaveNoDarkHalo) {
+    // Texel 0 transparent, texels 1.. one opaque colour; stretched, the pixels near the edge must keep that colour.
+    const uint16_t c = 20 | (25 << 5) | (10 << 10);
+    vram[512] = 0;
+    for (int x = 1; x < 8; ++x) vram[512 + x] = c;
+    upload();
+    s.tex_base_x = 512;
+    s.depth = TexDepth::Bit15;
+    PrimitiveFlags f;
+    f.textured = true;
+    f.raw_texture = true;
+    draw([&](Rasterizer& r, std::vector<uint16_t>& v, DrawState& st) { quad(r, v, st, f, 20, 20, 44, 26, 0, 0, 3, 0); });
+    EXPECT_EQ(vram_mismatches(), 0);
+    const VramRect box{16, 20, 32, 6};
+    const auto img = shown(box);
+    int opaque = 0, off = 0;
+    for (int y = 0; y < box.h * scale(); ++y)
+        for (int x = 0; x < box.w * scale(); ++x) {
+            const uint32_t px = at(img, box, x, y);
+            if (px == 0xFF000000u) continue;
+            ++opaque;
+            off += px != expand_word(c);
+        }
+    EXPECT_GT(opaque, 100);
+    EXPECT_EQ(off, 0) << "pixels not equal to the opaque texel colour";
+}
+
+TEST_P(HwBilinear, TapsStayInsideTheTextureBoundsOfThePrimitive) {
+    // Red texels sit just outside the used texels, including the wrap-around neighbour of texel 0.
+    const uint16_t blue = 0x7C00, red = 0x001F;
+    for (int x = 0; x < 256; ++x) vram[512 + x] = red;
+    vram[512] = blue;
+    vram[513] = blue;
+    upload();
+    s.tex_base_x = 512;
+    s.depth = TexDepth::Bit15;
+    PrimitiveFlags f;
+    f.textured = true;
+    f.raw_texture = true;
+    draw([&](Rasterizer& r, std::vector<uint16_t>& v, DrawState& st) { quad(r, v, st, f, 20, 20, 36, 24, 0, 0, 1, 0); });
+    const VramRect box{16, 20, 24, 4};
+    const auto img = shown(box);
+    int reddish = 0, drawn = 0;
+    for (int y = 0; y < box.h * scale(); ++y)
+        for (int x = 0; x < box.w * scale(); ++x) {
+            const uint32_t px = at(img, box, x, y);
+            if (px == 0xFF000000u) continue;
+            ++drawn;
+            reddish += chan(px, 0) != 0;
+        }
+    EXPECT_GT(drawn, 50);
+    EXPECT_EQ(reddish, 0);
+}
+
+TEST_P(HwBilinear, SpritesAndTilesStayPixelExact) {
+    for (int y = 0; y < 64; ++y)
+        for (int x = 0; x < 64; ++x) vram[y * kVramWidth + 512 + x] = static_cast<uint16_t>(((x * 7 + y * 13) & 0x7FFF) | 1);
+    upload();
+    s.tex_base_x = 512;
+    s.depth = TexDepth::Bit15;
+    PrimitiveFlags f;
+    f.textured = true;
+    f.raw_texture = true;
+    draw([&](Rasterizer& r, std::vector<uint16_t>& v, DrawState& st) {
+        r.rect(v, st, f, gv(20, 20, 128, 128, 128, 3, 5), 40, 30);
+        quad(r, v, st, f, 100, 20, 140, 50, 3, 5, 43, 35);  // one-to-one triangles
+    });
+    EXPECT_EQ(vram_mismatches(), 0);
+    EXPECT_EQ(differs_from_exact({20, 20, 40, 30}), 0);
+    EXPECT_EQ(differs_from_exact({100, 20, 40, 30}), 0);
+}
+
+INSTANTIATE_TEST_SUITE_P(InternalRes, HwBilinear, ::testing::Values(1, 2, 4));
+
+class HwXbr : public HwLayerBase {
+protected:
+    HwOptions options() const override {
+        HwOptions o;
+        o.filter = TextureFilter::Xbr;
+        return o;
+    }
+};
+
+TEST_P(HwXbr, GameVisibleVramStaysExact) {
+    upload();
+    random_mix();
+    EXPECT_EQ(vram_mismatches(), 0);
+}
+
+TEST_P(HwXbr, DiagonalEdgesAreSmoothedOnlyAboveNativeResolution) {
+    const uint16_t a = 0x001F, b = 0x7C00;
+    for (int v = 0; v < 16; ++v)
+        for (int u = 0; u < 16; ++u) vram[v * kVramWidth + 512 + u] = (u + v < 16) ? a : b;
+    upload();
+    s.tex_base_x = 512;
+    s.depth = TexDepth::Bit15;
+    PrimitiveFlags f;
+    f.textured = true;
+    f.raw_texture = true;
+    draw([&](Rasterizer& r, std::vector<uint16_t>& v, DrawState& st) { r.rect(v, st, f, gv(40, 40, 128, 128, 128, 0, 0), 16, 16); });
+    EXPECT_EQ(vram_mismatches(), 0);
+    const VramRect box{40, 40, 16, 16};
+    const int changed = differs_from_exact(box);
+    if (scale() == 1) {
+        EXPECT_EQ(changed, 0);
+        return;
+    }
+    const int total = 16 * 16 * scale() * scale();
+    EXPECT_GT(changed, 0) << "the diagonal should be smoothed";
+    EXPECT_LT(changed, total / 4) << "only the neighbourhood of the edge changes";
+    // Only mixes of the two sprite colours appear.
+    const auto img = shown(box);
+    int green = 0;
+    for (int y = 0; y < box.h * scale(); ++y)
+        for (int x = 0; x < box.w * scale(); ++x) green += chan(at(img, box, x, y), 1) != 0;
+    EXPECT_EQ(green, 0);
+}
+
+TEST_P(HwXbr, OpaqueSpriteEdgesAreNotEaten) {
+    // A solid square on a transparent background keeps its silhouette and colour.
+    const uint16_t c = 0x3DEF;
+    for (int v = 4; v < 12; ++v)
+        for (int u = 4; u < 12; ++u) vram[v * kVramWidth + 512 + u] = c;
+    upload();
+    s.tex_base_x = 512;
+    s.depth = TexDepth::Bit15;
+    PrimitiveFlags f;
+    f.textured = true;
+    f.raw_texture = true;
+    draw([&](Rasterizer& r, std::vector<uint16_t>& v, DrawState& st) { r.rect(v, st, f, gv(40, 40, 128, 128, 128, 0, 0), 16, 16); });
+    EXPECT_EQ(vram_mismatches(), 0);
+    EXPECT_EQ(differs_from_exact({40, 40, 16, 16}), 0);
+}
+
+INSTANTIATE_TEST_SUITE_P(InternalRes, HwXbr, ::testing::Values(1, 4));
+
+// Without any display option the shown image is the exact image.
+TEST_P(HwCompare, DefaultOutputIsTheExactColour) {
+    Scene sc;
+    SoftRasterizer soft;
+    hw->vram_written(sc.vram, {});
+    DrawState st = sc.s;
+    PrimitiveFlags f;
+    f.gouraud = true;
+    st.dither = true;
+    GpuVertex t[3] = {gv(20, 20, 255, 0, 0), gv(200, 40, 0, 255, 0), gv(60, 200, 0, 0, 255)};
+    hw->triangle(sc.vram, st, f, t);
+    std::vector<uint32_t> img;
+    const VramRect box{30, 40, 60, 40};
+    ASSERT_TRUE(hw->read_display(box, img));
+    std::vector<uint16_t> got(kPixels);
+    hw->read_vram(got);
+    const int n = hw->internal_scale();
+    int bad = 0;
+    for (int y = 0; y < box.h * n; ++y)
+        for (int x = 0; x < box.w * n; ++x)
+            bad += (img[static_cast<std::size_t>(y) * box.w * n + x] & 0xFFFFFF) != (expand_word(got[(box.y + y / n) * kVramWidth + box.x + x / n]) & 0xFFFFFF);
+    // With scale above 1 the gouraud subpixels follow the plane smoothly; only the top-left one is the exact word.
+    if (n == 1) EXPECT_EQ(bad, 0);
+}
 
 }  // namespace
 #endif  // DW3_HW_RENDERER

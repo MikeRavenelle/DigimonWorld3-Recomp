@@ -11,19 +11,67 @@ int64_t floor_div(int64_t a, int64_t b) {  // b > 0
     return a >= 0 ? a / b : -((-a + b - 1) / b);
 }
 
-HwVertex make_vertex(const HwState& st, float x, float y, uint8_t r, uint8_t g, uint8_t b, float u, float v) {
+struct Plane {
+    int64_t base = 0, dx = 0, dy = 0;
+};
+
+struct Planes {
+    Plane p[5];  // r, g, b, u, v
+};
+
+Plane flat_plane(int value) { return {(static_cast<int64_t>(value) << 12) + 0x800, 0, 0}; }
+
+// Same setup as the software rasterizer (20.12 fixed point, division truncating toward zero), for vertices
+// ordered counter-clockwise on screen with the given doubled area.
+Plane triangle_plane(const GpuVertex* const p[3], int64_t area, int a0, int a1, int a2) {
+    const int64_t d1 = a1 - a0, d2 = a2 - a0;
+    Plane q;
+    q.base = (static_cast<int64_t>(a0) << 12) + 0x800;
+    q.dx = ((d1 * (p[2]->y - p[0]->y) - d2 * (p[1]->y - p[0]->y)) * 4096) / area;
+    q.dy = ((d2 * (p[1]->x - p[0]->x) - d1 * (p[2]->x - p[0]->x)) * 4096) / area;
+    return q;
+}
+
+// Stores a plane relative to the VRAM origin instead of the first vertex, so the shader needs no vertex position.
+void store_plane(int32_t* out, const Plane& q, int x0, int y0) {
+    out[0] = static_cast<int32_t>(static_cast<uint32_t>(q.base - q.dx * x0 - q.dy * y0));
+    out[1] = static_cast<int32_t>(static_cast<uint32_t>(q.dx));
+    out[2] = static_cast<int32_t>(static_cast<uint32_t>(q.dy));
+}
+
+uint32_t pack_rect(int umin, int umax, int vmin, int vmax) {
+    return static_cast<uint32_t>(umin) | (static_cast<uint32_t>(umax) << 8) | (static_cast<uint32_t>(vmin) << 16) |
+           (static_cast<uint32_t>(vmax) << 24);
+}
+
+HwVertex make_vertex(const HwState& st, float x, float y, const Planes& pl, int ox, int oy, uint32_t uv_rect) {
     HwVertex out;
     out.x = x;
     out.y = y;
-    out.r = r;
-    out.g = g;
-    out.b = b;
-    out.u = u;
-    out.v = v;
+    for (int i = 0; i < 5; ++i) store_plane(out.plane + i * 3, pl.p[i], ox, oy);
     out.state0 = st.s0;
     out.state1 = st.s1;
     out.state2 = st.s2;
+    out.uv_rect = uv_rect;
     return out;
+}
+
+Planes flat_colour(int r, int g, int b) {
+    Planes pl;
+    pl.p[0] = flat_plane(r);
+    pl.p[1] = flat_plane(g);
+    pl.p[2] = flat_plane(b);
+    return pl;
+}
+
+// A plane is a one-to-one mapping when each texel coordinate follows exactly one screen axis at a step of one.
+bool unit_mapping(const Plane& u, const Plane& v) {
+    constexpr int64_t kSlack = 64;
+    auto near = [](int64_t value, int64_t target) { return std::abs(value - target) <= kSlack; };
+    auto step = [&](int64_t value) { return near(value, 4096) || near(value, -4096); };
+    const bool straight = step(u.dx) && near(u.dy, 0) && near(v.dx, 0) && step(v.dy);
+    const bool turned = near(u.dx, 0) && step(u.dy) && step(v.dx) && near(v.dy, 0);
+    return straight || turned;
 }
 
 Region clipped(const DrawState& s, int x0, int y0, int x1, int y1) {
@@ -62,36 +110,67 @@ Region clip_region(const DrawState& s) {
 
 void build_triangle(std::vector<HwVertex>& out, const DrawState& s, const PrimitiveFlags& f, const GpuVertex v[3],
                     int scale) {
-    const HwState st = pack_state(s, f, triangle_dithers(s, f));
+    HwState st = pack_state(s, f, triangle_dithers(s, f));
     const bool tex = uses_texture(s, f);
+    // Attribute planes, set up in the software rasterizer's vertex order.
+    const GpuVertex* p[3] = {&v[0], &v[1], &v[2]};
+    int64_t area = static_cast<int64_t>(p[1]->x - p[0]->x) * (p[2]->y - p[0]->y) -
+                   static_cast<int64_t>(p[2]->x - p[0]->x) * (p[1]->y - p[0]->y);
+    if (area < 0) {
+        std::swap(p[1], p[2]);
+        area = -area;
+    }
+    Planes pl = flat_colour(p[0]->r, p[0]->g, p[0]->b);
+    uint32_t rect = 0;
+    if (area != 0) {
+        if (f.gouraud) {
+            pl.p[0] = triangle_plane(p, area, p[0]->r, p[1]->r, p[2]->r);
+            pl.p[1] = triangle_plane(p, area, p[0]->g, p[1]->g, p[2]->g);
+            pl.p[2] = triangle_plane(p, area, p[0]->b, p[1]->b, p[2]->b);
+        }
+        if (tex) {
+            pl.p[3] = triangle_plane(p, area, p[0]->u, p[1]->u, p[2]->u);
+            pl.p[4] = triangle_plane(p, area, p[0]->v, p[1]->v, p[2]->v);
+            if (unit_mapping(pl.p[3], pl.p[4])) st.s0 |= state_bits::kUnitUv;
+            rect = pack_rect(std::min({v[0].u, v[1].u, v[2].u}), std::max({v[0].u, v[1].u, v[2].u}),
+                             std::min({v[0].v, v[1].v, v[2].v}), std::max({v[0].v, v[1].v, v[2].v}));
+        }
+    }
     // The sample of a native pixel sits at its centre at 1x. At higher resolutions the top-left subpixel of each
     // native pixel is that sample, so the vertices move by half a subpixel: that subpixel then rasterizes exactly
     // as the native pixel does, and a quad of triangles covers the same subpixels as a rectangle of the same size.
-    // This is also where sub-pixel vertex positions would be supplied.
     const float origin = 0.5f / static_cast<float>(scale);
-    for (int i = 0; i < 3; ++i) {
-        const GpuVertex& c = f.gouraud ? v[i] : v[0];
-        out.push_back(make_vertex(st, static_cast<float>(v[i].x) + origin, static_cast<float>(v[i].y) + origin, c.r, c.g, c.b,
-                                  tex ? v[i].u : 0.0f, tex ? v[i].v : 0.0f));
-    }
+    for (int i = 0; i < 3; ++i)
+        out.push_back(make_vertex(st, static_cast<float>(v[i].x) + origin, static_cast<float>(v[i].y) + origin, pl, p[0]->x, p[0]->y, rect));
 }
 
 void build_rect(std::vector<HwVertex>& out, const DrawState& s, const PrimitiveFlags& f, const GpuVertex& v, int width,
                 int height) {
-    const HwState st = pack_state(s, f, false);
+    HwState st = pack_state(s, f, false);
     const bool tex = uses_texture(s, f);
-    // Texel coordinates run by +-1 per pixel; the quad spans pixel edges, so the value at the first pixel centre
-    // must equal the start coordinate: offset the corner values by half a pixel.
-    const float su = s.rect_flip_x ? -1.0f : 1.0f, sv = s.rect_flip_y ? -1.0f : 1.0f;
-    const float u0 = static_cast<float>(v.u) - 0.5f * su, u1 = u0 + static_cast<float>(width) * su;
-    const float v0 = static_cast<float>(v.v) - 0.5f * sv, v1 = v0 + static_cast<float>(height) * sv;
+    // Texel coordinates run by +-1 per pixel from the start coordinate at the first pixel.
+    Planes pl = flat_colour(v.r, v.g, v.b);
+    uint32_t rect = 0;
+    if (tex) {
+        const int64_t su = s.rect_flip_x ? -4096 : 4096, sv = s.rect_flip_y ? -4096 : 4096;
+        pl.p[3] = {(static_cast<int64_t>(v.u) << 12) + 0x800 - su * v.x, su, 0};
+        pl.p[4] = {(static_cast<int64_t>(v.v) << 12) + 0x800 - sv * v.y, 0, sv};
+        st.s0 |= state_bits::kUnitUv;
+        auto span = [](int start, int len, bool flip, int& lo, int& hi) {
+            const int end = flip ? start - (len - 1) : start + (len - 1);
+            lo = std::min(start, end);
+            hi = std::max(start, end);
+            if (lo < 0 || hi > 255) lo = 0, hi = 255;
+        };
+        int u0, u1, v0, v1;
+        span(v.u, width, s.rect_flip_x, u0, u1);
+        span(v.v, height, s.rect_flip_y, v0, v1);
+        rect = pack_rect(u0, u1, v0, v1);
+    }
     const float x0 = static_cast<float>(v.x), y0 = static_cast<float>(v.y);
     const float x1 = x0 + static_cast<float>(width), y1 = y0 + static_cast<float>(height);
-    auto vert = [&](float x, float y, float u, float t) {
-        return make_vertex(st, x, y, v.r, v.g, v.b, tex ? u : 0.0f, tex ? t : 0.0f);
-    };
-    const HwVertex tl = vert(x0, y0, u0, v0), tr = vert(x1, y0, u1, v0), bl = vert(x0, y1, u0, v1),
-                   br = vert(x1, y1, u1, v1);
+    auto vert = [&](float x, float y) { return make_vertex(st, x, y, pl, 0, 0, rect); };
+    const HwVertex tl = vert(x0, y0), tr = vert(x1, y0), bl = vert(x0, y1), br = vert(x1, y1);
     out.insert(out.end(), {tl, tr, bl, tr, br, bl});
 }
 
@@ -119,9 +198,9 @@ int build_line(std::vector<HwVertex>& out, const DrawState& s, const PrimitiveFl
             bl = ch(a.b, b.b);
         }
         const float fx = static_cast<float>(x), fy = static_cast<float>(y);
-        const HwVertex tl = make_vertex(st, fx, fy, r, g, bl, 0, 0), tr = make_vertex(st, fx + 1, fy, r, g, bl, 0, 0),
-                       bl_ = make_vertex(st, fx, fy + 1, r, g, bl, 0, 0),
-                       br = make_vertex(st, fx + 1, fy + 1, r, g, bl, 0, 0);
+        const Planes pl = flat_colour(r, g, bl);
+        const HwVertex tl = make_vertex(st, fx, fy, pl, 0, 0, 0), tr = make_vertex(st, fx + 1, fy, pl, 0, 0, 0),
+                       bl_ = make_vertex(st, fx, fy + 1, pl, 0, 0, 0), br = make_vertex(st, fx + 1, fy + 1, pl, 0, 0, 0);
         out.insert(out.end(), {tl, tr, bl_, tr, br, bl_});
         ++count;
     }

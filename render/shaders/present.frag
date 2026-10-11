@@ -5,6 +5,7 @@
 // resolution, 24-bit output (which only ever holds uploaded data) reads the top-left subpixel of each word.
 
 layout(set = 0, binding = 0) uniform texture2D uVram;
+layout(set = 0, binding = 1) uniform texture2D uHi;  // display layer, see psx_draw.frag
 
 layout(push_constant) uniform Params {
     vec4 dest;
@@ -13,6 +14,7 @@ layout(push_constant) uniform Params {
     int color24;
     int linear;  // bilinear filtering
     int scale;   // internal resolution multiplier
+    int layer;   // show the display layer where it is valid
 } params;
 
 layout(location = 0) in vec2 vFrac;
@@ -44,6 +46,11 @@ vec3 pixelAt(ivec2 s) {
     s = clamp(s, ivec2(0), params.src.zw * params.scale - 1);
     ivec2 t = (params.src.xy * params.scale + s) % ivec2(1024 * params.scale, 512 * params.scale);
     uint w = packWord(t);
+    if (params.layer != 0) {
+        // The layer pixel counts only while it was produced for the word that is in VRAM now.
+        vec4 h = texelFetch(uHi, t, 0);
+        if (uint(h.a * 65535.0 + 0.5) == w) return h.rgb;
+    }
     uvec3 c = uvec3(w & 31u, (w >> 5) & 31u, (w >> 10) & 31u);
     c = (c << 3) | (c >> 2);
     return vec3(c) / 255.0;

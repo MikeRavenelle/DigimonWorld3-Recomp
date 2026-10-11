@@ -14,6 +14,7 @@
 #include "shaders/present.frag.h"
 #include "shaders/present.vert.h"
 #include "shaders/psx_draw.frag.h"
+#include "shaders/psx_draw_layer.frag.h"
 #include "shaders/psx_draw.vert.h"
 #include "shaders/vram_copy.frag.h"
 #include "shaders/vram_copy.vert.h"
@@ -30,6 +31,7 @@ using namespace plume;
 namespace {
 
 constexpr RenderFormat kVramFormat = RenderFormat::R8G8B8A8_UNORM;
+constexpr RenderFormat kLayerFormat = RenderFormat::R16G16B16A16_UNORM;
 constexpr RenderFormat kSwapFormat = RenderFormat::B8G8R8A8_UNORM;
 
 constexpr std::size_t kVertexBufferBytes = 48u << 20;
@@ -47,8 +49,9 @@ struct PresentParams {
     int32_t color24;
     int32_t linear;
     int32_t scale;
+    int32_t layer;  // show the display layer where it is valid
 };
-static_assert(sizeof(PresentParams) == 60);
+static_assert(sizeof(PresentParams) == 64);
 
 // Push constants of the VRAM copy/fill pass (see vram_copy.frag).
 struct CopyParams {
@@ -112,18 +115,22 @@ struct HwRenderer::Impl {
 
     // Internal resolution multiplier: `rt` and `tex` are (1024 * scale) x (512 * scale).
     int scale = 1;
+    // Display layer (see hw_renderer.h): `hi` is drawn next to `rt`, `hi_tex` is its sampled copy.
+    bool layer = false;
+    uint32_t draw_mode = 0;  // push constant of the draw shader: bit0 layer, bit1 true colour, bits 2-3 filter
 
     // VRAM: `rt` is drawn into; `tex` is the sampled copy. With scale > 1, `nat` is a native-resolution texture
     // that stages CPU uploads (replicated into `rt` on the GPU) and receives the downsampled image for read-backs.
-    std::unique_ptr<RenderTexture> rt, tex, nat;
-    std::unique_ptr<RenderFramebuffer> rt_fb, nat_fb;
+    std::unique_ptr<RenderTexture> rt, tex, nat, hi, hi_tex;
+    std::unique_ptr<RenderFramebuffer> rt_fb, nat_fb, draw_fb;  // draw_fb: rt, plus hi when the layer is on
     RenderTextureLayout rt_layout = RenderTextureLayout::UNKNOWN, tex_layout = RenderTextureLayout::UNKNOWN,
-                        nat_layout = RenderTextureLayout::UNKNOWN;
+                        nat_layout = RenderTextureLayout::UNKNOWN, hi_layout = RenderTextureLayout::UNKNOWN,
+                        hi_tex_layout = RenderTextureLayout::UNKNOWN;
 
     std::unique_ptr<RenderShader> draw_vs, draw_fs, present_vs, present_fs, copy_vs, copy_fs;
     std::unique_ptr<RenderPipelineLayout> draw_layout, present_layout, copy_layout;
     std::unique_ptr<RenderPipeline> draw_pipeline, present_pipeline, copy_pipeline;
-    std::unique_ptr<RenderDescriptorSet> draw_set, present_set, nat_set;
+    std::unique_ptr<RenderDescriptorSet> draw_set, vram_set, present_set, display_set, nat_set;
     RenderInputSlot input_slot;
     std::vector<RenderInputElement> input_elements;
 
@@ -151,7 +158,7 @@ struct HwRenderer::Impl {
 
     // ---- setup -------------------------------------------------------------------------------------
 
-    bool init(const NativeWindow* window, int internal_scale, std::string& error);
+    bool init(const NativeWindow* window, int internal_scale, const HwOptions& options, std::string& error);
     bool create_pipelines();
     bool create_swapchain(const NativeWindow& window);
     void create_swap_framebuffers();
@@ -217,8 +224,10 @@ struct HwRenderer::Impl {
 // -------------------------------------------------------------------------------------------------------
 // Setup
 
-bool HwRenderer::Impl::init(const NativeWindow* window, int internal_scale, std::string& error) {
+bool HwRenderer::Impl::init(const NativeWindow* window, int internal_scale, const HwOptions& options, std::string& error) {
     scale = std::clamp(internal_scale, 1, 8);
+    layer = options.true_color || options.filter != TextureFilter::Nearest;
+    draw_mode = (layer ? 1u : 0u) | (options.true_color ? 2u : 0u) | (static_cast<uint32_t>(options.filter) << 2);
     iface = CreateVulkanInterface();
     if (!iface) {
         error = "Vulkan is not available";
@@ -264,6 +273,23 @@ bool HwRenderer::Impl::init(const NativeWindow* window, int internal_scale, std:
     fbd.colorAttachments = &attachment;
     fbd.colorAttachmentsCount = 1;
     rt_fb = device->createFramebuffer(fbd);
+    if (layer) {
+        hi = device->createTexture(RenderTextureDesc::ColorTarget(1024 * scale, 512 * scale, kLayerFormat));
+        hi_tex = device->createTexture(RenderTextureDesc::Texture2D(1024 * scale, 512 * scale, 1, kLayerFormat));
+        if (!hi || !hi_tex) {
+            error = "display layer creation failed";
+            return false;
+        }
+        const RenderTexture* both[2] = {rt.get(), hi.get()};
+        RenderFramebufferDesc dfd;
+        dfd.colorAttachments = both;
+        dfd.colorAttachmentsCount = 2;
+        draw_fb = device->createFramebuffer(dfd);
+        if (!draw_fb) {
+            error = "framebuffer creation failed";
+            return false;
+        }
+    }
     if (nat) {
         const RenderTexture* nat_attachment = nat.get();
         fbd.colorAttachments = &nat_attachment;
@@ -293,7 +319,8 @@ bool HwRenderer::Impl::create_pipelines() {
     const RenderShaderFormat fmt = iface->getCapabilities().shaderFormat;
     if (fmt != RenderShaderFormat::SPIRV) return false;
     draw_vs = device->createShader(shaders::psx_draw_vert_spv, shaders::psx_draw_vert_spv_size, "main", fmt);
-    draw_fs = device->createShader(shaders::psx_draw_frag_spv, shaders::psx_draw_frag_spv_size, "main", fmt);
+    draw_fs = layer ? device->createShader(shaders::psx_draw_layer_frag_spv, shaders::psx_draw_layer_frag_spv_size, "main", fmt)
+                    : device->createShader(shaders::psx_draw_frag_spv, shaders::psx_draw_frag_spv_size, "main", fmt);
     present_vs = device->createShader(shaders::present_vert_spv, shaders::present_vert_spv_size, "main", fmt);
     present_fs = device->createShader(shaders::present_frag_spv, shaders::present_frag_spv_size, "main", fmt);
     copy_vs = device->createShader(shaders::vram_copy_vert_spv, shaders::vram_copy_vert_spv_size, "main", fmt);
@@ -302,10 +329,21 @@ bool HwRenderer::Impl::create_pipelines() {
 
     const RenderDescriptorRange range(RenderDescriptorRangeType::TEXTURE, 0, 1);
     const RenderDescriptorSetDesc set_desc(&range, 1);
-    draw_set = device->createDescriptorSet(set_desc);
+    // The draw and display passes read two textures (VRAM and the display layer); without the layer the second
+    // binding repeats the first and is never read.
+    const RenderDescriptorRange pair_ranges[2] = {RenderDescriptorRange(RenderDescriptorRangeType::TEXTURE, 0, 1),
+                                                  RenderDescriptorRange(RenderDescriptorRangeType::TEXTURE, 1, 1)};
+    const RenderDescriptorSetDesc pair_desc(pair_ranges, 2);
+    vram_set = device->createDescriptorSet(set_desc);
     present_set = device->createDescriptorSet(set_desc);
-    draw_set->setTexture(0, tex.get(), RenderTextureLayout::SHADER_READ);
+    draw_set = device->createDescriptorSet(pair_desc);
+    display_set = device->createDescriptorSet(pair_desc);
+    vram_set->setTexture(0, tex.get(), RenderTextureLayout::SHADER_READ);
     present_set->setTexture(0, rt.get(), RenderTextureLayout::SHADER_READ);
+    draw_set->setTexture(0, tex.get(), RenderTextureLayout::SHADER_READ);
+    draw_set->setTexture(1, layer ? hi_tex.get() : tex.get(), RenderTextureLayout::SHADER_READ);
+    display_set->setTexture(0, rt.get(), RenderTextureLayout::SHADER_READ);
+    display_set->setTexture(1, layer ? hi.get() : rt.get(), RenderTextureLayout::SHADER_READ);
     if (nat) {
         nat_set = device->createDescriptorSet(set_desc);
         nat_set->setTexture(0, nat.get(), RenderTextureLayout::SHADER_READ);
@@ -316,7 +354,7 @@ bool HwRenderer::Impl::create_pipelines() {
         RenderPipelineLayoutDesc ld;
         ld.pushConstantRanges = &pc;
         ld.pushConstantRangesCount = 1;
-        ld.descriptorSetDescs = &set_desc;
+        ld.descriptorSetDescs = &pair_desc;
         ld.descriptorSetDescsCount = 1;
         ld.allowInputLayout = true;
         draw_layout = device->createPipelineLayout(ld);
@@ -324,9 +362,12 @@ bool HwRenderer::Impl::create_pipelines() {
         input_slot = RenderInputSlot(0, sizeof(HwVertex));
         input_elements = {
             RenderInputElement("POSITION", 0, 0, RenderFormat::R32G32_FLOAT, 0, offsetof(HwVertex, x)),
-            RenderInputElement("COLOR", 0, 1, RenderFormat::R8G8B8A8_UNORM, 0, offsetof(HwVertex, r)),
-            RenderInputElement("TEXCOORD", 0, 2, RenderFormat::R32G32_FLOAT, 0, offsetof(HwVertex, u)),
-            RenderInputElement("STATE", 0, 3, RenderFormat::R32G32B32_UINT, 0, offsetof(HwVertex, state0)),
+            RenderInputElement("PLANES", 0, 1, RenderFormat::R32G32B32A32_SINT, 0, offsetof(HwVertex, plane)),
+            RenderInputElement("PLANES", 1, 2, RenderFormat::R32G32B32A32_SINT, 0, offsetof(HwVertex, plane) + 16),
+            RenderInputElement("PLANES", 2, 3, RenderFormat::R32G32B32A32_SINT, 0, offsetof(HwVertex, plane) + 32),
+            RenderInputElement("PLANES", 3, 4, RenderFormat::R32G32B32_SINT, 0, offsetof(HwVertex, plane) + 48),
+            RenderInputElement("STATE", 0, 5, RenderFormat::R32G32B32_UINT, 0, offsetof(HwVertex, state0)),
+            RenderInputElement("UVRECT", 0, 6, RenderFormat::R32_UINT, 0, offsetof(HwVertex, uv_rect)),
         };
         RenderGraphicsPipelineDesc pd;
         pd.pipelineLayout = draw_layout.get();
@@ -339,6 +380,11 @@ bool HwRenderer::Impl::create_pipelines() {
         pd.renderTargetFormat[0] = kVramFormat;
         pd.renderTargetBlend[0] = RenderBlendDesc::Copy();
         pd.renderTargetCount = 1;
+        if (layer) {
+            pd.renderTargetFormat[1] = kLayerFormat;
+            pd.renderTargetBlend[1] = RenderBlendDesc::Copy();
+            pd.renderTargetCount = 2;
+        }
         pd.primitiveTopology = RenderPrimitiveTopology::TRIANGLE_LIST;
         draw_pipeline = device->createGraphicsPipeline(pd);
     }
@@ -348,7 +394,7 @@ bool HwRenderer::Impl::create_pipelines() {
         RenderPipelineLayoutDesc ld;
         ld.pushConstantRanges = &pc;
         ld.pushConstantRangesCount = 1;
-        ld.descriptorSetDescs = &set_desc;
+        ld.descriptorSetDescs = &pair_desc;
         ld.descriptorSetDescsCount = 1;
         present_layout = device->createPipelineLayout(ld);
 
@@ -412,11 +458,18 @@ void HwRenderer::Impl::create_swap_framebuffers() {
 void HwRenderer::Impl::clear_vram() {
     ensure_recording();
     transition(rt.get(), rt_layout, RenderTextureLayout::COLOR_WRITE);
-    cmd->setFramebuffer(rt_fb.get());
+    if (layer) transition(hi.get(), hi_layout, RenderTextureLayout::COLOR_WRITE);
+    cmd->setFramebuffer(layer ? draw_fb.get() : rt_fb.get());
     cmd->clearColor(0, RenderColor(0.0f, 0.0f, 0.0f, 0.0f));
+    if (layer) cmd->clearColor(1, RenderColor(0.0f, 0.0f, 0.0f, 0.0f));
     transition(rt.get(), rt_layout, RenderTextureLayout::COPY_SOURCE);
     transition(tex.get(), tex_layout, RenderTextureLayout::COPY_DEST);
     cmd->copyTexture(tex.get(), rt.get());
+    if (layer) {
+        transition(hi.get(), hi_layout, RenderTextureLayout::COPY_SOURCE);
+        transition(hi_tex.get(), hi_tex_layout, RenderTextureLayout::COPY_DEST);
+        cmd->copyTexture(hi_tex.get(), hi.get());
+    }
     submit();
 }
 
@@ -467,18 +520,27 @@ void HwRenderer::Impl::record_draws() {
 
     transition(rt.get(), rt_layout, RenderTextureLayout::COLOR_WRITE);
     transition(tex.get(), tex_layout, RenderTextureLayout::SHADER_READ);
-    cmd->setFramebuffer(rt_fb.get());
-    cmd->setViewports(RenderViewport(0.0f, 0.0f, 1024.0f * scale, 512.0f * scale));
+    if (layer) {
+        transition(hi.get(), hi_layout, RenderTextureLayout::COLOR_WRITE);
+        transition(hi_tex.get(), hi_tex_layout, RenderTextureLayout::SHADER_READ);
+    }
+    cmd->setFramebuffer(layer ? draw_fb.get() : rt_fb.get());
+    // The pipeline has one viewport and scissor per render target.
+    const uint32_t targets = layer ? 2 : 1;
+    const RenderViewport viewports[2] = {RenderViewport(0.0f, 0.0f, 1024.0f * scale, 512.0f * scale),
+                                         RenderViewport(0.0f, 0.0f, 1024.0f * scale, 512.0f * scale)};
+    cmd->setViewports(viewports, targets);
     cmd->setGraphicsPipelineLayout(draw_layout.get());
     cmd->setPipeline(draw_pipeline.get());
     cmd->setGraphicsDescriptorSet(draw_set.get(), 0);
-    const int32_t constants[4] = {scale, 0, 0, 0};
+    const uint32_t constants[4] = {static_cast<uint32_t>(scale), draw_mode, 0, 0};
     cmd->setGraphicsPushConstants(0, constants);
     const RenderVertexBufferView view(vertex_buf->at(0), static_cast<uint32_t>(kVertexBufferBytes));
     cmd->setVertexBuffers(0, &view, 1, &input_slot);
     for (const DrawRange& r : ranges) {
-        cmd->setScissors(RenderRect(r.scissor.x0 * scale, r.scissor.y0 * scale, r.scissor.x1 * scale,
-                                    r.scissor.y1 * scale));
+        const RenderRect rect(r.scissor.x0 * scale, r.scissor.y0 * scale, r.scissor.x1 * scale, r.scissor.y1 * scale);
+        const RenderRect scissors[2] = {rect, rect};
+        cmd->setScissors(scissors, targets);
         cmd->drawInstanced(r.count, 1, base + r.first, 0);
         ++stats.draw_calls;
     }
@@ -494,10 +556,17 @@ void HwRenderer::Impl::sync_copy() {
     ensure_recording();
     transition(rt.get(), rt_layout, RenderTextureLayout::COPY_SOURCE);
     transition(tex.get(), tex_layout, RenderTextureLayout::COPY_DEST, true);
+    if (layer) {
+        transition(hi.get(), hi_layout, RenderTextureLayout::COPY_SOURCE);
+        transition(hi_tex.get(), hi_tex_layout, RenderTextureLayout::COPY_DEST, true);
+    }
     for (const Region& r : stale.take_all()) {
         const RenderBox box(r.x0 * scale, r.y0 * scale, r.x1 * scale, r.y1 * scale);
         cmd->copyTextureRegion(RenderTextureCopyLocation::Subresource(tex.get()),
                                RenderTextureCopyLocation::Subresource(rt.get()), r.x0 * scale, r.y0 * scale, 0, &box);
+        if (layer)
+            cmd->copyTextureRegion(RenderTextureCopyLocation::Subresource(hi_tex.get()),
+                                   RenderTextureCopyLocation::Subresource(hi.get()), r.x0 * scale, r.y0 * scale, 0, &box);
     }
     ++stats.copy_syncs;
 }
@@ -512,7 +581,7 @@ void HwRenderer::Impl::begin_vram_pass(const CopyParams& p) {
     cmd->setViewports(RenderViewport(0.0f, 0.0f, 1024.0f * scale, 512.0f * scale));
     cmd->setGraphicsPipelineLayout(copy_layout.get());
     cmd->setPipeline(copy_pipeline.get());
-    cmd->setGraphicsDescriptorSet(draw_set.get(), 0);
+    cmd->setGraphicsDescriptorSet(vram_set.get(), 0);
     cmd->setGraphicsPushConstants(0, &p);
 }
 
@@ -700,9 +769,10 @@ void HwRenderer::Impl::draw_display(RenderFramebuffer* fb, uint32_t w, uint32_t 
     p.color24 = d.color24 ? 1 : 0;
     p.linear = linear ? 1 : 0;
     p.scale = scale;
+    p.layer = layer ? 1 : 0;
     cmd->setGraphicsPipelineLayout(present_layout.get());
     cmd->setPipeline(present_pipeline.get());
-    cmd->setGraphicsDescriptorSet(present_set.get(), 0);
+    cmd->setGraphicsDescriptorSet(display_set.get(), 0);
     cmd->setGraphicsPushConstants(0, &p);
     cmd->drawInstanced(6, 1, 0, 0);
     ++stats.draw_calls;
@@ -742,10 +812,11 @@ HwRenderer::~HwRenderer() {
 }
 
 std::unique_ptr<HwRenderer> HwRenderer::create(const NativeWindow* window, const std::vector<std::string>& instance_extensions,
-                                               std::string& error, int internal_scale) {
+                                               std::string& error, int internal_scale,
+                                               const HwOptions& options) {
     SetVulkanExtraInstanceExtensions(instance_extensions);
     std::unique_ptr<HwRenderer> r(new HwRenderer());
-    if (!r->impl_->init(window, internal_scale, error)) return nullptr;
+    if (!r->impl_->init(window, internal_scale, options, error)) return nullptr;
     return r;
 }
 
@@ -862,6 +933,45 @@ bool HwRenderer::read_scaled(const VramRect& r, std::vector<uint16_t>& out) {
     return true;
 }
 
+bool HwRenderer::read_display(const VramRect& r, std::vector<uint32_t>& rgba) {
+    Impl& m = *impl_;
+    const uint32_t w = static_cast<uint32_t>(r.w * m.scale), h = static_cast<uint32_t>(r.h * m.scale);
+    const uint32_t pitch = upload_row_pixels(w);
+    const std::size_t rt_bytes = static_cast<std::size_t>(pitch) * h * 4, hi_bytes = static_cast<std::size_t>(pitch) * h * 8;
+    if (rt_bytes + hi_bytes > kReadbackBytes) return false;
+    m.record_draws();
+    m.ensure_recording();
+    m.transition(m.rt.get(), m.rt_layout, RenderTextureLayout::COPY_SOURCE);
+    const RenderBox box(r.x * m.scale, r.y * m.scale, (r.x + r.w) * m.scale, (r.y + r.h) * m.scale);
+    m.cmd->copyTextureRegion(RenderTextureCopyLocation::PlacedFootprint(m.readback_buf.get(), kVramFormat, w, h, 1, pitch, 0),
+                             RenderTextureCopyLocation::Subresource(m.rt.get()), 0, 0, 0, &box);
+    if (m.layer) {
+        m.transition(m.hi.get(), m.hi_layout, RenderTextureLayout::COPY_SOURCE);
+        m.cmd->copyTextureRegion(
+            RenderTextureCopyLocation::PlacedFootprint(m.readback_buf.get(), kLayerFormat, w, h, 1, pitch, rt_bytes),
+            RenderTextureCopyLocation::Subresource(m.hi.get()), 0, 0, 0, &box);
+    }
+    m.submit();
+    m.wait_slot(m.slots[m.last_submitted]);
+    const auto* base = static_cast<const uint8_t*>(m.readback_buf->map());
+    rgba.resize(static_cast<std::size_t>(w) * h);
+    for (uint32_t y = 0; y < h; ++y)
+        for (uint32_t x = 0; x < w; ++x) {
+            const std::size_t i = static_cast<std::size_t>(y) * pitch + x;
+            uint32_t px = reinterpret_cast<const uint32_t*>(base)[i];
+            if (m.layer) {
+                const auto* q = reinterpret_cast<const uint16_t*>(base + rt_bytes) + i * 4;
+                if (q[3] == rgba_to_word(px)) {
+                    auto to8 = [](uint32_t v) { return (v * 255u + 32767u) / 65535u; };
+                    px = to8(q[0]) | (to8(q[1]) << 8) | (to8(q[2]) << 16);
+                }
+            }
+            rgba[static_cast<std::size_t>(y) * w + x] = (px & 0x00FFFFFFu) | 0xFF000000u;
+        }
+    m.readback_buf->unmap();
+    return true;
+}
+
 bool HwRenderer::present(const DisplayState& display, ScaleMode mode, bool linear, std::vector<uint32_t>* capture,
                          int* capture_w, int* capture_h) {
     Impl& m = *impl_;
@@ -890,6 +1000,7 @@ bool HwRenderer::present(const DisplayState& display, ScaleMode mode, bool linea
     }
     const uint32_t w = m.swap->getWidth(), h = m.swap->getHeight();
     m.transition(m.rt.get(), m.rt_layout, RenderTextureLayout::SHADER_READ);
+    if (m.layer) m.transition(m.hi.get(), m.hi_layout, RenderTextureLayout::SHADER_READ);
     RenderTexture* target = m.swap->getTexture(index);
     m.cmd->barriers(RenderBarrierStage::ALL, RenderTextureBarrier(target, RenderTextureLayout::COLOR_WRITE));
     m.draw_display(m.swap_fbs[index].get(), w, h, display, mode, linear);

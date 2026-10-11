@@ -8,6 +8,7 @@ layout(push_constant) uniform Params {
     int color24;    // 24-bit display mode
     int linear;  // bilinear filtering
     int scale;   // internal resolution multiplier
+    int layer;   // show the display layer where it is valid
 } params;
 
 layout(location = 0) out vec2 vFrac;

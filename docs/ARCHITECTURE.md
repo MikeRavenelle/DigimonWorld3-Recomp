@@ -70,8 +70,11 @@ rasterizer is kept for golden-image tests and headless runs.
 `render/` holds the GPU renderer (`HwRenderer`, a `Rasterizer`). VRAM lives in two RGBA8 textures (5-bit channels
 expanded, mask bit in alpha): one drawn into and a sampled copy refreshed only where a draw reads something the GPU
 wrote since. The fragment shader reproduces the PS1 pixel path on integers (CLUT/texture-window fetch,
-modulation, dithering, 5-bit blending, mask bits), so output matches the software rasterizer except for GPU
-triangle edge/interpolation rounding. The CPU-side VRAM array stays authoritative for transfers: the Gpu calls
+modulation, dithering, 5-bit blending, mask bits). Colour and texel coordinates are evaluated from the software
+rasterizer's fixed-point planes, so native pixels match it exactly, except where the GPU's triangle edge rules differ.
+True colour (`--true-color`) and texture filtering (`--texture-filter`) draw into a second, 16-bit display layer
+beside the exact VRAM texture; the layer is only shown where its recorded VRAM word still matches, so everything the
+game can read back or sample stays exact. The CPU-side VRAM array stays authoritative for transfers: the Gpu calls
 `vram_written` after changing it and `vram_read_begin` before reading it, which uploads or reads back the affected
 regions. Only the Vulkan backend on Linux is built; plume's Metal and D3D12 backends are enabled per platform in
 `cmake/Platform.cmake`. plume is fetched at a pinned commit with `cmake/patches/plume-vulkan.patch` applied.

@@ -14,7 +14,17 @@ if(DW3_HAVE_PLUME)
     find_program(DW3_SPIRV_VAL spirv-val)
 
     set(SHADER_HEADERS)
-    foreach(shader psx_draw.vert psx_draw.frag present.vert present.frag vram_copy.vert vram_copy.frag)
+    # name|source|extra glslang options. The display layer variant of the draw shader writes a second target.
+    foreach(entry psx_draw.vert|psx_draw.vert psx_draw.frag|psx_draw.frag psx_draw_layer.frag|psx_draw.frag|-DDISPLAY_LAYER
+                  present.vert|present.vert present.frag|present.frag vram_copy.vert|vram_copy.vert vram_copy.frag|vram_copy.frag)
+        string(REPLACE "|" ";" parts "${entry}")
+        list(GET parts 0 shader)
+        list(GET parts 1 source)
+        list(LENGTH parts nparts)
+        set(defs)
+        if(nparts GREATER 2)
+            list(GET parts 2 defs)
+        endif()
         string(REPLACE "." "_" symbol ${shader})
         set(spv ${SHADER_OUT}/${shader}.spv)
         set(hdr ${SHADER_OUT}/${shader}.h)
@@ -24,11 +34,11 @@ if(DW3_HAVE_PLUME)
         endif()
         add_custom_command(
             OUTPUT ${hdr}
-            COMMAND ${DW3_GLSLANG} -V --target-env vulkan1.2 -o ${spv} ${SHADER_DIR}/${shader}
+            COMMAND ${DW3_GLSLANG} -V --target-env vulkan1.2 ${defs} -o ${spv} ${SHADER_DIR}/${source}
             ${validate_cmd}
             COMMAND ${CMAKE_COMMAND} -DINPUT=${spv} -DOUTPUT=${hdr} -DSYMBOL=${symbol}_spv
                     -P ${PROJECT_SOURCE_DIR}/cmake/EmbedBinary.cmake
-            DEPENDS ${SHADER_DIR}/${shader} ${PROJECT_SOURCE_DIR}/cmake/EmbedBinary.cmake
+            DEPENDS ${SHADER_DIR}/${source} ${PROJECT_SOURCE_DIR}/cmake/EmbedBinary.cmake
             COMMENT "Compiling shader ${shader}"
             VERBATIM)
         list(APPEND SHADER_HEADERS ${hdr})

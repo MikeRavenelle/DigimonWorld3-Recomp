@@ -15,7 +15,10 @@ std::unique_ptr<HwPresenter> HwPresenter::create(SDL_Window* window, const Prese
     const dw3::NativeWindow native = describe_window(window);
     std::unique_ptr<HwPresenter> p(new HwPresenter());
     p->options_ = options;
-    p->renderer_ = dw3::HwRenderer::create(&native, required_instance_extensions(), error, options.internal_res);
+    dw3::HwOptions hw;
+    hw.true_color = options.true_color;
+    hw.filter = static_cast<dw3::TextureFilter>(options.texture_filter);
+    p->renderer_ = dw3::HwRenderer::create(&native, required_instance_extensions(), error, options.internal_res, hw);
     if (!p->renderer_) return nullptr;
     p->renderer_->set_vsync(options.vsync);
     SDL_Log("GPU device: %s", p->renderer_->device_name().c_str());

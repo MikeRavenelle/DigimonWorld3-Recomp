@@ -22,8 +22,14 @@
 // data is never filtered or enlarged. Triangle vertices are offset by half a subpixel so the top-left subpixel
 // rasterizes like the native pixel; rectangles and triangle quads on the same pixel boundaries cover identical
 // subpixels, and texel selection is anchored to the native pixel, so sprites and tiles neither gap nor bleed.
-// Output is bit-exact with the software rasterizer except where noted in the implementation (rasterization of
-// triangle edges and attribute interpolation use the GPU's rules).
+// Colour and texel coordinates are evaluated from the software rasterizer's fixed-point planes, so at any scale the
+// native pixels match it; only the rasterization of triangle edges follows the GPU's rules.
+// Display layer. The VRAM target always holds exactly what a PS1 would (5-bit colour, dithering, mask bit), because
+// the game reads it back and samples it. True colour and texture filtering do not belong in that state, so when
+// either is enabled a second target (16 bits per channel) is drawn alongside it with the enhanced colour. Each of
+// its pixels records the VRAM word it was produced with; presentation shows the enhanced colour only where that
+// word is still the one in VRAM, so uploads, fills and copies need no mirroring and stale pixels fall back to the
+// exact colour.
 
 #include <cstdint>
 #include <memory>
@@ -45,6 +51,15 @@ struct NativeWindow {
     void (*get_size)(void* user, uint32_t* width, uint32_t* height) = nullptr;
 };
 
+enum class TextureFilter { Nearest, Bilinear, Xbr };
+
+// Display options that add precision or smoothing on top of the exact PS1 output. The defaults leave the output
+// untouched.
+struct HwOptions {
+    bool true_color = false;                           // no dithering, full precision shading and blending
+    TextureFilter filter = TextureFilter::Nearest;     // bilinear for triangles, xBR for sprites (internal res > 1)
+};
+
 struct HwStats {
     uint64_t draw_calls = 0, vertices = 0, uploads = 0, readbacks = 0, copy_syncs = 0, submits = 0, fills = 0, copies = 0;
 };
@@ -56,7 +71,8 @@ public:
     // suitable device or swap chain is available. `internal_scale` (1..8) multiplies the resolution of the VRAM
     // render target; the CPU-visible VRAM stays at native resolution.
     static std::unique_ptr<HwRenderer> create(const NativeWindow* window, const std::vector<std::string>& instance_extensions,
-                                              std::string& error, int internal_scale = 1);
+                                              std::string& error, int internal_scale = 1,
+                                              const HwOptions& options = {});
     ~HwRenderer() override;
     HwRenderer(const HwRenderer&) = delete;
     HwRenderer& operator=(const HwRenderer&) = delete;
@@ -83,6 +99,10 @@ public:
     // Reads a native-pixel region of the scaled target as it is on the GPU, (w*N) x (h*N) words row by row. For
     // tests and diagnostics; returns false if the region is too large for the read-back buffer.
     bool read_scaled(const VramRect& r, std::vector<uint16_t>& out);
+
+    // Reads the colour that is shown for a native-pixel region of the scaled target (display layer where valid,
+    // else the exact colour), (w*N) x (h*N) pixels as RGBA8. For tests and diagnostics.
+    bool read_display(const VramRect& r, std::vector<uint32_t>& rgba);
 
     int internal_scale() const;
     const HwStats& stats() const;

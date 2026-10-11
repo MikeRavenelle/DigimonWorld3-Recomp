@@ -16,6 +16,8 @@
 //   --renderer R       auto (default: the plume GPU renderer, falling back to software if it cannot start),
 //                      vulkan (alias gpu; no fallback) or software (CPU rasterizer shown through an SDL renderer)
 //   --internal-res N   GPU renderer internal resolution multiplier, 1 (default) to 8
+//   --true-color       GPU renderer: no dithering, full 8-bit shading and blending on screen (game-visible VRAM unchanged)
+//   --texture-filter F GPU renderer: nearest (default), bilinear (3D triangles) or xbr (sprites, needs --internal-res > 1)
 //   --scale M          fit (default, 4:3 letterbox), integer or stretch
 //   --filter F         nearest (default) or linear
 //   --no-vsync         present without waiting for the display refresh (always on with --uncapped/--frames)
@@ -176,6 +178,17 @@ Options parse(int argc, char** argv) {
             o.present.internal_res = std::atoi(argv[++i]);
             if (o.present.internal_res < 1 || o.present.internal_res > 8) {
                 std::fprintf(stderr, "bad --internal-res %s (1..8)\n", argv[i]);
+                std::exit(2);
+            }
+        }
+        else if (a == "--true-color") o.present.true_color = true;
+        else if (a == "--texture-filter" && i + 1 < argc) {
+            std::string v = argv[++i];
+            if (v == "nearest") o.present.texture_filter = 0;
+            else if (v == "bilinear") o.present.texture_filter = 1;
+            else if (v == "xbr") o.present.texture_filter = 2;
+            else {
+                std::fprintf(stderr, "bad --texture-filter %s (nearest, bilinear or xbr)\n", v.c_str());
                 std::exit(2);
             }
         }

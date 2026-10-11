@@ -19,6 +19,8 @@ struct PresentOptions {
     bool linear = false;  // linear filtering instead of nearest
     bool vsync = true;
     int internal_res = 1;  // GPU renderer internal resolution multiplier (1..8)
+    bool true_color = false;  // GPU renderer: no dithering, full precision shading
+    int texture_filter = 0;   // GPU renderer: 0 nearest, 1 bilinear, 2 xBR
 };
 
 // Window contents as seen by the user (borders included), RGBA8888.

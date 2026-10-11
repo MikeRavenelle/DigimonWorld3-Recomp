@@ -11,14 +11,21 @@
 
 namespace dw3 {
 
-// Vertex layout shared with psx_draw.vert (32 bytes).
+// Attribute planes. Colour and texel coordinates are not interpolated by the GPU: every vertex of a primitive
+// carries the same fixed-point planes the software rasterizer sets up, and the fragment shader evaluates them
+// at its native pixel, so the values are the software rasterizer's bit for bit.
+// A plane gives value(x, y) = (base + dx * x + dy * y) / 4096 in 20.12 fixed point, with the rounding offset
+// (0x800) folded into the base and the terms taken modulo 2^32 (the sum of a pixel inside the primitive is small).
+enum PlaneIndex { kPlaneR = 0, kPlaneG = 3, kPlaneB = 6, kPlaneU = 9, kPlaneV = 12, kPlaneInts = 15 };
+
+// Vertex layout shared with psx_draw.vert (84 bytes).
 struct HwVertex {
-    float x = 0, y = 0;                    // VRAM pixel coordinates
-    uint8_t r = 0, g = 0, b = 0, a = 255;  // vertex colour
-    float u = 0, v = 0;                    // texel coordinates, sampled at pixel centres
+    float x = 0, y = 0;                // VRAM pixel coordinates
+    int32_t plane[kPlaneInts] = {};    // colour r, g, b and texel coordinates u, v: base, dx, dy each
     uint32_t state0 = 0, state1 = 0, state2 = 0;
+    uint32_t uv_rect = 0;              // texel coordinate bounds of the primitive: u min, u max, v min, v max (bytes)
 };
-static_assert(sizeof(HwVertex) == 32);
+static_assert(sizeof(HwVertex) == 84);
 
 // Packed per-primitive state (see the header comment of psx_draw.frag for the bit layout).
 struct HwState {
@@ -32,6 +39,7 @@ constexpr uint32_t kSemi = 1u << 2;
 constexpr uint32_t kDither = 1u << 3;
 constexpr uint32_t kCheckMask = 1u << 4;
 constexpr uint32_t kSetMask = 1u << 5;
+constexpr uint32_t kUnitUv = 1u << 10;  // texels map 1:1 to pixels on the axes (sprites, tiles): not bilinear filtered
 }  // namespace state_bits
 
 // True when textures are sampled for this primitive.

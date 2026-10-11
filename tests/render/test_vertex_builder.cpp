@@ -94,33 +94,66 @@ TEST(VertexBuilder, TriangleVerticesSitOnPixelCentres) {
     EXPECT_FLOAT_EQ(out[2].y, 40.5f);
 }
 
+namespace {
+
+// Value of an attribute plane at a pixel, as the fragment shader evaluates it (20.12, wrapping 32 bit).
+int plane_value(const HwVertex& v, int index, int x, int y) {
+    const uint32_t* q = reinterpret_cast<const uint32_t*>(v.plane) + index;
+    return static_cast<int>(q[0] + q[1] * static_cast<uint32_t>(x) + q[2] * static_cast<uint32_t>(y)) >> 12;
+}
+
+}  // namespace
+
 TEST(VertexBuilder, FlatTrianglesUseTheFirstVertexColour) {
     std::vector<HwVertex> out;
     GpuVertex v[3] = {vert(0, 0, 0, 0, 10), vert(5, 0, 0, 0, 20), vert(0, 5, 0, 0, 30)};
     build_triangle(out, area(0, 0, 100, 100), {}, v);
-    EXPECT_EQ(out[1].r, 10);
-    EXPECT_EQ(out[2].b, 10);
+    EXPECT_EQ(plane_value(out[1], kPlaneR, 2, 1), 10);
+    EXPECT_EQ(plane_value(out[2], kPlaneB, 4, 4), 10);
     PrimitiveFlags g;
     g.gouraud = true;
     out.clear();
     build_triangle(out, area(0, 0, 100, 100), g, v);
-    EXPECT_EQ(out[1].r, 20);
-    EXPECT_EQ(out[2].b, 30);
+    EXPECT_EQ(plane_value(out[1], kPlaneR, 5, 0), 20);
+    EXPECT_EQ(plane_value(out[2], kPlaneB, 0, 5), 30);
 }
 
-TEST(VertexBuilder, RectTexelCoordinatesHitTheStartCoordinateAtTheFirstPixelCentre) {
+TEST(VertexBuilder, TrianglePlanesInterpolateTexelCoordinates) {
+    std::vector<HwVertex> out;
+    PrimitiveFlags f;
+    f.textured = true;
+    GpuVertex v[3] = {vert(10, 20, 8, 16), vert(30, 20, 28, 16), vert(10, 40, 8, 56)};
+    build_triangle(out, area(0, 0, 100, 100), f, v);
+    EXPECT_EQ(plane_value(out[0], kPlaneU, 10, 20), 8);
+    EXPECT_EQ(plane_value(out[0], kPlaneU, 20, 25), 18);
+    EXPECT_EQ(plane_value(out[0], kPlaneV, 10, 30), 36);
+    EXPECT_EQ(out[0].state0 & state_bits::kUnitUv, 0u);  // stretched vertically: filtered rather than 1:1
+    EXPECT_EQ(out[0].uv_rect & 0xFF, 8u);
+    EXPECT_EQ((out[0].uv_rect >> 24) & 0xFF, 56u);
+}
+
+TEST(VertexBuilder, OneToOneTrianglesAreFlaggedAsUnitMappings) {
+    std::vector<HwVertex> out;
+    PrimitiveFlags f;
+    f.textured = true;
+    GpuVertex v[3] = {vert(10, 20, 8, 16), vert(30, 20, 28, 16), vert(10, 40, 8, 36)};
+    build_triangle(out, area(0, 0, 100, 100), f, v);
+    EXPECT_NE(out[0].state0 & state_bits::kUnitUv, 0u);
+}
+
+TEST(VertexBuilder, RectTexelCoordinatesStartAtTheStartCoordinate) {
     std::vector<HwVertex> out;
     PrimitiveFlags f;
     f.textured = true;
     build_rect(out, area(0, 0, 100, 100), f, vert(4, 6, 10, 20), 8, 4);
     ASSERT_EQ(out.size(), 6u);
-    // Left edge value u0 - 0.5, right edge u0 - 0.5 + width: the centre of pixel 0 samples exactly u0.
-    EXPECT_FLOAT_EQ(out[0].u, 9.5f);
-    EXPECT_FLOAT_EQ(out[1].u, 17.5f);
-    EXPECT_FLOAT_EQ(out[0].v, 19.5f);
-    EXPECT_FLOAT_EQ(out[2].v, 23.5f);
+    EXPECT_EQ(plane_value(out[0], kPlaneU, 4, 6), 10);
+    EXPECT_EQ(plane_value(out[0], kPlaneU, 11, 6), 17);
+    EXPECT_EQ(plane_value(out[0], kPlaneV, 4, 6), 20);
+    EXPECT_EQ(plane_value(out[0], kPlaneV, 4, 9), 23);
     EXPECT_FLOAT_EQ(out[1].x, 12.0f);
     EXPECT_FLOAT_EQ(out[2].y, 10.0f);
+    EXPECT_EQ(out[0].uv_rect, 10u | (17u << 8) | (20u << 16) | (23u << 24));
 }
 
 TEST(VertexBuilder, FlippedRectRunsTexelCoordinatesBackwards) {
@@ -130,8 +163,8 @@ TEST(VertexBuilder, FlippedRectRunsTexelCoordinatesBackwards) {
     PrimitiveFlags f;
     f.textured = true;
     build_rect(out, s, f, vert(0, 0, 10, 0), 4, 1);
-    EXPECT_FLOAT_EQ(out[0].u, 10.5f);
-    EXPECT_FLOAT_EQ(out[1].u, 6.5f);
+    EXPECT_EQ(plane_value(out[0], kPlaneU, 0, 0), 10);
+    EXPECT_EQ(plane_value(out[0], kPlaneU, 3, 0), 7);
 }
 
 TEST(VertexBuilder, LineEmitsOneQuadPerPixelInsideTheClip) {
@@ -149,9 +182,9 @@ TEST(VertexBuilder, GouraudLineInterpolatesColour) {
     f.gouraud = true;
     GpuVertex a = vert(0, 0, 0, 0, 0), b = vert(10, 0, 0, 0, 200);
     build_line(out, area(0, 0, 100, 100), f, a, b);
-    EXPECT_EQ(out.front().r, 0);
-    EXPECT_EQ(out[out.size() - 1].r, 200);
-    EXPECT_EQ(out[5 * 6].r, 100);
+    EXPECT_EQ(plane_value(out.front(), kPlaneR, 0, 0), 0);
+    EXPECT_EQ(plane_value(out[out.size() - 1], kPlaneR, 0, 0), 200);
+    EXPECT_EQ(plane_value(out[5 * 6], kPlaneR, 0, 0), 100);
 }
 
 TEST(VertexBuilder, BoundsAreClippedToTheDrawingArea) {
