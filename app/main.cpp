@@ -37,6 +37,8 @@
 #include <SDL3/SDL.h>
 
 #include <array>
+#include <atomic>
+#include <csignal>
 #include <cstdio>
 #include <cstdlib>
 #include <filesystem>
@@ -232,6 +234,14 @@ Options parse(int argc, char** argv) {
     return o;
 }
 
+// Ctrl+C or SIGTERM asks the frame loop to stop; a second one exits at once, in case the loop is stuck (for
+// example in a present the compositor never completes).
+std::atomic<bool> g_quit_requested{false};
+
+void on_quit_signal(int) {
+    if (g_quit_requested.exchange(true)) std::_Exit(130);
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -262,6 +272,9 @@ int main(int argc, char** argv) {
     // Audit runs skip the intro FMV with START at frame 300 unless --intro is given.
     if (opt.max_frames >= 0 && !opt.intro) opt.presses.push_back({dw3::kPadStart, 300, 306});
 
+    SDL_SetHint(SDL_HINT_NO_SIGNAL_HANDLERS, "1");
+    std::signal(SIGINT, on_quit_signal);
+    std::signal(SIGTERM, on_quit_signal);
     if (!SDL_Init(SDL_INIT_VIDEO | SDL_INIT_EVENTS | SDL_INIT_GAMEPAD)) {
         SDL_Log("SDL_Init failed: %s", SDL_GetError());
         return 1;
@@ -455,6 +468,7 @@ int main(int argc, char** argv) {
             }
             if (e.type == SDL_EVENT_GAMEPAD_ADDED && !host_pad.gamepad) host_pad.gamepad = SDL_OpenGamepad(e.gdevice.which);
         }
+        if (g_quit_requested) dw3::host::Host::stop();
         const bool last = opt.max_frames >= 0 && static_cast<int64_t>(frame) >= opt.max_frames;
         const bool periodic = opt.shot_every > 0 && frame % static_cast<uint64_t>(opt.shot_every) == 0;
         const bool want_shot = periodic || (last && !opt.screenshot.empty());
