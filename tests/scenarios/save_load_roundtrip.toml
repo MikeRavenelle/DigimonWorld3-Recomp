@@ -512,6 +512,20 @@ repeat = [
 at = 49300
 
 [[check]]
+at = 19500
+label = "Login Room"
+display_enabled = true
+screen_hash = "08011803080018011802000038037e077ff13ff33fe73c073ff83ff8fff87ff0"
+screenshot = true
+
+[[check]]
+at = 41250
+label = "Lamb Chop interior"
+display_enabled = true
+screen_hash = "37ff37dcdbdfeff6fbfc7dfc3ffe37ff7fc0ffe0ffe0e7f4000000000f001f80"
+screenshot = true
+
+[[check]]
 at = 45375
 label = "save officer dialogue"
 display_enabled = true
