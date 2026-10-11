@@ -3,6 +3,7 @@
 
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <cstdint>
 #include <cstring>
 #include <random>
@@ -92,11 +93,11 @@ Diff compare(const std::vector<uint16_t>& a, const std::vector<uint16_t>& b) {
     return d;
 }
 
-class HwCompare : public ::testing::Test {
+class HwCompare : public ::testing::TestWithParam<int> {
 protected:
     void SetUp() override {
         std::string error;
-        hw = HwRenderer::create(nullptr, {}, error);
+        hw = HwRenderer::create(nullptr, {}, error, GetParam());
         if (!hw) GTEST_SKIP() << "no Vulkan device: " << error;
     }
 
@@ -116,7 +117,7 @@ protected:
     std::unique_ptr<HwRenderer> hw;
 };
 
-TEST_F(HwCompare, FlatRectanglesAreExact) {
+TEST_P(HwCompare, FlatRectanglesAreExact) {
     Diff d = run([](Rasterizer& r, std::vector<uint16_t>& v, DrawState& s) {
         PrimitiveFlags f;
         r.rect(v, s, f, gv(10, 10, 255, 0, 0), 40, 30);
@@ -127,7 +128,7 @@ TEST_F(HwCompare, FlatRectanglesAreExact) {
     EXPECT_EQ(d.count, 0);
 }
 
-TEST_F(HwCompare, TexturedSpritesAreExact) {
+TEST_P(HwCompare, TexturedSpritesAreExact) {
     for (TexDepth depth : {TexDepth::Bit4, TexDepth::Bit8, TexDepth::Bit15}) {
         Diff d = run([depth](Rasterizer& r, std::vector<uint16_t>& v, DrawState& s) {
             s.depth = depth;
@@ -146,7 +147,7 @@ TEST_F(HwCompare, TexturedSpritesAreExact) {
     }
 }
 
-TEST_F(HwCompare, TextureWindow) {
+TEST_P(HwCompare, TextureWindow) {
     Diff d = run([](Rasterizer& r, std::vector<uint16_t>& v, DrawState& s) {
         s.depth = TexDepth::Bit15;
         s.win_mask_x = 3;
@@ -161,7 +162,7 @@ TEST_F(HwCompare, TextureWindow) {
     EXPECT_EQ(d.count, 0);
 }
 
-TEST_F(HwCompare, SemiTransparencyModesOverABackground) {
+TEST_P(HwCompare, SemiTransparencyModesOverABackground) {
     for (int mode = 0; mode < 4; ++mode) {
         Diff d = run([mode](Rasterizer& r, std::vector<uint16_t>& v, DrawState& s) {
             PrimitiveFlags bg;
@@ -182,7 +183,7 @@ TEST_F(HwCompare, SemiTransparencyModesOverABackground) {
     }
 }
 
-TEST_F(HwCompare, MaskBitSetAndCheck) {
+TEST_P(HwCompare, MaskBitSetAndCheck) {
     Diff d = run([](Rasterizer& r, std::vector<uint16_t>& v, DrawState& s) {
         PrimitiveFlags f;
         s.set_mask = true;
@@ -198,7 +199,7 @@ TEST_F(HwCompare, MaskBitSetAndCheck) {
     EXPECT_EQ(d.count, 0);
 }
 
-TEST_F(HwCompare, LinesAreExact) {
+TEST_P(HwCompare, LinesAreExact) {
     Diff d = run([](Rasterizer& r, std::vector<uint16_t>& v, DrawState& s) {
         PrimitiveFlags f;
         r.line(v, s, f, gv(5, 5, 255, 255, 255), gv(300, 200, 255, 255, 255));
@@ -211,7 +212,7 @@ TEST_F(HwCompare, LinesAreExact) {
     EXPECT_EQ(d.count, 0);
 }
 
-TEST_F(HwCompare, TrianglesMatchWithinRasterizationTolerance) {
+TEST_P(HwCompare, TrianglesMatchWithinRasterizationTolerance) {
     // Edge coverage and attribute interpolation follow the GPU's rules, so a few edge pixels may differ.
     Scene probe;
     Diff d = run([](Rasterizer& r, std::vector<uint16_t>& v, DrawState& s) {
@@ -235,7 +236,7 @@ TEST_F(HwCompare, TrianglesMatchWithinRasterizationTolerance) {
     EXPECT_LE(d.max_channel, 1);
 }
 
-TEST_F(HwCompare, TransfersStayCoherentWithDraws) {
+TEST_P(HwCompare, TransfersStayCoherentWithDraws) {
     // Draw, read back through the hooks, modify on the CPU, draw again.
     Scene sc;
     SoftRasterizer soft;
@@ -266,7 +267,7 @@ TEST_F(HwCompare, TransfersStayCoherentWithDraws) {
     EXPECT_EQ(compare(ref.vram, got).count, 0);
 }
 
-TEST_F(HwCompare, DrawnRegionsAreSampledAfterwards) {
+TEST_P(HwCompare, DrawnRegionsAreSampledAfterwards) {
     // A sprite whose texture was just drawn by the GPU must see the new pixels.
     Diff d = run([](Rasterizer& r, std::vector<uint16_t>& v, DrawState& s) {
         PrimitiveFlags f;
@@ -282,7 +283,7 @@ TEST_F(HwCompare, DrawnRegionsAreSampledAfterwards) {
     EXPECT_EQ(d.count, 0);
 }
 
-TEST_F(HwCompare, RandomPrimitives) {
+TEST_P(HwCompare, RandomPrimitives) {
     Diff d = run([](Rasterizer& r, std::vector<uint16_t>& v, DrawState& s) {
         std::mt19937 rng(99);
         auto rnd = [&](int lo, int hi) { return lo + static_cast<int>(rng() % static_cast<unsigned>(hi - lo + 1)); };
@@ -361,19 +362,19 @@ protected:
     std::vector<uint16_t> ref;
 };
 
-TEST_F(HwVramOps, CopyBetweenDisjointAreas) {
+TEST_P(HwVramOps, CopyBetweenDisjointAreas) {
     copy({10, 20, 100, 60}, 400, 300);
     EXPECT_EQ(mismatches(), 0);
 }
 
-TEST_F(HwVramOps, CopyWrapsAtTheEdges) {
+TEST_P(HwVramOps, CopyWrapsAtTheEdges) {
     copy({1000, 500, 60, 30}, 5, 5);       // source wraps on both axes
     copy({30, 40, 80, 50}, 990, 490);      // destination wraps on both axes
     copy({1010, 505, 50, 20}, 1000, 500);  // both wrap
     EXPECT_EQ(mismatches(), 0);
 }
 
-TEST_F(HwVramOps, OverlappingCopiesFollowRowOrder) {
+TEST_P(HwVramOps, OverlappingCopiesFollowRowOrder) {
     copy({100, 100, 200, 100}, 110, 100);  // same rows, shifted right
     copy({100, 100, 200, 100}, 90, 100);   // same rows, shifted left
     copy({100, 100, 200, 100}, 100, 101);  // one row down: later rows re-read earlier output
@@ -382,14 +383,14 @@ TEST_F(HwVramOps, OverlappingCopiesFollowRowOrder) {
     EXPECT_EQ(mismatches(), 0);
 }
 
-TEST_F(HwVramOps, CopyHonoursMaskBits) {
+TEST_P(HwVramOps, CopyHonoursMaskBits) {
     copy({0, 0, 300, 200}, 300, 250, true, false);
     copy({0, 0, 300, 200}, 320, 260, false, true);
     copy({50, 50, 200, 100}, 250, 150, true, true);
     EXPECT_EQ(mismatches(), 0);
 }
 
-TEST_F(HwVramOps, CopyOfFreshlyDrawnAndFilledAreas) {
+TEST_P(HwVramOps, CopyOfFreshlyDrawnAndFilledAreas) {
     // Sources that only exist on the GPU (drawn or filled, not yet read back) must be copied as they are.
     Scene sc;
     DrawState s = sc.s;
@@ -403,7 +404,7 @@ TEST_F(HwVramOps, CopyOfFreshlyDrawnAndFilledAreas) {
     EXPECT_EQ(mismatches(), 0);
 }
 
-TEST_F(HwVramOps, FillsWrapAndIgnoreMask) {
+TEST_P(HwVramOps, FillsWrapAndIgnoreMask) {
     fill({0, 0, 64, 64}, 0x7C1F);
     fill({1000, 500, 100, 40}, 0x03E0);
     fill({512, 256, 1024, 512}, 0x001F);
@@ -411,7 +412,7 @@ TEST_F(HwVramOps, FillsWrapAndIgnoreMask) {
     EXPECT_EQ(mismatches(), 0);
 }
 
-TEST_F(HwVramOps, CpuReadsSeeGpuSideOperations) {
+TEST_P(HwVramOps, CpuReadsSeeGpuSideOperations) {
     std::vector<uint16_t> cpu = ref;
     copy({10, 10, 64, 64}, 500, 100);
     fill({600, 300, 32, 32}, 0x4321);
@@ -423,7 +424,7 @@ TEST_F(HwVramOps, CpuReadsSeeGpuSideOperations) {
         for (int x = 600; x < 632; ++x) ASSERT_EQ(cpu[y * kVramWidth + x], ref[y * kVramWidth + x]);
 }
 
-TEST_F(HwVramOps, ManyFramesOfWorkStayCorrect) {
+TEST_P(HwVramOps, ManyFramesOfWorkStayCorrect) {
     // Enough submissions to cycle through the frame slots several times, with reads in between.
     std::mt19937 rng(5);
     auto rnd = [&](int lo, int hi) { return lo + static_cast<int>(rng() % static_cast<unsigned>(hi - lo + 1)); };
@@ -439,6 +440,173 @@ TEST_F(HwVramOps, ManyFramesOfWorkStayCorrect) {
     }
     EXPECT_EQ(mismatches(), 0);
 }
+
+INSTANTIATE_TEST_SUITE_P(InternalRes, HwCompare, ::testing::Values(1, 2, 3, 4));
+INSTANTIATE_TEST_SUITE_P(InternalRes, HwVramOps, ::testing::Values(1, 2, 3, 4));
+
+// Tests that look at the scaled image itself (internal resolution above 1).
+class HwScaled : public HwCompare {
+protected:
+    // The scaled image of a native region, as 16-bit words.
+    std::vector<uint16_t> scaled(const VramRect& r) {
+        std::vector<uint16_t> out;
+        EXPECT_TRUE(hw->read_scaled(r, out));
+        return out;
+    }
+    // Counts native pixels of `r` whose subpixels are not all equal to the pixel's top-left subpixel.
+    int non_blocky(const std::vector<uint16_t>& img, const VramRect& r) {
+        const int n = hw->internal_scale(), w = r.w * n;
+        int bad = 0;
+        for (int y = 0; y < r.h; ++y)
+            for (int x = 0; x < r.w; ++x) {
+                const uint16_t tl = img[static_cast<std::size_t>(y * n) * w + x * n];
+                bool same = true;
+                for (int sy = 0; sy < n; ++sy)
+                    for (int sx = 0; sx < n; ++sx) same &= img[static_cast<std::size_t>(y * n + sy) * w + x * n + sx] == tl;
+                bad += same ? 0 : 1;
+            }
+        return bad;
+    }
+    int zeros(const std::vector<uint16_t>& img) { return static_cast<int>(std::count(img.begin(), img.end(), uint16_t{0})); }
+};
+
+TEST_P(HwScaled, UploadsAreReplicatedAndReadBackExactly) {
+    std::mt19937 rng(11);
+    std::vector<uint16_t> v(kPixels);
+    for (auto& w : v) w = static_cast<uint16_t>(rng());
+    hw->vram_written(v, {});
+    const VramRect r{100, 50, 90, 40};
+    const auto img = scaled(r);
+    const int n = hw->internal_scale();
+    ASSERT_EQ(img.size(), static_cast<std::size_t>(r.w * n) * r.h * n);
+    int bad = 0;
+    for (int y = 0; y < r.h * n; ++y)
+        for (int x = 0; x < r.w * n; ++x) bad += img[static_cast<std::size_t>(y) * r.w * n + x] != (v[(r.y + y / n) * kVramWidth + r.x + x / n] & 0x7FFF | (v[(r.y + y / n) * kVramWidth + r.x + x / n] & 0x8000));
+    EXPECT_EQ(bad, 0);
+    std::vector<uint16_t> got(kPixels);
+    hw->read_vram(got);
+    EXPECT_EQ(compare(v, got).count, 0);
+}
+
+TEST_P(HwScaled, SpritesAndTilesLeaveNoGapsAndStayOnNativePixels) {
+    // Opaque texture data, no zero words, so any untouched (zero) pixel in the covered area is a gap.
+    std::vector<uint16_t> v(kPixels, 0);
+    std::mt19937 rng(21);
+    for (int y = 0; y < 256; ++y)
+        for (int x = 512; x < 768; ++x) v[y * kVramWidth + x] = static_cast<uint16_t>((rng() & 0x7FFF) | 1);
+    hw->vram_written(v, {});
+    DrawState s;
+    s.area_x2 = 319;
+    s.area_y2 = 239;
+    s.tex_base_x = 512;
+    s.depth = TexDepth::Bit15;
+    PrimitiveFlags f;
+    f.textured = true;
+    f.raw_texture = true;
+    Rasterizer& r = *hw;
+    // 8x6 tiles of 16x16 sprites at the left, the same tiles as pairs of triangles to the right.
+    for (int ty = 0; ty < 6; ++ty)
+        for (int tx = 0; tx < 8; ++tx) {
+            const int u = (tx * 16 + ty * 5) & 0xEF, w = (ty * 16 + tx * 3) & 0xEF;
+            r.rect(v, s, f, gv(8 + tx * 16, 8 + ty * 16, 128, 128, 128, u, w), 16, 16);
+            const int x = 160 + tx * 16, y = 8 + ty * 16;
+            GpuVertex a[3] = {gv(x, y, 128, 128, 128, u, w), gv(x + 16, y, 128, 128, 128, u + 16, w),
+                              gv(x, y + 16, 128, 128, 128, u, w + 16)};
+            GpuVertex b[3] = {gv(x + 16, y, 128, 128, 128, u + 16, w), gv(x + 16, y + 16, 128, 128, 128, u + 16, w + 16),
+                              gv(x, y + 16, 128, 128, 128, u, w + 16)};
+            r.triangle(v, s, f, a);
+            r.triangle(v, s, f, b);
+        }
+    const VramRect rects{8, 8, 128, 96}, quads{160, 8, 128, 96};
+    for (const VramRect& area : {rects, quads}) {
+        const auto img = scaled(area);
+        EXPECT_EQ(zeros(img), 0) << "gap subpixels";
+        EXPECT_EQ(non_blocky(img, area), 0) << "native pixels split across texels";
+    }
+    // The triangle tiles are identical to the rectangle tiles, subpixel by subpixel.
+    const auto a = scaled(rects), b = scaled(quads);
+    EXPECT_EQ(a, b);
+    // Nothing leaks outside the tiled areas.
+    const auto around = scaled({4, 4, 136, 4});
+    EXPECT_EQ(zeros(around), static_cast<int>(around.size()));
+}
+
+TEST_P(HwScaled, FlatTrianglesCoverTheSameSubpixelsAsRectangles) {
+    std::vector<uint16_t> v(kPixels, 0);
+    hw->vram_written(v, {});
+    DrawState s;
+    s.area_x2 = 319;
+    s.area_y2 = 239;
+    PrimitiveFlags f;
+    Rasterizer& r = *hw;
+    // Left: one rectangle. Right: the same box as two triangles. Odd sizes and positions.
+    r.rect(v, s, f, gv(11, 7, 255, 0, 0), 37, 23);
+    GpuVertex a[3] = {gv(111, 7, 255, 0, 0), gv(148, 7, 255, 0, 0), gv(111, 30, 255, 0, 0)};
+    GpuVertex b[3] = {gv(148, 7, 255, 0, 0), gv(148, 30, 255, 0, 0), gv(111, 30, 255, 0, 0)};
+    r.triangle(v, s, f, a);
+    r.triangle(v, s, f, b);
+    const auto left = scaled({8, 4, 45, 30}), right = scaled({108, 4, 45, 30});
+    EXPECT_EQ(left, right);
+    EXPECT_EQ(zeros(left), static_cast<int>(left.size()) - 37 * 23 * GetParam() * GetParam());
+}
+
+TEST_P(HwScaled, DitherPatternScalesWithTheResolution) {
+    std::vector<uint16_t> v(kPixels, 0);
+    hw->vram_written(v, {});
+    DrawState s;
+    s.area_x2 = 319;
+    s.area_y2 = 239;
+    s.dither = true;
+    PrimitiveFlags f;
+    f.gouraud = true;
+    GpuVertex t[3] = {gv(20, 20, 105, 105, 105), gv(120, 20, 105, 105, 105), gv(20, 120, 105, 105, 105)};
+    hw->triangle(v, s, f, t);
+    const VramRect interior{24, 24, 40, 40};
+    const auto img = scaled(interior);
+    EXPECT_EQ(non_blocky(img, interior), 0);
+    // The native look: the downsampled image has the 4x4 pattern and uses more than one value.
+    std::vector<uint16_t> got(kPixels);
+    hw->read_vram(got);
+    std::vector<uint16_t> uniq;
+    for (int y = 24; y < 64; ++y)
+        for (int x = 24; x < 64; ++x) uniq.push_back(got[y * kVramWidth + x]);
+    std::sort(uniq.begin(), uniq.end());
+    uniq.erase(std::unique(uniq.begin(), uniq.end()), uniq.end());
+    EXPECT_GT(uniq.size(), 1u);
+}
+
+TEST_P(HwScaled, SemiTransparencyAndMaskWorkPerSubpixel) {
+    std::vector<uint16_t> v(kPixels, 0);
+    for (int y = 0; y < 64; ++y)
+        for (int x = 0; x < 64; ++x) v[(y + 10) * kVramWidth + x + 10] = static_cast<uint16_t>(((x / 8 + y / 8) & 1) ? 0xC210 : 0x4210);
+    hw->vram_written(v, {});
+    DrawState s;
+    s.area_x2 = 319;
+    s.area_y2 = 239;
+    PrimitiveFlags f;
+    f.semi_transparent = true;
+    s.semi_mode = 1;
+    s.check_mask = true;
+    s.set_mask = true;
+    hw->rect(v, s, f, gv(5, 5, 90, 60, 30), 80, 80);
+    const VramRect area{5, 5, 80, 80};
+    const auto img = scaled(area);
+    EXPECT_EQ(non_blocky(img, area), 0);
+    // Masked (bit 15) source pixels were left alone, the others blended and marked.
+    std::vector<uint16_t> got(kPixels);
+    hw->read_vram(got);
+    int masked = 0, marked = 0;
+    for (int y = 10; y < 74; ++y)
+        for (int x = 10; x < 74; ++x) {
+            const uint16_t w = got[y * kVramWidth + x];
+            if (v[y * kVramWidth + x] & 0x8000) masked += w == v[y * kVramWidth + x];
+            else marked += (w & 0x8000) != 0;
+        }
+    EXPECT_EQ(masked, 32 * 64);
+    EXPECT_EQ(marked, 32 * 64);
+}
+
+INSTANTIATE_TEST_SUITE_P(InternalRes, HwScaled, ::testing::Values(2, 3, 4, 8));
 
 }  // namespace
 #endif  // DW3_HW_RENDERER

@@ -48,9 +48,11 @@ bool line_dithers(const DrawState& s, const PrimitiveFlags& f);
 // The drawing area clipped to VRAM, as a half-open region (empty if the area is inverted).
 Region clip_region(const DrawState& s);
 
-// Appends the three vertices of a triangle. Vertices sit on pixel centres so that GPU rasterization of the
-// pixel-centre samples follows the PS1 top-left fill rule.
-void build_triangle(std::vector<HwVertex>& out, const DrawState& s, const PrimitiveFlags& f, const GpuVertex v[3]);
+// Appends the three vertices of a triangle. Vertices sit on the sample position of the first subpixel of their
+// native pixel (the pixel centre at scale 1) so that GPU rasterization follows the PS1 top-left fill rule.
+// `scale` is the internal resolution multiplier.
+void build_triangle(std::vector<HwVertex>& out, const DrawState& s, const PrimitiveFlags& f, const GpuVertex v[3],
+                    int scale = 1);
 
 // Appends six vertices (two triangles) covering the width x height rectangle.
 void build_rect(std::vector<HwVertex>& out, const DrawState& s, const PrimitiveFlags& f, const GpuVertex& v, int width,

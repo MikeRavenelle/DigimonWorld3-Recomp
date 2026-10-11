@@ -60,12 +60,18 @@ Region clip_region(const DrawState& s) {
     return r.empty() ? Region{} : r;
 }
 
-void build_triangle(std::vector<HwVertex>& out, const DrawState& s, const PrimitiveFlags& f, const GpuVertex v[3]) {
+void build_triangle(std::vector<HwVertex>& out, const DrawState& s, const PrimitiveFlags& f, const GpuVertex v[3],
+                    int scale) {
     const HwState st = pack_state(s, f, triangle_dithers(s, f));
     const bool tex = uses_texture(s, f);
+    // The sample of a native pixel sits at its centre at 1x. At higher resolutions the top-left subpixel of each
+    // native pixel is that sample, so the vertices move by half a subpixel: that subpixel then rasterizes exactly
+    // as the native pixel does, and a quad of triangles covers the same subpixels as a rectangle of the same size.
+    // This is also where sub-pixel vertex positions would be supplied.
+    const float origin = 0.5f / static_cast<float>(scale);
     for (int i = 0; i < 3; ++i) {
         const GpuVertex& c = f.gouraud ? v[i] : v[0];
-        out.push_back(make_vertex(st, static_cast<float>(v[i].x) + 0.5f, static_cast<float>(v[i].y) + 0.5f, c.r, c.g, c.b,
+        out.push_back(make_vertex(st, static_cast<float>(v[i].x) + origin, static_cast<float>(v[i].y) + origin, c.r, c.g, c.b,
                                   tex ? v[i].u : 0.0f, tex ? v[i].v : 0.0f));
     }
 }

@@ -16,6 +16,12 @@
 // Frames in flight. Work is recorded into one of two slots (command buffer, fence, vertex and upload buffers) and
 // submitted without waiting, so the CPU runs ahead while the GPU executes the previous frame. A slot is only
 // waited for when it is reused, and a read-back only waits for the submission that contains its copy.
+// Internal resolution. With a scale N the draw target and the sampled copy are (1024*N) x (512*N). CPU uploads are
+// replicated N x N on the GPU, read-backs keep the top-left subpixel of each native pixel (so the CPU array holds
+// exactly what the game can see), and texture and CLUT data is fetched at that same top-left subpixel, so indexed
+// data is never filtered or enlarged. Triangle vertices are offset by half a subpixel so the top-left subpixel
+// rasterizes like the native pixel; rectangles and triangle quads on the same pixel boundaries cover identical
+// subpixels, and texel selection is anchored to the native pixel, so sprites and tiles neither gap nor bleed.
 // Output is bit-exact with the software rasterizer except where noted in the implementation (rasterization of
 // triangle edges and attribute interpolation use the GPU's rules).
 
@@ -47,9 +53,10 @@ class HwRenderer final : public Rasterizer {
 public:
     // Creates the device. With a window, also creates a swap chain for it; `instance_extensions` are the Vulkan
     // instance extensions its surface needs (empty for a headless device). Returns null and sets `error` if no
-    // suitable device or swap chain is available.
+    // suitable device or swap chain is available. `internal_scale` (1..8) multiplies the resolution of the VRAM
+    // render target; the CPU-visible VRAM stays at native resolution.
     static std::unique_ptr<HwRenderer> create(const NativeWindow* window, const std::vector<std::string>& instance_extensions,
-                                              std::string& error);
+                                              std::string& error, int internal_scale = 1);
     ~HwRenderer() override;
     HwRenderer(const HwRenderer&) = delete;
     HwRenderer& operator=(const HwRenderer&) = delete;
@@ -73,6 +80,11 @@ public:
     // Reads the whole GPU-side VRAM into `out` (1024x512 words). For tests and diagnostics.
     void read_vram(std::span<uint16_t> out);
 
+    // Reads a native-pixel region of the scaled target as it is on the GPU, (w*N) x (h*N) words row by row. For
+    // tests and diagnostics; returns false if the region is too large for the read-back buffer.
+    bool read_scaled(const VramRect& r, std::vector<uint16_t>& out);
+
+    int internal_scale() const;
     const HwStats& stats() const;
     std::string device_name() const;
 

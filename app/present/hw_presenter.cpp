@@ -15,7 +15,7 @@ std::unique_ptr<HwPresenter> HwPresenter::create(SDL_Window* window, const Prese
     const dw3::NativeWindow native = describe_window(window);
     std::unique_ptr<HwPresenter> p(new HwPresenter());
     p->options_ = options;
-    p->renderer_ = dw3::HwRenderer::create(&native, required_instance_extensions(), error);
+    p->renderer_ = dw3::HwRenderer::create(&native, required_instance_extensions(), error, options.internal_res);
     if (!p->renderer_) return nullptr;
     p->renderer_->set_vsync(options.vsync);
     SDL_Log("GPU device: %s", p->renderer_->device_name().c_str());

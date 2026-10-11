@@ -7,6 +7,7 @@ layout(push_constant) uniform Params {
     ivec4 src;      // display area in VRAM: x, y, w, h (w, h in output pixels)
     int color24;    // 24-bit display mode
     int linear;  // bilinear filtering
+    int scale;   // internal resolution multiplier
 } params;
 
 layout(location = 0) out vec2 vFrac;

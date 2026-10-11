@@ -18,6 +18,7 @@ struct PresentOptions {
     dw3::ScaleMode scale = dw3::ScaleMode::Fit;
     bool linear = false;  // linear filtering instead of nearest
     bool vsync = true;
+    int internal_res = 1;  // GPU renderer internal resolution multiplier (1..8)
 };
 
 // Window contents as seen by the user (borders included), RGBA8888.

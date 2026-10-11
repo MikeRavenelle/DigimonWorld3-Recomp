@@ -15,6 +15,7 @@
 //   --uncapped         do not pace to real time (always on with --frames)
 //   --renderer R       auto (default: the plume GPU renderer, falling back to software if it cannot start),
 //                      vulkan (alias gpu; no fallback) or software (CPU rasterizer shown through an SDL renderer)
+//   --internal-res N   GPU renderer internal resolution multiplier, 1 (default) to 8
 //   --scale M          fit (default, 4:3 letterbox), integer or stretch
 //   --filter F         nearest (default) or linear
 //   --no-vsync         present without waiting for the display refresh (always on with --uncapped/--frames)
@@ -170,6 +171,13 @@ Options parse(int argc, char** argv) {
                 std::exit(2);
             }
             o.present.linear = v == "linear";
+        }
+        else if (a == "--internal-res" && i + 1 < argc) {
+            o.present.internal_res = std::atoi(argv[++i]);
+            if (o.present.internal_res < 1 || o.present.internal_res > 8) {
+                std::fprintf(stderr, "bad --internal-res %s (1..8)\n", argv[i]);
+                std::exit(2);
+            }
         }
         else if (a == "--no-vsync") o.no_vsync = true;
         else if (a == "--screenshot-every" && i + 2 < argc) {
