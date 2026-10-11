@@ -9,6 +9,7 @@
 #include "dw3/bus.h"
 #include "dw3/irq.h"
 #include "dw3/scheduler.h"
+#include "dw3/state.h"
 #include "dw3/video_timing.h"
 
 namespace dw3 {
@@ -36,6 +37,9 @@ public:
 
     uint32_t read(uint32_t off, int size);
     void write(uint32_t off, uint32_t value, int size);
+
+    // Save state: every counter's registers and evaluation state plus its pending wake-up.
+    void io(StateIo& s);
 
 private:
     struct State {

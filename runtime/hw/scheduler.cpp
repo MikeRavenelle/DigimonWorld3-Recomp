@@ -56,4 +56,46 @@ std::size_t Scheduler::run_due() {
     return n;
 }
 
+void Scheduler::io(StateIo& s) {
+    StateIo::Section sec(s, "SCHD");
+    s.io(next_id_);
+    s.io(seq_);
+    if (s.loading()) {
+        order_.clear();
+        entries_.clear();
+        update_next();
+    }
+}
+
+void Scheduler::io_event(StateIo& s, EventId& id, const std::function<Callback()>& make) {
+    bool pending = !s.loading() && is_pending(id);
+    s.io(pending);
+    if (!pending) {
+        if (s.loading()) id = kNoEvent;
+        return;
+    }
+    ++s.events;
+    if (!s.loading()) {
+        const Entry& e = entries_.at(id);
+        EventId i = id;
+        int64_t t = e.key.first;
+        uint64_t q = e.key.second;
+        s.io(i);
+        s.io(t);
+        s.io(q);
+        return;
+    }
+    EventId i = 0;
+    int64_t t = 0;
+    uint64_t q = 0;
+    s.io(i);
+    s.io(t);
+    s.io(q);
+    Key k{t, q};
+    order_.emplace(k, i);
+    entries_.emplace(i, Entry{k, make()});
+    update_next();
+    id = i;
+}
+
 }  // namespace dw3

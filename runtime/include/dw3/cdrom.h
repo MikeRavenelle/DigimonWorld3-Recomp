@@ -11,12 +11,14 @@
 #include <array>
 #include <cstdint>
 #include <deque>
+#include <list>
 #include <vector>
 
 #include "dw3/bus.h"
 #include "dw3/dma.h"
 #include "dw3/irq.h"
 #include "dw3/scheduler.h"
+#include "dw3/state.h"
 
 namespace dw3 {
 
@@ -112,11 +114,27 @@ public:
     std::size_t queued_responses() const { return queue_.size(); }
     std::size_t data_fifo_remaining() const { return data_len_ - data_pos_; }
 
+    // Save state. The disc and XA sink are host wiring and are not part of it; after loading, streaming
+    // continues from the saved sector position.
+    void io(StateIo& s);
+
 private:
     struct Resp {
         uint8_t int_no;
         std::vector<uint8_t> data;
         bool first;  // first response of a command: clears BUSYSTS when delivered
+    };
+
+    // Work that happens some cycles after a command write or an earlier response. Kept as data (not closures)
+    // so it can be saved.
+    struct Deferred {
+        enum class Kind : uint8_t { Execute, SecondOk, SecondErr, MotorOn, Stop, Init, SeekDone, GetIdFail, GetIdOk };
+        Kind kind = Kind::Execute;
+        uint8_t a = 0;             // Execute: command; SecondErr: error code
+        int64_t b = 0;             // SeekDone: target LBA
+        std::vector<uint8_t> data; // Execute: parameter bytes
+        uint64_t id = 0;
+        EventId ev = kNoEvent;
     };
 
     uint8_t read8(uint32_t off);
@@ -131,8 +149,12 @@ private:
     void enqueue(uint8_t int_no, std::vector<uint8_t> data, bool first = false);
     void deliver(Resp r);
     void schedule_flush();
+    Scheduler::Callback flush_callback();
+    Scheduler::Callback sector_callback();
     void update_line();
-    void later(int64_t delay, std::function<void()> fn);
+    void defer(int64_t delay, Deferred::Kind kind, uint8_t a = 0, int64_t b = 0, std::vector<uint8_t> data = {});
+    Scheduler::Callback deferred_callback(uint64_t id);
+    void run_deferred(const Deferred& d);
 
     void start_stream(bool play);
     void stop_stream();
@@ -158,7 +180,8 @@ private:
     uint8_t resp_len_ = 0, resp_pos_ = 0;
     std::deque<Resp> queue_;
     EventId flush_ev_ = kNoEvent;
-    uint64_t epoch_ = 0;
+    std::list<Deferred> deferred_;
+    uint64_t deferred_seq_ = 0;
 
     // Data FIFO.
     std::array<uint8_t, 0x930> data_{};

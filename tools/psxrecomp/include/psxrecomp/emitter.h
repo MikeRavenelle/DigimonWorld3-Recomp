@@ -31,7 +31,9 @@ struct EmittedFile {
 std::string func_name(const std::string& seg, uint32_t addr);
 
 // C body of one function (definition only). Hazards and oddities are appended to `warnings`.
-std::string emit_function(const EmitContext& ec, const Function& f, std::vector<std::string>* warnings = nullptr);
+// `resume_points` receives the labels a save state can enter the function at.
+std::string emit_function(const EmitContext& ec, const Function& f, std::vector<std::string>* warnings = nullptr,
+                          std::vector<uint32_t>* resume_points = nullptr);
 
 // Whole segment as one or more translation units (`funcs_per_file` functions each), with prototypes.
 std::vector<EmittedFile> emit_segment(const EmitContext& ec, std::size_t funcs_per_file,

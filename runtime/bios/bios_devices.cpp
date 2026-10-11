@@ -83,6 +83,7 @@ uint32_t Bios::find_dcb(const std::string& device) {
 // Calls a DCB function pointer read from RAM with (a0, a1, a2) and returns v0; caller-saved state is kept.
 uint32_t Bios::call_dcb_fn(RecompContext& c, uint32_t fn, uint32_t a0, uint32_t a1, uint32_t a2) {
     if (!fn) return 0;
+    DepthGuard depth(*this);
     uint32_t saved_r[32];
     std::memcpy(saved_r, c.r, sizeof(saved_r));
     c.r[4] = a0;

@@ -122,6 +122,56 @@ void Mdec::reset() {
     stage_word_ = 0;
 }
 
+void Mdec::io(StateIo& s) {
+    StateIo::Section sec(s, "MDEC");
+    s.io(in_enable_);
+    s.io(out_enable_);
+    s.io(depth_);
+    s.io(signed_);
+    s.io(bit15_);
+    s.io(cur_block_);
+    s.io(remaining_status_);
+    s.io(state_);
+    s.io(params_left_);
+    s.io(table_pos_);
+    s.io(quant_both_);
+    s.io(qt_luma_);
+    s.io(qt_chroma_);
+    s.io(scale_);
+    s.io(stage_word_);
+    s.io(stage_);
+    s.io(blk_);
+    s.io(n_);
+    s.io(qscale_);
+    s.io(coef_);
+    s.io(cr_);
+    s.io(cb_);
+    s.io(y_);
+    s.io(mb_count_);
+    // Only the words not yet read are kept; the buffer restarts at zero.
+    std::vector<uint32_t> live;
+    if (!s.loading()) live.assign(out_buf_.begin() + head_, out_buf_.begin() + tail_);
+    s.io(live);
+    s.list(chunks_, [&](Chunk& c) {
+        s.io(c.end);
+        s.io(c.at);
+    });
+    uint64_t ready = chunk_ready_;
+    s.io(ready);
+    s.io(ready_end_);
+    s.io(pushed_);
+    s.io(popped_);
+    s.io(last_at_);
+    if (s.loading()) {
+        if (ready > chunks_.size()) throw StateError("MDEC: bad chunk index");
+        chunk_ready_ = static_cast<size_t>(ready);
+        out_buf_ = std::move(live);
+        head_ = 0;
+        tail_ = static_cast<uint32_t>(out_buf_.size());
+    }
+    sched_.io_event(s, ev_, [this] { return Scheduler::Callback([this](int64_t) { on_ready(); }); });
+}
+
 void Mdec::write_control(uint32_t v) {
     if (v & 0x80000000u) reset();
     in_enable_ = (v >> 30) & 1u;

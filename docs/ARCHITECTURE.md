@@ -59,6 +59,39 @@ See `runtime/include/dw3/recomp.h`.
   VBlank, timer, CD and DMA interrupts by running the HLE exception handler, which in turn calls
   the game's recompiled callbacks.
 - COP2 (GTE) ops call into `hw/gte`.
+- Each function with call sites or loops starts with a dispatch on `ctx->resume`, and each segment has a
+  table of those labels (`RecompSegment::resume`): the return point of every call and the target of every
+  backward jump. Event checks record the label they are about to jump to in `ctx->cur_pc`. Save states
+  resume through these (below). A `jr $ra` whose delay slot writes `$ra` is a recompile error.
+
+## Save states
+
+A state is guest state only: RAM, scratchpad, CPU and GTE registers, the scheduler queue and every hardware
+block, the native BIOS tables, and one guest PC. Nothing in it depends on how the recompiler laid out the
+host code, so a state loads in any build of the same game whose tables have a label at that PC (the
+return points of calls exist in every build).
+
+Each block describes its state once in an `io(StateIo&)` method used for both directions
+(`runtime/include/dw3/state.h`). Data is little-endian and fixed width, grouped in sections that carry a tag,
+a layout version and a length. A reader skips sections it does not know; a block that gains a field bumps its
+version and reads the field with `io_since`, so older states load with a default. Overlays are recorded by
+name. Memory cards are not stored, only a hash of each, and a load warns when they differ. The file is a
+header (magic, container version, encoding, a hash of the game's boot executable, sizes, CRC32) followed by
+the zstd-compressed payload. Stretches of the payload that also occur on the disc (most of RAM and SPU RAM
+is data read from it) are replaced by references into the disc before compression (`disc_ref.h`).
+
+The game's call stack is the host stack, but the guest call chain is also in guest memory, so only the
+innermost function is resumed. A state is taken at a safe point: the event check of a backward jump, after
+due events and interrupts were handled, with no native kernel frame active (`Bios::host_depth() == 0`). The
+game spins in VSync/DrawSync loops, so one comes up within a frame or so; `Host::save_state` queues the
+capture for it. Loading throws out of the safe point to `Host::run`, which calls `Machine::resume`: it finds
+the function that has a label at the saved PC, enters it with `ctx->resume` set, and when it returns
+continues at the address in `$ra` the same way, until the guest returns to 0. A state taken while an
+interrupt handler or event callback runs is refused; the next frame's safe point is used instead.
+
+Scenario tests use states to skip long prefixes: `[[savestate]]` writes one, `start_state` or
+`[[loadstate]]` restores one, and `replay = true` re-runs the script from a saved state while checking
+RAM, VRAM and CPU state frame by frame. States are written under the build directory and never committed.
 
 ## Rendering
 

@@ -58,6 +58,10 @@ public:
     // Invoked around any change of timing parameters so lazily-evaluated consumers (timers) can sync.
     std::function<void()> on_before_reconfigure, on_after_reconfigure;
 
+    // Save state: timing parameters, the frame origin and the pending VBLANK event (which fires at the same cycle
+    // after loading). on_frame is not called.
+    void io(StateIo& s);
+
 private:
     template <class F>
     void reconfigure(F&& apply, bool restart);
@@ -69,6 +73,7 @@ private:
     int64_t field_start_vc(uint64_t k) const;
     uint64_t field_of(int64_t vc) const;
     void schedule_vblank();
+    void on_vblank();
 
     Scheduler& sched_;
     IrqController& irq_;

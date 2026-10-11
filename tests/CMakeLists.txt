@@ -22,8 +22,9 @@ dw3_add_test(test_runtime
     SOURCES runtime/test_bus.cpp runtime/test_platform.cpp runtime/test_gte.cpp
             runtime/test_scheduler.cpp runtime/test_irq.cpp runtime/test_video_timing.cpp
             runtime/test_timers.cpp runtime/test_dma.cpp runtime/test_cdrom.cpp runtime/test_machine.cpp runtime/test_spu.cpp
-            runtime/test_bios.cpp runtime/test_soft_rasterizer.cpp runtime/test_sio.cpp
-            runtime/test_mdec.cpp runtime/test_memcard.cpp
+            runtime/test_bios.cpp runtime/test_state.cpp runtime/test_state_bios.cpp runtime/test_state_core.cpp
+            runtime/test_state_cdrom.cpp runtime/test_state_sio.cpp runtime/test_state_spu.cpp runtime/test_soft_rasterizer.cpp runtime/test_sio.cpp
+            runtime/test_mdec.cpp runtime/test_memcard.cpp runtime/test_disc_ref.cpp
             runtime/test_spu_dsp.cpp runtime/test_spu_voices.cpp runtime/test_xa.cpp
             runtime/test_present_layout.cpp runtime/test_display_snapshot.cpp runtime/test_precise_vertex.cpp
     LIBS dw3runtime)

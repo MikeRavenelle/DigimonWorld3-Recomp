@@ -542,4 +542,11 @@ int Gte::command_cycles(uint32_t command) {
 
 void Gte::reset() { *this = Gte{}; }
 
+void Gte::io(StateIo& s) {
+    StateIo::Section sec(s, "GTE0");
+    for (auto& r : data_) s.io(r);
+    for (auto& r : ctrl_) s.io(r);
+    s.io(cmd_);
+}
+
 }  // namespace dw3

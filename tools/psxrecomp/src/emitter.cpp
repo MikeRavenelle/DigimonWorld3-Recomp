@@ -6,6 +6,7 @@
 #include <cstdio>
 #include <map>
 #include <set>
+#include <stdexcept>
 
 namespace psxrecomp {
 namespace {
@@ -53,8 +54,9 @@ bool is_load(Op op) {
 
 class FuncEmitter {
 public:
-    FuncEmitter(const EmitContext& ec, const Function& f, std::vector<std::string>* warnings)
-        : ec_(ec), f_(f), warnings_(warnings), seg_name_(ec.seg->name) {}
+    FuncEmitter(const EmitContext& ec, const Function& f, std::vector<std::string>* warnings,
+                std::vector<uint32_t>* resume_out)
+        : ec_(ec), f_(f), warnings_(warnings), resume_out_(resume_out), seg_name_(ec.seg->name) {}
 
     std::string run();
 
@@ -69,6 +71,8 @@ private:
     }
 
     std::string call_expr(uint32_t target) const;
+    // A call that returns here: records the frame so a save state can resume at `link`.
+    std::string call_site(const std::string& call, uint32_t link) const;
     std::string stmt(const Instruction& i);  // non-control instruction
     std::string load_value(const Instruction& i);
     std::string addr(const Instruction& i) const;
@@ -86,9 +90,13 @@ private:
     const EmitContext& ec_;
     const Function& f_;
     std::vector<std::string>* warnings_;
+    std::vector<uint32_t>* resume_out_;
     std::string seg_name_;
     std::string out_;
     std::set<uint32_t> labels_;
+    // Labels a restored call chain can re-enter this function at (return points of calls and backward-jump
+    // targets), and return points that lie outside the function's own code.
+    mutable std::set<uint32_t> resume_, tail_links_;
     unsigned pending_ = 0;
 };
 
@@ -98,10 +106,19 @@ std::string FuncEmitter::call_expr(uint32_t t) const {
     return fmt("dw3_call(ctx, 0x%08Xu);", t);
 }
 
+std::string FuncEmitter::call_site(const std::string& call, uint32_t link) const {
+    if (is_local_target(link)) resume_.insert(link);
+    else tail_links_.insert(link);
+    return call;
+}
+
 std::string FuncEmitter::jump_to(uint32_t from, uint32_t t) const {
     if (is_local_target(t)) {
         std::string g = "goto " + label(t) + ";";
-        if (t <= from && ec_.cycle_counting) return "DW3_CHECK_EVENTS(ctx); " + g;
+        if (t <= from && ec_.cycle_counting) {
+            resume_.insert(t);
+            return fmt("DW3_CHECK_EVENTS(ctx, 0x%08Xu); ", t) + g;
+        }
         return g;
     }
     return call_expr(t) + " return;";
@@ -212,6 +229,7 @@ void FuncEmitter::collect_labels() {
         Instruction i = at(pc);
         if (i.klass() == InsnClass::Branch && !i.is_call()) add(i.target);
         if (i.op == Op::J) add(i.target);
+        if (i.is_call()) add(pc + 8);  // return point: a restored call chain re-enters here
     }
     for (const auto& jt : f_.jump_tables)
         for (uint32_t t : jt.targets) add(t);
@@ -321,10 +339,15 @@ std::string FuncEmitter::run() {
             case Op::JAL:
                 line(R(31) + fmt(" = 0x%08Xu;", link));
                 if (!dss.empty()) line(dss);
-                line(call_expr(i.target));
+                line(call_site(call_expr(i.target), link));
                 break;
             case Op::JR:
                 if (i.rs == 31) {
+                    // The return target is read from $ra when a save state resumes into the caller, so the delay
+                    // slot must leave $ra alone (the native return does not look at it).
+                    if (ds.dest_gpr() == 31)
+                        throw std::runtime_error(fmt("%s: jr $ra at %08X has a delay slot that writes $ra",
+                                                     seg_name_.c_str(), pc));
                     if (!dss.empty()) line(dss);
                     line("return;");
                 } else {
@@ -359,19 +382,19 @@ std::string FuncEmitter::run() {
                 line("{ uint32_t t = " + R(i.rs) + ";");
                 if (i.rd) line("  " + R(i.rd) + fmt(" = 0x%08Xu;", link));
                 if (!dss.empty()) line("  " + dss);
-                line("  dw3_call(ctx, t); }");
+                line("  " + call_site("dw3_call(ctx, t);", link) + " }");
                 break;
             case Op::BLTZAL: case Op::BGEZAL: {
                 bool always = i.op == Op::BGEZAL && i.rs == 0;
                 if (always) {
                     line(R(31) + fmt(" = 0x%08Xu;", link));
                     if (!dss.empty()) line(dss);
-                    line(call_expr(i.target));
+                    line(call_site(call_expr(i.target), link));
                 } else {
                     line("{ int c = " + branch_cond(i) + ";");
                     line("  " + R(31) + fmt(" = 0x%08Xu;", link));
                     if (!dss.empty()) line("  " + dss);
-                    line("  if (c) { " + call_expr(i.target) + " } }");
+                    line("  if (c) { " + call_site(call_expr(i.target), link) + " } }");
                 }
                 break;
             }
@@ -406,6 +429,22 @@ std::string FuncEmitter::run() {
         flush_cycles();
         line(call_expr(expect) + " return;");
     }
+    // Return points outside this function's own code continue by calling on, like a fallthrough out of it.
+    for (uint32_t t : tail_links_) {
+        out_ += label(t) + ":;\n";
+        line(call_expr(t) + " return;");
+    }
+    if (resume_out_) {
+        resume_out_->assign(resume_.begin(), resume_.end());
+        resume_out_->insert(resume_out_->end(), tail_links_.begin(), tail_links_.end());
+    }
+    if (resume_.empty() && tail_links_.empty()) return out_ + "}\n";
+    // Entry dispatch used when a save state is restored (ctx->resume names the label to continue at).
+    std::string dispatch = "    if (DW3_UNLIKELY(ctx->resume)) {\n        uint32_t rp = ctx->resume;\n        ctx->resume = 0;\n        switch (rp) {\n";
+    for (uint32_t t : resume_) dispatch += fmt("        case 0x%08Xu: goto ", t) + label(t) + ";\n";
+    for (uint32_t t : tail_links_) dispatch += fmt("        case 0x%08Xu: goto ", t) + label(t) + ";\n";
+    dispatch += fmt("        default: ctx->resume = rp; dw3_bad_resume(ctx, 0x%08Xu); return;\n        }\n    }\n", f_.start);
+    out_.insert(out_.find('\n') + 1, dispatch);
     return out_ + "}\n";
 }
 
@@ -413,20 +452,26 @@ std::string FuncEmitter::run() {
 
 std::string func_name(const std::string& seg, uint32_t addr) { return "f_" + seg + "_" + hex8(addr); }
 
-std::string emit_function(const EmitContext& ec, const Function& f, std::vector<std::string>* warnings) {
-    return FuncEmitter(ec, f, warnings).run();
+std::string emit_function(const EmitContext& ec, const Function& f, std::vector<std::string>* warnings,
+                          std::vector<uint32_t>* resume_points) {
+    return FuncEmitter(ec, f, warnings, resume_points).run();
 }
 
 std::vector<EmittedFile> emit_segment(const EmitContext& ec, std::size_t funcs_per_file,
                                       std::vector<std::string>* warnings) {
     std::vector<EmittedFile> files;
     std::vector<const Function*> all;
+    std::vector<std::pair<uint32_t, uint32_t>> resume;  // (label, start of the function that has it)
     for (const auto& [s, f] : *ec.local) all.push_back(&f);
     if (funcs_per_file == 0) funcs_per_file = all.size() ? all.size() : 1;
     for (std::size_t first = 0; first < all.size(); first += funcs_per_file) {
         std::size_t last = std::min(all.size(), first + funcs_per_file);
         std::string body;
-        for (std::size_t k = first; k < last; ++k) body += "\n" + emit_function(ec, *all[k], warnings);
+        for (std::size_t k = first; k < last; ++k) {
+            std::vector<uint32_t> points;
+            body += "\n" + emit_function(ec, *all[k], warnings, &points);
+            for (uint32_t p : points) resume.emplace_back(p, all[k]->start);
+        }
         // Prototypes for every function referenced in this file.
         std::set<std::string> protos;
         for (std::size_t pos = body.find("f_"); pos != std::string::npos; pos = body.find("f_", pos + 2)) {
@@ -441,6 +486,22 @@ std::vector<EmittedFile> emit_segment(const EmitContext& ec, std::size_t funcs_p
         text += body;
         files.push_back({ec.seg->name + "_" + std::to_string(files.size()) + ".c", std::move(text)});
     }
+    // Where a save state can resume in this segment. A label several functions share (they overlap) goes to the
+    // first one; the code after it is the same in all of them.
+    std::stable_sort(resume.begin(), resume.end(),
+                     [](const auto& a, const auto& b) { return a.first < b.first; });
+    resume.erase(std::unique(resume.begin(), resume.end(),
+                             [](const auto& a, const auto& b) { return a.first == b.first; }),
+                 resume.end());
+    std::string rtext = "/* Generated by psxrecomp from " + ec.seg->name + ". Do not edit. */\n#include \"dw3/recomp.h\"\n\n";
+    for (const auto& [label, start] : resume) {
+        (void)label;
+        rtext += "void " + func_name(ec.seg->name, start) + "(RecompContext* ctx);\n";
+    }
+    rtext += "\nconst RecompResumeEntry resume_" + ec.seg->name + "[] = {\n";
+    for (const auto& [label, start] : resume) rtext += fmt("    {0x%08Xu, ", label) + func_name(ec.seg->name, start) + "},\n";
+    rtext += "    {0, 0},  /* end */\n};\n";
+    files.push_back({ec.seg->name + "_resume.c", std::move(rtext)});
     return files;
 }
 
@@ -605,15 +666,16 @@ EmittedFile emit_tables(const std::vector<TableSegment>& segs, std::vector<std::
         for (const auto& r : ranges) arrays += fmt("    {0x%08Xu, 0x%08Xu},\n", r.start, r.end);
         if (ranges.empty()) arrays += "    {0, 0},\n";
         arrays += "};\n";
+        protos += "extern const RecompResumeEntry resume_" + n + "[];\n";
         arrays += "static const uint16_t stale_" + n + "[] = {";
         for (uint32_t j : rel.stale_if[si]) arrays += fmt("%uu, ", j);
         if (rel.stale_if[si].empty()) arrays += "0";
         arrays += "};\n";
         table += fmt("    {\"%s\", 0x%08Xu, %zuu, 0x%08Xu, funcs_%s, %zuu, probes_%s, %zuu, ranges_%s, %zuu, 0x%08Xu, "
-                     "stale_%s, %zuu},\n",
+                     "stale_%s, %zuu, resume_%s},\n",
                      n.c_str(), ts.seg->base, ts.extent ? static_cast<std::size_t>(ts.extent) : ts.seg->bytes.size(),
                      segment_checksum(*ts.seg), n.c_str(), ts.funcs->size(), n.c_str(), probes.size(), n.c_str(),
-                     ranges.size(), code_hash(*ts.seg, ranges), n.c_str(), rel.stale_if[si].size());
+                     ranges.size(), code_hash(*ts.seg, ranges), n.c_str(), rel.stale_if[si].size(), n.c_str());
     }
     std::string text = "/* Generated by psxrecomp. Do not edit. */\n#include \"dw3/recomp.h\"\n\n" + protos + "\n" +
                        arrays + "\nconst RecompSegment dw3_segments[] = {\n" + table + "};\n" +

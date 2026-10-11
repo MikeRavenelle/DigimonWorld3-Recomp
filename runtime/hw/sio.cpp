@@ -30,6 +30,52 @@ void Sio::reset() {
     reset_device();
 }
 
+void Sio::io(StateIo& s) {
+    StateIo::Section sec(s, "SIO0");
+    s.io(mode_);
+    s.io(ctrl_);
+    s.io(baud_);
+    s.io(irq_flag_);
+    s.io(parity_);
+    s.io(ack_low_);
+    s.io(busy_);
+    s.io(rx_);
+    uint32_t head = static_cast<uint32_t>(rx_head_), count = static_cast<uint32_t>(rx_count_);
+    s.io(head);
+    s.io(count);
+    s.io(has_next_);
+    s.io(next_tx_);
+    s.io(tx_byte_);
+    s.io(dev_);
+    s.io(step_);
+    s.io(cmd_);
+    s.io(msb_);
+    s.io(lsb_);
+    s.io(chk_);
+    s.io(bad_checksum_);
+    s.io(sector_);
+    s.io(buf_);
+    for (auto& d : ds_) {
+        s.io(d.analog);
+        s.io(d.config);
+        s.io(d.locked);
+        s.io(d.rumble_map);
+        s.io(d.reply);
+        s.io(d.payload);
+        s.io(d.config_pending);
+        s.io(d.polling);
+    }
+    for (auto& c : cards_) s.io(c.flag);  // the storage itself is the host's
+    if (s.loading()) {
+        if (head >= rx_.size() || count > rx_.size()) throw StateError("SIO0: bad FIFO state");
+        rx_head_ = head;
+        rx_count_ = count;
+    }
+    sched_.io_event(s, xfer_ev_, [this] { return xfer_callback(); });
+    sched_.io_event(s, ack_ev_, [this] { return ack_callback(); });
+    sched_.io_event(s, ack_end_ev_, [this] { return ack_end_callback(); });
+}
+
 void Sio::reset_device() {
     dev_ = Dev::Idle;
     step_ = 0;
@@ -170,7 +216,23 @@ void Sio::write_data(uint8_t v) {
 
 void Sio::start_tx(uint8_t v) {
     busy_ = true;
-    xfer_ev_ = sched_.schedule_in(byte_cycles(), [this, v](int64_t) { finish_tx(v); });
+    tx_byte_ = v;
+    xfer_ev_ = sched_.schedule_in(byte_cycles(), xfer_callback());
+}
+
+Scheduler::Callback Sio::xfer_callback() {
+    return [this](int64_t) { finish_tx(tx_byte_); };
+}
+
+Scheduler::Callback Sio::ack_callback() {
+    return [this](int64_t) { ack_begin(); };
+}
+
+Scheduler::Callback Sio::ack_end_callback() {
+    return [this](int64_t) {
+        ack_end_ev_ = kNoEvent;
+        ack_low_ = false;
+    };
 }
 
 void Sio::finish_tx(uint8_t tx) {
@@ -183,7 +245,7 @@ void Sio::finish_tx(uint8_t tx) {
     static constexpr std::size_t kThreshold[4] = {1, 2, 4, 8};
     if ((ctrl_ & kCtrlRxIrq) && rx_count_ >= kThreshold[(ctrl_ >> 8) & 3]) set_irq();
     if (ctrl_ & kCtrlTxIrq) set_irq();
-    if (ack) ack_ev_ = sched_.schedule_in(kAckDelay, [this](int64_t) { ack_begin(); });
+    if (ack) ack_ev_ = sched_.schedule_in(kAckDelay, ack_callback());
     if (has_next_ && (ctrl_ & kCtrlTxEn)) {
         has_next_ = false;
         start_tx(next_tx_);
@@ -194,10 +256,7 @@ void Sio::ack_begin() {
     ack_ev_ = kNoEvent;
     ack_low_ = true;
     if (ctrl_ & kCtrlAckIrq) set_irq();
-    ack_end_ev_ = sched_.schedule_in(kAckWidth, [this](int64_t) {
-        ack_end_ev_ = kNoEvent;
-        ack_low_ = false;
-    });
+    ack_end_ev_ = sched_.schedule_in(kAckWidth, ack_end_callback());
 }
 
 uint8_t Sio::device_byte(uint8_t tx, bool& ack) {

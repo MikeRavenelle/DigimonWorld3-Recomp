@@ -6,6 +6,7 @@
 #include <functional>
 
 #include "dw3/bus.h"
+#include "dw3/state.h"
 
 namespace dw3 {
 
@@ -43,6 +44,9 @@ public:
     // Called whenever pending() changes (true = line went high). The CPU/BIOS layer uses this to
     // set COP0 CAUSE.IP2 and deliver the exception when cpu_interrupt_enabled().
     std::function<void(bool pending)> on_line_change;
+
+    // Save state. Loading does not call on_line_change; the owner re-syncs the CPU line afterwards.
+    void io(StateIo& s);
 
 private:
     void notify(bool before);

@@ -15,6 +15,7 @@
 #include "dw3/dma.h"
 #include "dw3/irq.h"
 #include "dw3/precise_vertex.h"
+#include "dw3/state.h"
 #include "dw3/video_timing.h"
 
 namespace dw3 {
@@ -136,6 +137,10 @@ public:
     uint64_t commands() const { return commands_; }
     uint64_t primitives() const { return primitives_; }
     std::function<void(const char*, uint32_t)> on_unknown_command;
+
+    // Save state: VRAM, command state machine, environment, display and transfer state. With a rasterizer set,
+    // saving first pulls its copy of VRAM into the array and loading pushes the array back to it.
+    void io(StateIo& s);
 
 private:
     enum class Gp0State { Command, ImageLoad, PolyLine };

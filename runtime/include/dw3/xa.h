@@ -10,6 +10,7 @@
 #include "dw3/audio_ring.h"
 #include "dw3/cdrom.h"
 #include "dw3/spu.h"
+#include "dw3/state.h"
 
 namespace dw3 {
 
@@ -34,6 +35,9 @@ public:
     void resample_push(int16_t l, int16_t r);
 
     uint64_t sectors() const { return sectors_; }
+
+    // Save state: ADPCM history, resampler ring and phase, and the decoded frames not yet consumed by the SPU.
+    void io(StateIo& s);
 
 private:
     const Cdrom* cd_;

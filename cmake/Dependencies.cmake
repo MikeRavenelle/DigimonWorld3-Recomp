@@ -7,6 +7,17 @@ FetchContent_Declare(tomlplusplus
     GIT_SHALLOW TRUE)
 FetchContent_MakeAvailable(tomlplusplus)
 
+# zstd : save state compression (BSD)
+FetchContent_Declare(zstd
+    URL https://github.com/facebook/zstd/releases/download/v1.5.6/zstd-1.5.6.tar.gz
+    SOURCE_SUBDIR build/cmake)
+set(ZSTD_BUILD_PROGRAMS OFF CACHE BOOL "" FORCE)
+set(ZSTD_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+set(ZSTD_BUILD_SHARED OFF CACHE BOOL "" FORCE)
+set(ZSTD_BUILD_STATIC ON CACHE BOOL "" FORCE)
+set(ZSTD_LEGACY_SUPPORT OFF CACHE BOOL "" FORCE)
+FetchContent_MakeAvailable(zstd)
+
 # GoogleTest: prefer system package, fall back to source.
 if(DW3_BUILD_TESTS OR NOT DEFINED DW3_BUILD_TESTS)
     find_package(GTest QUIET)

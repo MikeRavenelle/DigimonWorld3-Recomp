@@ -68,7 +68,26 @@ void Noise::tick(unsigned shift, unsigned step) {
     }
 }
 
+void Noise::io(StateIo& s) {
+    StateIo::Section sec(s, "SPNZ");
+    s.io(level);
+    s.io(timer);
+}
+
 // ---- Reverb ----
+
+void Reverb::io(StateIo& s) {
+    StateIo::Section sec(s, "SPRV");
+    s.io(start_);
+    s.io(cur_);
+    s.io(phase_);
+    s.io(in_hist_[0]);
+    s.io(in_hist_[1]);
+    s.io(out_hist_[0]);
+    s.io(out_hist_[1]);
+    s.io(in_pos_);
+    s.io(out_pos_);
+}
 
 int16_t Reverb::rd(const uint8_t* ram, int32_t off) const {
     int64_t size = 0x80000 - static_cast<int64_t>(start_);

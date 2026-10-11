@@ -11,6 +11,7 @@
 #include <unordered_map>
 
 #include "dw3/recomp.h"
+#include "dw3/state.h"
 
 namespace dw3 {
 
@@ -38,6 +39,13 @@ public:
     // Runs every event with time <= ctx.cycles in (time, insertion) order. Callbacks may schedule more
     // (including already-due ones, which also run) or cancel others. Returns the number executed.
     std::size_t run_due();
+
+    // Save states. Callbacks cannot be serialized, so each device writes its own pending events: io() restores the
+    // id counters (and, when loading, drops every queued event); then every owner calls io_event() for each EventId
+    // it holds. `make` builds the callback for an event that is being restored. A device that schedules events it
+    // does not keep an id for must stop doing so or save them in its own state; Machine checks the counts.
+    void io(StateIo& s);
+    void io_event(StateIo& s, EventId& id, const std::function<Callback()>& make);
 
 private:
     using Key = std::pair<int64_t, uint64_t>;  // (time, sequence)

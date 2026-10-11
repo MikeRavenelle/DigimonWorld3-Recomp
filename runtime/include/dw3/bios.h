@@ -17,11 +17,13 @@
 #include <array>
 #include <cstdint>
 #include <functional>
+#include <list>
 #include <span>
 #include <string>
 #include <vector>
 
 #include "dw3/machine.h"
+#include "dw3/state.h"
 
 namespace dw3 {
 
@@ -85,6 +87,13 @@ public:
     uint32_t hook_entry() const { return hook_; }
     uint64_t interrupts_delivered() const { return interrupts_; }
     uint64_t calls() const { return calls_; }
+    // Native kernel frames currently running that may call into game code or service events. A state can only be
+    // taken when this is zero.
+    int host_depth() const { return host_depth_; }
+
+    // Save state (kernel tables, pad setup, open files, pending card completions). The memory card images and the
+    // host callbacks/pad input are not part of it. Throws StateError when saving inside a kernel frame.
+    void io(StateIo& s);
 
 private:
     uint32_t& reg(RecompContext& c, int r) { return c.r[r]; }
@@ -106,7 +115,20 @@ private:
         std::string pattern;
         std::string device;  // DCB name used by firstfile ("bu")
     };
+    struct PendingCard {  // a scheduled card completion (see card_async)
+        uint32_t spec = 0;
+        bool software = false;
+        EventId ev = kNoEvent;
+    };
     void card_async(uint32_t spec, bool software = false);
+    Scheduler::Callback card_completion(PendingCard* p);
+    struct DepthGuard {
+        explicit DepthGuard(Bios& b) : b_(b) { ++b_.host_depth_; }
+        ~DepthGuard() { --b_.host_depth_; }
+        DepthGuard(const DepthGuard&) = delete;
+        DepthGuard& operator=(const DepthGuard&) = delete;
+        Bios& b_;
+    };
     void card_modified(int slot);
     std::string read_cstr(RecompContext& c, uint32_t addr) const;
     bool card_dispatch(RecompContext& c, uint32_t table, uint32_t fn);  // false = not a card/file function
@@ -141,6 +163,8 @@ private:
     uint32_t errno_ = 0;
     std::string tty_;
     uint64_t interrupts_ = 0, calls_ = 0;
+    int host_depth_ = 0;
+    std::list<PendingCard> pending_cards_;
 };
 
 }  // namespace dw3

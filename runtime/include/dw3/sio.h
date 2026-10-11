@@ -21,6 +21,7 @@
 #include "dw3/bus.h"
 #include "dw3/irq.h"
 #include "dw3/scheduler.h"
+#include "dw3/state.h"
 
 namespace dw3 {
 
@@ -91,6 +92,10 @@ public:
 
     void reset();  // power-on state (keeps attached devices)
 
+    // Save state: registers, FIFO, device protocol state, per-card FLAG and pending events. Attached devices and
+    // card storage belong to the host and are not part of it.
+    void io(StateIo& s);
+
     uint32_t read(uint32_t off, int size);
     void write(uint32_t off, uint32_t value, int size);
 
@@ -118,6 +123,9 @@ private:
     void write_ctrl(uint16_t v);
     void start_tx(uint8_t v);
     void finish_tx(uint8_t tx);
+    Scheduler::Callback xfer_callback();
+    Scheduler::Callback ack_callback();
+    Scheduler::Callback ack_end_callback();
     uint8_t device_byte(uint8_t tx, bool& ack);
     uint8_t pad_byte(uint8_t tx, bool& ack);
     uint8_t card_byte(uint8_t tx, bool& ack);
@@ -155,6 +163,7 @@ private:
     std::size_t rx_head_ = 0, rx_count_ = 0;
     bool has_next_ = false;  // a byte waiting behind the one being shifted (or held while TXEN is off)
     uint8_t next_tx_ = 0;
+    uint8_t tx_byte_ = 0;  // byte being shifted out while xfer_ev_ is pending
     EventId xfer_ev_ = kNoEvent, ack_ev_ = kNoEvent, ack_end_ev_ = kNoEvent;
 
     // Device state machine (reset on deselect / port change).

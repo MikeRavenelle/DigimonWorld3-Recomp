@@ -9,6 +9,8 @@
 #include <cstdint>
 #include <span>
 
+#include "dw3/state.h"
+
 namespace dw3::spu_dsp {
 
 inline constexpr std::array<int16_t, 512> kGauss = {
@@ -107,6 +109,7 @@ struct Noise {
     uint16_t level = 0;
     int32_t timer = 0;
     void tick(unsigned shift, unsigned step);  // shift 0..15 (SPUCNT bits 13-10), step 0..3 (bits 9-8) = 4..7
+    void io(StateIo& s);
 };
 
 // Reverb unit: 22.05 kHz core fed/drained through 39-tap resamplers. Registers are the 32 words at 0x1DC0..0x1DFF.
@@ -128,6 +131,7 @@ public:
     }
     uint32_t start() const { return start_; }
     uint32_t current() const { return cur_; }
+    void io(StateIo& s);
 
     // One 44.1 kHz tick: in_l/in_r is the reverb input mix; returns the upsampled reverb output (before EVOL).
     // write = SPUCNT bit 7 (buffer writes + same/diff stages enabled).

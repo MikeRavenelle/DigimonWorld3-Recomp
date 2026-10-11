@@ -19,7 +19,19 @@ typedef struct RecompContext {
     int64_t next_event;  /* runtime services events when cycles >= next_event */
     void* bus;           /* opaque dw3::Bus* (memory slow path) */
     void* machine;       /* opaque dw3::Machine* (everything else); may be null in unit tests */
+
+    /* Save states (see machine.h). cur_pc is the label the code is about to jump to, recorded at every event check:
+     * the guest PC a state resumes at. resume is non-zero while a restored state is entered: the label address the
+     * function being entered jumps to. */
+    uint32_t cur_pc;
+    uint32_t resume;
 } RecompContext;
+
+#if defined(__GNUC__) || defined(__clang__)
+#define DW3_UNLIKELY(x) __builtin_expect(!!(x), 0)
+#else
+#define DW3_UNLIKELY(x) (x)
+#endif
 
 typedef void (*RecompFunc)(RecompContext* ctx);
 
@@ -126,11 +138,17 @@ void dw3_bad_jump(RecompContext* ctx, uint32_t pc, uint32_t target);
 /* BIOS A0/B0/C0 dispatch (native HLE). `fn` is the function number from $t1. */
 void dw3_bios_call(RecompContext* ctx, uint32_t table, uint32_t fn);
 
-#define DW3_CHECK_EVENTS(ctx)                         \
+/* Event check on a backward jump to label `pc`. The label is where a save state resumes. */
+#define DW3_CHECK_EVENTS(ctx, pc)                     \
     do {                                              \
-        if ((ctx)->cycles >= (ctx)->next_event)       \
+        if ((ctx)->cycles >= (ctx)->next_event) {     \
+            (ctx)->cur_pc = (pc);                     \
             dw3_service_events(ctx);                  \
+        }                                             \
     } while (0)
+
+/* Entered function found no label for the address a restored chain asked it to resume at. */
+void dw3_bad_resume(RecompContext* ctx, uint32_t fn);
 
 /* ---- Coprocessors ---- */
 void dw3_mtc0(RecompContext* ctx, uint32_t reg, uint32_t value);
@@ -238,6 +256,13 @@ typedef struct RecompRange {
     uint32_t start, end; /* [start, end) of recompiled code */
 } RecompRange;
 
+/* A label a function can be entered at when a save state resumes: the return point of a call or the target of a
+ * backward jump. Sorted by addr. */
+typedef struct RecompResumeEntry {
+    uint32_t addr;
+    RecompFunc func;
+} RecompResumeEntry;
+
 typedef struct RecompSegment {
     const char* name;
     uint32_t base;
@@ -252,6 +277,7 @@ typedef struct RecompSegment {
     uint32_t code_hash;         /* FNV-1a over the bytes of `ranges` */
     const uint16_t* stale_if;   /* segment indices whose code in RAM shows this overlay is only a leftover tail */
     uint32_t stale_count;
+    const RecompResumeEntry* resume; /* resume labels of this segment's functions, ended by an entry with addr 0 */
 } RecompSegment;
 
 /* Emitted by psxrecomp into dw3_tables.c. Segment 0 is the main executable. */

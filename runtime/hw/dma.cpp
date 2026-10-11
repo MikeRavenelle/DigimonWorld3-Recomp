@@ -221,4 +221,19 @@ void Dma::complete(int ch) {
     if (!before && master_flag()) irq_.raise(IrqSource::Dma);
 }
 
+void Dma::io(StateIo& s) {
+    StateIo::Section sec(s, "DMA0");
+    for (int ch = 0; ch < 7; ++ch) {
+        Channel& c = c_[ch];
+        s.io(c.madr);
+        s.io(c.bcr);
+        s.io(c.chcr);
+        s.io(c.in_flight);
+        sched_.io_event(s, c.done, [this, ch] { return Scheduler::Callback([this, ch](int64_t) { complete(ch); }); });
+    }
+    s.io(dpcr_);
+    s.io(dicr_);
+    s.io(loop_guard_trips_);
+}
+
 }  // namespace dw3

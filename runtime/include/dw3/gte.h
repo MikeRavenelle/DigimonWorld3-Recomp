@@ -5,6 +5,8 @@
 
 #include <cstdint>
 
+#include "dw3/state.h"
+
 namespace dw3 {
 
 class PreciseVertexCache;
@@ -25,6 +27,9 @@ public:
     static int command_cycles(uint32_t command);
 
     void reset();
+
+    // Save state: data and control registers plus the command word being executed.
+    void io(StateIo& s);
 
     // Receives the untruncated screen position of every vertex RTPS/RTPT projects (null: not recorded).
     void set_precise_sink(PreciseVertexCache* sink) { precise_ = sink; }

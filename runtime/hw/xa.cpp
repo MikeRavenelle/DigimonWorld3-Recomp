@@ -82,6 +82,17 @@ void XaDecoder::xa_sector(const uint8_t* raw) {
     ++sectors_;
 }
 
+void XaDecoder::io(StateIo& s) {
+    StateIo::Section sec(s, "XADC");
+    s.io(s1_);
+    s.io(s2_);
+    for (auto& r : ring_) s.io(r);
+    s.io(pos_);
+    s.io(sixstep_);
+    s.io(sectors_);
+    fifo_.io(s);
+}
+
 bool XaDecoder::next_frame(int16_t& l, int16_t& r) {
     int16_t f[2];
     if (fifo_.size() == 0 || fifo_.pop(f) == 0) {
