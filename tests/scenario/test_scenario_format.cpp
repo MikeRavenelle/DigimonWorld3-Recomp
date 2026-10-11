@@ -120,6 +120,22 @@ TEST(ScenarioInput, IntroSkipPressesStartAt300) {
     EXPECT_EQ(buttons_at(s, 304), 0);
 }
 
+TEST(ScenarioInput, RebootRestartsTheIntroSkip) {
+    Scenario s = parse("name=\"t\"\nframes=2000\n[[reboot]]\nat=1000\n");
+    ASSERT_EQ(s.reboots.size(), 1u);
+    EXPECT_EQ(boot_start(s, 999), 0);
+    EXPECT_EQ(boot_start(s, 1000), 1000);
+    EXPECT_EQ(buttons_at(s, 300), kStart);
+    EXPECT_EQ(buttons_at(s, 1300), kStart);
+    EXPECT_EQ(buttons_at(s, 1304), 0);
+}
+
+TEST(ScenarioFormat, RebootMustBeInsideTheRunAndOrdered) {
+    EXPECT_THROW(parse("name=\"t\"\nframes=100\n[[reboot]]\nat=100\n"), std::runtime_error);
+    EXPECT_THROW(parse("name=\"t\"\nframes=100\n[[reboot]]\nat=0\n"), std::runtime_error);
+    EXPECT_THROW(parse("name=\"t\"\nframes=100\n[[reboot]]\nat=50\n[[reboot]]\nat=40\n"), std::runtime_error);
+}
+
 TEST(ScenarioInput, IntroSkipCanBeDisabled) {
     Scenario s = parse("name=\"t\"\nframes=1000\nskip_intro=false\n");
     EXPECT_EQ(buttons_at(s, 300), 0);

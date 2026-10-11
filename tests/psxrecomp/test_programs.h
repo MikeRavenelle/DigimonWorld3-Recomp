@@ -698,6 +698,14 @@ inline std::vector<TestProgram> build_test_programs() {
         ret(p);
     });
 
+    s.push("conditional branch into the delay slot of an unconditional branch", [](Program& p, auto&) {
+        // Entering at the slot runs the two words after it; the unconditional branch skips them.
+        p.emit({li(v0, 0), andi(t0, t8, 1), bnez(t0, 2), nop()});  // -> word 5, the delay slot below
+        p.emit({b(3), addiu(v0, v0, 5), addiu(v0, v0, 20), addiu(v0, v0, 40)});
+        save(p, v0, 0);
+        ret(p);
+    });
+
     // ---- calls ----
     s.push("jal basics", [](Program& p, auto&) {
         uint32_t f = p.base() + 0x100;

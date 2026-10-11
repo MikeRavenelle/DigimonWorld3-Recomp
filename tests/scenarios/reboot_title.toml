@@ -1,0 +1,34 @@
+name = "reboot_title"
+description = "Title menu, power-cycle with the same memory card, title menu again."
+frames = 3000
+memcard = "blank"
+
+# A [[reboot]] drops the whole machine and boots again; the memory card image is carried over. Frames stay
+# global, so the second boot reaches its title screen 900 frames after the reboot.
+
+[[press]]
+button = "START"
+at = 900
+
+[[reboot]]
+at = 1500
+
+[[press]]
+button = "START"
+at = 2400
+
+[[check]]
+at = 960
+label = "first boot: Start/Continue menu"
+display_enabled = true
+display_width = 320
+screen_hash = "1ffe3ffe000000007ffe1fce1ffe3ffe0008000270007ffe007003f00cb00182"
+screenshot = true
+
+[[check]]
+at = 2460
+label = "second boot: Start/Continue menu"
+display_enabled = true
+display_width = 320
+screen_hash = "1ffe3ffe000000007ffe1fce1ffe3ffe0008000270007ffe007003f00cb00182"
+screenshot = true

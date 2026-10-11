@@ -239,14 +239,8 @@ int main(int argc, char** argv) {
     }
     cfg.log = [](const std::string& s) { std::fprintf(stderr, "%s\n", s.c_str()); };
     std::string error;
-    auto host = dw3::host::Host::create(cfg, error);
-    if (!host) {
-        std::fprintf(stderr, "%s\n", error.c_str());
-        return 1;
-    }
-    if (opt.no_xa) host->machine().cdrom().set_xa_sink(nullptr);
+    std::unique_ptr<dw3::host::Host> host;
     ScriptPad pad(scenario);
-    host->machine().sio().set_pad_source(0, &pad);
 
     bool want_wav = !opt.wav.empty();
     for (const auto& c : scenario.checks) want_wav = want_wav || c.wav;
@@ -258,18 +252,36 @@ int main(int argc, char** argv) {
     std::size_t next = 0;
     int64_t last_frame = 0;
     auto t0 = std::chrono::steady_clock::now();
-    auto result = host->run([&](uint64_t frame) {
-        pad.frame = static_cast<int64_t>(frame);
-        last_frame = pad.frame;
-        for (;;) {  // everything the SPU produced during this video frame
-            std::size_t n = host->machine().spu().drain_samples(pcm_buf);
-            meter.add_frame(std::span<const int16_t>(pcm_buf.data(), n * 2));
-            if (n < pcm_buf.size() / 2) break;
+    dw3::host::RunResult result;
+    // One boot per [[reboot]]: each gets a fresh machine; the memory card image carries over.
+    for (std::size_t boot = 0; boot <= scenario.reboots.size(); ++boot) {
+        if (host) cfg.blank_card = host->card_image(0);
+        host.reset();
+        host = dw3::host::Host::create(cfg, error);
+        if (!host) {
+            std::fprintf(stderr, "%s\n", error.c_str());
+            return 1;
         }
-        while (next < scenario.checks.size() && pad.frame >= scenario.checks[next].at)
-            evaluate(opt, scenario, scenario.checks[next++], *host, total, meter);
-        if (next >= scenario.checks.size() && pad.frame >= scenario.frames) dw3::host::Host::stop();
-    });
+        if (opt.no_xa) host->machine().cdrom().set_xa_sink(nullptr);
+        host->machine().sio().set_pad_source(0, &pad);
+        const int64_t base = boot ? scenario.reboots[boot - 1] : 0;
+        const int64_t until = boot < scenario.reboots.size() ? scenario.reboots[boot] : -1;
+        if (boot) std::printf("  reboot @%lld\n", static_cast<long long>(base));
+        result = host->run([&](uint64_t frame) {
+            pad.frame = base + static_cast<int64_t>(frame);
+            last_frame = pad.frame;
+            for (;;) {  // everything the SPU produced during this video frame
+                std::size_t n = host->machine().spu().drain_samples(pcm_buf);
+                meter.add_frame(std::span<const int16_t>(pcm_buf.data(), n * 2));
+                if (n < pcm_buf.size() / 2) break;
+            }
+            if (until >= 0 && pad.frame >= until) dw3::host::Host::stop();
+            while (next < scenario.checks.size() && pad.frame >= scenario.checks[next].at)
+                evaluate(opt, scenario, scenario.checks[next++], *host, total, meter);
+            if (until < 0 && next >= scenario.checks.size() && pad.frame >= scenario.frames) dw3::host::Host::stop();
+        });
+        if (result.end != dw3::host::RunResult::End::Stopped) break;
+    }
     double secs = std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
 
     std::printf("  audio: %llu frames generated, %llu XA sectors decoded, ring overruns %llu, XA fifo %zu queued / %llu dropped\n",

@@ -4,6 +4,7 @@
 #include <cctype>
 #include <cstdarg>
 #include <cstdio>
+#include <map>
 #include <set>
 
 namespace psxrecomp {
@@ -454,9 +455,79 @@ uint32_t segment_checksum(const CodeSegment& seg) {
     return h;
 }
 
-EmittedFile emit_tables(const std::vector<TableSegment>& segs) {
+namespace {
+
+struct CodeRange {
+    uint32_t start, end;
+};
+
+// Function bodies of a segment, merged into sorted contiguous ranges.
+std::vector<CodeRange> code_ranges(const TableSegment& ts) {
+    std::vector<CodeRange> out;
+    for (const auto& [a, f] : *ts.funcs) {
+        uint32_t lo = std::max(f.start, ts.seg->base), hi = std::min(f.end, ts.seg->end());
+        if (lo >= hi) continue;
+        if (!out.empty() && lo <= out.back().end) out.back().end = std::max(out.back().end, hi);
+        else out.push_back({lo, hi});
+    }
+    return out;
+}
+
+uint32_t code_hash(const CodeSegment& seg, const std::vector<CodeRange>& ranges) {
+    uint32_t h = 2166136261u;
+    for (const auto& r : ranges)
+        for (uint32_t a = r.start; a < r.end; ++a) h = (h ^ seg.bytes[a - seg.base]) * 16777619u;
+    return h;
+}
+
+// Code words that tell `segs[idx]` apart from every other overlay sharing its address range, chosen greedily
+// so that the fewest words separate the most rivals. Rivals whose code is identical over the common range
+// cannot be told apart and are counted in `unresolved`.
+std::vector<std::pair<uint32_t, uint32_t>> discriminators(const std::vector<TableSegment>& segs, std::size_t idx,
+                                                          std::size_t max_words, std::size_t& unresolved) {
+    const TableSegment& me = segs[idx];
+    std::vector<std::size_t> rivals;
+    for (std::size_t j = 1; j < segs.size(); ++j) {
+        if (j == idx) continue;
+        if (segs[j].seg->base < me.seg->end() && me.seg->base < segs[j].seg->end()) rivals.push_back(j);
+    }
+    std::map<uint32_t, std::vector<std::size_t>> separates;  // code address -> rivals it separates from `me`
+    for (const auto& r : code_ranges(me)) {
+        for (uint32_t a = r.start; a + 4 <= r.end; a += 4) {
+            for (std::size_t k = 0; k < rivals.size(); ++k) {
+                const CodeSegment& o = *segs[rivals[k]].seg;
+                if (a + 4 <= o.end() && a >= o.base && o.word(a) != me.seg->word(a)) separates[a].push_back(k);
+            }
+        }
+    }
+    std::vector<bool> done(rivals.size(), false);
+    std::vector<std::pair<uint32_t, uint32_t>> out;
+    while (out.size() < max_words) {
+        uint32_t best = 0;
+        std::size_t best_n = 0;
+        for (const auto& [a, ks] : separates) {
+            std::size_t n = 0;
+            for (std::size_t k : ks) n += !done[k];
+            if (n > best_n) best_n = n, best = a;
+        }
+        if (best_n == 0) break;
+        for (std::size_t k : separates[best]) done[k] = true;
+        out.emplace_back(best, me.seg->word(best));
+    }
+    for (std::size_t k = 0; k < rivals.size(); ++k) {
+        bool coverable = false;
+        for (const auto& [a, ks] : separates) coverable = coverable || std::find(ks.begin(), ks.end(), k) != ks.end();
+        if (!coverable || !done[k]) ++unresolved;
+    }
+    return out;
+}
+
+}  // namespace
+
+EmittedFile emit_tables(const std::vector<TableSegment>& segs, std::vector<std::string>* warnings) {
     std::string protos, arrays, table;
-    for (const auto& ts : segs) {
+    for (std::size_t si = 0; si < segs.size(); ++si) {
+        const auto& ts = segs[si];
         const std::string& n = ts.seg->name;
         arrays += "static const RecompFuncEntry funcs_" + n + "[] = {\n";
         for (const auto& [a, f] : *ts.funcs) {
@@ -466,14 +537,29 @@ EmittedFile emit_tables(const std::vector<TableSegment>& segs) {
         if (ts.funcs->empty()) arrays += "    {0, 0},\n";
         arrays += "};\n";
         auto probes = select_probes(*ts.seg, *ts.funcs);
+        if (si > 0) {  // overlays: add words that separate this overlay from the others in its slot
+            std::size_t unresolved = 0;
+            for (const auto& p : discriminators(segs, si, 48, unresolved))
+                if (std::none_of(probes.begin(), probes.end(), [&](const auto& q) { return q.first == p.first; }))
+                    probes.push_back(p);
+            std::sort(probes.begin(), probes.end());
+            if (unresolved && warnings)
+                warnings->push_back(fmt("%s: %zu overlay(s) sharing its slot have no code word that separates them", n.c_str(),
+                                        unresolved));
+        }
         arrays += "static const RecompProbe probes_" + n + "[] = {\n";
         for (const auto& [a, w] : probes) arrays += fmt("    {0x%08Xu, 0x%08Xu},\n", a, w);
         if (probes.empty()) arrays += "    {0, 0},\n";
         arrays += "};\n";
-        table += fmt("    {\"%s\", 0x%08Xu, %zuu, 0x%08Xu, funcs_%s, %zuu, probes_%s, %zuu},\n", n.c_str(),
-                     ts.seg->base, ts.extent ? static_cast<std::size_t>(ts.extent) : ts.seg->bytes.size(),
-                     segment_checksum(*ts.seg), n.c_str(), ts.funcs->size(),
-                     n.c_str(), probes.size());
+        auto ranges = code_ranges(ts);
+        arrays += "static const RecompRange ranges_" + n + "[] = {\n";
+        for (const auto& r : ranges) arrays += fmt("    {0x%08Xu, 0x%08Xu},\n", r.start, r.end);
+        if (ranges.empty()) arrays += "    {0, 0},\n";
+        arrays += "};\n";
+        table += fmt("    {\"%s\", 0x%08Xu, %zuu, 0x%08Xu, funcs_%s, %zuu, probes_%s, %zuu, ranges_%s, %zuu, 0x%08Xu},\n",
+                     n.c_str(), ts.seg->base, ts.extent ? static_cast<std::size_t>(ts.extent) : ts.seg->bytes.size(),
+                     segment_checksum(*ts.seg), n.c_str(), ts.funcs->size(), n.c_str(), probes.size(), n.c_str(),
+                     ranges.size(), code_hash(*ts.seg, ranges));
     }
     std::string text = "/* Generated by psxrecomp. Do not edit. */\n#include \"dw3/recomp.h\"\n\n" + protos + "\n" +
                        arrays + "\nconst RecompSegment dw3_segments[] = {\n" + table + "};\n" +

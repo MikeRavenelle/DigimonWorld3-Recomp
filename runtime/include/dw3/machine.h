@@ -100,6 +100,7 @@ public:
 private:
     static uint32_t phys(uint32_t a) { return dw3_phys(a) & 0x1FFFFFu; }
     bool probes_match(const RecompSegment& s) const;
+    bool code_matches(const RecompSegment& s) const;
     bool covers(const RecompSegment& s, uint32_t addr) const {
         return phys(addr) >= phys(s.base) && phys(addr) < phys(s.base) + s.size;
     }

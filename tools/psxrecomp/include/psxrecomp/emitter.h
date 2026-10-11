@@ -46,7 +46,8 @@ struct TableSegment {
 };
 
 // Lookup tables: one RecompFuncEntry array per segment plus `dw3_segments[]` / `dw3_segment_count`.
-EmittedFile emit_tables(const std::vector<TableSegment>& segs);
+// `warnings` receives notes about overlays whose code cannot be told apart from another overlay in the same slot.
+EmittedFile emit_tables(const std::vector<TableSegment>& segs, std::vector<std::string>* warnings = nullptr);
 
 // Code words used by the runtime to recognise which overlay occupies a slot.
 std::vector<std::pair<uint32_t, uint32_t>> select_probes(const CodeSegment& seg,

@@ -196,7 +196,7 @@ int main(int argc, char** argv) {
             uint32_t extent = jobs[k].cfg.code_end ? jobs[k].cfg.code_end - jobs[k].seg.base : 0;
             tables.push_back({&jobs[k].seg, &results[k].functions, extent});
         }
-        auto t = emit_tables(tables);
+        auto t = emit_tables(tables, &warnings);
         changed += write_if_changed(fs::path(out_dir) / t.name, t.text);
         manifest += t.name + "\n";
         write_if_changed(fs::path(out_dir) / "sources.txt", manifest);

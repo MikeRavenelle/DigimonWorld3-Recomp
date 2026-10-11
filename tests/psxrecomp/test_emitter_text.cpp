@@ -162,3 +162,55 @@ TEST(EmitterText, ChainedLoadsKeepBothDelaySlots) {
     EXPECT_LT(c.find("ctx->r[10] = ctx->r[9] + ctx->r[9];"), c.find("ctx->r[9] = ld2;"));
     EXPECT_LT(c.find("uint32_t ld2 = dw3_read32(ctx, ctx->r[8])"), c.find("ctx->r[8] = ld;"));
 }
+
+namespace {
+
+struct Analysed {
+    CodeSegment seg;
+    AnalysisResult res;
+};
+
+Analysed analyse_overlay(const char* name, std::initializer_list<uint32_t> words) {
+    Analysed a;
+    Program p(kBase);
+    p.emit(words);
+    a.seg = p.segment(name);
+    AnalysisConfig cfg;
+    cfg.entries = {kBase};
+    cfg.scan_data_pointers = false;
+    cfg.scan_jal_words = false;
+    cfg.gap_fill = false;
+    a.res = analyze(a.seg, cfg);
+    return a;
+}
+
+}  // namespace
+
+TEST(EmitterText, TablesSeparateOverlaysThatShareTheirFirstWords) {
+    // Same prologue, different bodies: the spread probes (first words of each function) agree, so the table
+    // must add a word from the body and a hash over the code ranges.
+    Analysed main = analyse_overlay("MAIN", {jr(ra), nop()});
+    Analysed a = analyse_overlay("OVA", {addiu(sp, sp, -8), li(v0, 1), li(v1, 5), jr(ra), addiu(sp, sp, 8)});
+    Analysed b = analyse_overlay("OVB", {addiu(sp, sp, -8), li(v0, 1), li(v1, 6), jr(ra), addiu(sp, sp, 8)});
+    main.seg.base = kBase - 0x1000;
+    std::vector<TableSegment> ts = {{&main.seg, &main.res.functions}, {&a.seg, &a.res.functions},
+                                    {&b.seg, &b.res.functions}};
+    std::vector<std::string> warnings;
+    std::string text = emit_tables(ts, &warnings).text;
+    EXPECT_TRUE(warnings.empty());
+    EXPECT_TRUE(contains(text, "static const RecompRange ranges_OVA[]"));
+    EXPECT_TRUE(contains(text, "{0x80010008u, 0x24030005u}"));  // li v1,5 tells OVA from OVB
+    EXPECT_TRUE(contains(text, "{0x80010008u, 0x24030006u}"));
+}
+
+TEST(EmitterText, TablesReportOverlaysWithIdenticalCode) {
+    Analysed main = analyse_overlay("MAIN", {jr(ra), nop()});
+    Analysed a = analyse_overlay("OVA", {li(v0, 1), jr(ra), nop()});
+    Analysed b = analyse_overlay("OVB", {li(v0, 1), jr(ra), nop()});
+    main.seg.base = kBase - 0x1000;
+    std::vector<TableSegment> ts = {{&main.seg, &main.res.functions}, {&a.seg, &a.res.functions},
+                                    {&b.seg, &b.res.functions}};
+    std::vector<std::string> warnings;
+    emit_tables(ts, &warnings);
+    EXPECT_EQ(warnings.size(), 2u);
+}

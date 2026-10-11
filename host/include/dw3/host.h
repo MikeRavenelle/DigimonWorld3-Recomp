@@ -31,6 +31,7 @@ struct Config {
     std::string disc_path = "game/Digimon World 3 (USA).cue";
     CardMode card_mode = CardMode::Files;
     std::array<std::string, 2> card_path;  // Files mode overrides; empty = <user data dir>/memcards/slotN.mcd
+    std::vector<uint8_t> blank_card;  // Blank mode: start from this image (e.g. the previous boot's) instead of a fresh one
     bool trace_bios = false;
     uint32_t trace_lo = 0, trace_hi = 0;  // bus I/O trace range (physical addresses), 0/0 = off
     std::function<void(const std::string&)> log;  // diagnostics (optional)
@@ -55,6 +56,7 @@ public:
     Machine& machine() { return *machine_; }
     Bios& bios() { return *bios_; }
     int card_count() const;  // cards currently inserted
+    const std::vector<uint8_t>& card_image(int slot) const;  // current contents (empty if no card)
 
     // Everything the game printed so far (one line per call, '\n'-terminated). Extra per-line callback:
     std::function<void(const std::string&)> on_tty;

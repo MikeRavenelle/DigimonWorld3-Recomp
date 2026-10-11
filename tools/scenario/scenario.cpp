@@ -79,6 +79,14 @@ Scenario parse(const std::string& text, const std::string& src) {
             for (int64_t f = from; f < to; f += every) s.presses.push_back({b, f, f + hold});
         }
     }
+    if (auto* arr = root["reboot"].as_array()) {
+        for (auto& n : *arr) {
+            int64_t at = (*n.as_table())["at"].value_or(int64_t{-1});
+            if (at <= 0 || at >= s.frames) fail(src, "[[reboot]] `at` must be within (0, frames)");
+            if (!s.reboots.empty() && at <= s.reboots.back()) fail(src, "[[reboot]] entries must be in increasing order");
+            s.reboots.push_back(at);
+        }
+    }
     if (auto* arr = root["check"].as_array()) {
         for (auto& n : *arr) {
             auto& t = *n.as_table();
@@ -135,9 +143,17 @@ Scenario load(const std::string& path) {
     return parse(ss.str(), path);
 }
 
+int64_t boot_start(const Scenario& s, int64_t frame) {
+    int64_t start = 0;
+    for (int64_t r : s.reboots)
+        if (r <= frame) start = r;
+    return start;
+}
+
 uint16_t buttons_at(const Scenario& s, int64_t frame) {
     uint16_t b = 0;
-    if (s.skip_intro && frame >= kIntroSkipFrame && frame < kIntroSkipFrame + 4) b |= 1u << 3;  // START
+    int64_t since_boot = frame - boot_start(s, frame);
+    if (s.skip_intro && since_boot >= kIntroSkipFrame && since_boot < kIntroSkipFrame + 4) b |= 1u << 3;  // START
     for (const auto& p : s.presses)
         if (frame >= p.from && frame < p.to) b |= p.button;
     return b;

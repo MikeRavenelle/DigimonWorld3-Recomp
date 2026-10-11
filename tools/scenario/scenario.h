@@ -7,6 +7,10 @@
 //   skip_intro = true          # default; presses START at frame 300 to skip the intro FMV
 //   memcard = "none"           # "none" | "blank" (fresh formatted in-memory card)
 //
+//   [[reboot]]                 # power-cycle the machine at frame `at`: RAM, GPU and game state are lost, the
+//   at = 4000                  # memory card image is kept. Frames in the file stay global; the intro skip
+//                              # (when enabled) is pressed kIntroSkipFrame frames after every boot.
+//
 //   [[press]]                  # hold `button` from `at` for `hold` frames (default 4)
 //   button = "START"
 //   at = 900
@@ -78,6 +82,7 @@ struct Scenario {
     bool skip_intro = true;
     std::string memcard = "none";
     std::vector<Press> presses;
+    std::vector<int64_t> reboots;  // sorted, within (0, frames)
     std::vector<Check> checks;  // sorted by `at`
 };
 
@@ -116,7 +121,10 @@ private:
 std::vector<uint8_t> wav_bytes(std::span<const int16_t> interleaved_stereo, uint32_t sample_rate = 44100);
 bool write_wav(const std::string& path, std::span<const int16_t> interleaved_stereo, uint32_t sample_rate = 44100);
 
-// Buttons held at `frame` (including the automatic intro skip).
+// Global frame at which the boot running at `frame` started (0 before the first reboot).
+int64_t boot_start(const Scenario& s, int64_t frame);
+
+// Buttons held at `frame` (including the automatic intro skip after the boot that is running).
 uint16_t buttons_at(const Scenario& s, int64_t frame);
 
 // 256-bit perceptual hash: image box-downscaled to 16x16 luma, each bit = cell brighter than mean.
