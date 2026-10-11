@@ -295,6 +295,7 @@ void Gpu::fill_rect(std::span<const uint32_t> c) {
     for (int y = 0; y < h; ++y)
         for (int x = 0; x < w; ++x)
             vram_[static_cast<std::size_t>(((y0 + y) & 511) * kVramWidth + ((x0 + x) & 1023))] = col;
+    if (raster_ && w > 0 && h > 0) raster_->vram_written(vram_, {x0, y0, std::min(w, kVramWidth), std::min(h, kVramHeight)});
 }
 
 void Gpu::copy_vram(std::span<const uint32_t> c) {
@@ -302,6 +303,10 @@ void Gpu::copy_vram(std::span<const uint32_t> c) {
     int dx = static_cast<int>(c[2] & 0x3FF), dy = static_cast<int>((c[2] >> 16) & 0x1FF);
     int w = static_cast<int>(((c[3] & 0xFFFF) - 1) & 0x3FF) + 1;
     int h = static_cast<int>((((c[3] >> 16) & 0xFFFF) - 1) & 0x1FF) + 1;
+    if (raster_) {
+        raster_->vram_read_begin(vram_, {sx, sy, w, h});
+        if (draw_.check_mask) raster_->vram_read_begin(vram_, {dx, dy, w, h});
+    }
     std::vector<uint16_t> row(static_cast<std::size_t>(w));
     for (int y = 0; y < h; ++y) {
         for (int x = 0; x < w; ++x)
@@ -309,6 +314,7 @@ void Gpu::copy_vram(std::span<const uint32_t> c) {
                 vram_[static_cast<std::size_t>(((sy + y) & 511) * kVramWidth + ((sx + x) & 1023))];
         for (int x = 0; x < w; ++x) store_pixel(dx + x, dy + y, row[static_cast<std::size_t>(x)]);
     }
+    if (raster_) raster_->vram_written(vram_, {dx, dy, w, h});
 }
 
 void Gpu::begin_image_load(std::span<const uint32_t> c) {
@@ -318,6 +324,9 @@ void Gpu::begin_image_load(std::span<const uint32_t> c) {
     xfer_h = static_cast<int>((((c[2] >> 16) & 0xFFFF) - 1) & 0x1FF) + 1;
     xfer_cx = xfer_cy = 0;
     state_ = Gp0State::ImageLoad;
+    // The CPU array must match the renderer's copy over the target area: a transfer that is cut short, or
+    // one that honours the mask bit, leaves part of it unchanged.
+    if (raster_) raster_->vram_read_begin(vram_, {xfer_x, xfer_y, xfer_w, xfer_h});
 }
 
 void Gpu::image_load_word(uint32_t w) {
@@ -326,7 +335,10 @@ void Gpu::image_load_word(uint32_t w) {
         store_pixel(xfer_x + xfer_cx, xfer_y + xfer_cy, px);
         if (++xfer_cx == xfer_w) {
             xfer_cx = 0;
-            if (++xfer_cy == xfer_h) state_ = Gp0State::Command;
+            if (++xfer_cy == xfer_h) {
+                state_ = Gp0State::Command;
+                if (raster_) raster_->vram_written(vram_, {xfer_x, xfer_y, xfer_w, xfer_h});
+            }
         }
     }
 }
@@ -338,6 +350,7 @@ void Gpu::begin_image_store(std::span<const uint32_t> c) {
     xfer_h = static_cast<int>((((c[2] >> 16) & 0xFFFF) - 1) & 0x1FF) + 1;
     xfer_cx = xfer_cy = 0;
     store_active_ = true;
+    if (raster_) raster_->vram_read_begin(vram_, {xfer_x, xfer_y, xfer_w, xfer_h});
 }
 
 uint32_t Gpu::read_gpuread() {
@@ -371,6 +384,7 @@ void Gpu::write_gp1(uint32_t w) {
             break;
         case 0x01:
             fifo_.clear();
+            if (state_ == Gp0State::ImageLoad && raster_) raster_->vram_written(vram_, {xfer_x, xfer_y, xfer_w, xfer_h});
             state_ = Gp0State::Command;
             break;
         case 0x02: stat_ &= ~(1u << 24); break;
@@ -464,11 +478,15 @@ void Gpu::dma_read(std::span<uint32_t> out) {
     for (auto& w : out) w = read_gpuread();
 }
 
-bool Gpu::snapshot_display(std::vector<uint32_t>& rgba, int& width, int& height) const {
+bool Gpu::snapshot_display(std::vector<uint32_t>& rgba, int& width, int& height) {
     width = display_.width;
     height = display_.height;
     rgba.assign(static_cast<std::size_t>(width * height), 0xFF000000u);
     if (!display_.enabled) return false;
+    if (raster_) {
+        const int bytes_w = display_.color24 ? (display_.width * 3 + 1) / 2 : display_.width;
+        raster_->vram_read_begin(vram_, {display_.vram_x, display_.vram_y, bytes_w, height});
+    }
     for (int y = 0; y < height; ++y) {
         int vy = (display_.vram_y + y) & 511;
         for (int x = 0; x < width; ++x) {
@@ -490,7 +508,8 @@ bool Gpu::snapshot_display(std::vector<uint32_t>& rgba, int& width, int& height)
     return true;
 }
 
-void Gpu::snapshot_vram(std::vector<uint32_t>& rgba) const {
+void Gpu::snapshot_vram(std::vector<uint32_t>& rgba) {
+    if (raster_) raster_->vram_read_begin(vram_, {});
     rgba.resize(vram_.size());
     for (std::size_t i = 0; i < vram_.size(); ++i) rgba[i] = rgb15_to_rgba(vram_[i]);
 }

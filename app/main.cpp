@@ -13,6 +13,11 @@
 //                      from frame F for N frames (default 6)
 //   --intro            with --frames, do not press START at frame 300 (by default audit runs skip the intro)
 //   --uncapped         do not pace to real time (always on with --frames)
+//   --renderer R       auto (default: the plume GPU renderer, falling back to software if it cannot start),
+//                      vulkan (alias gpu; no fallback) or software (CPU rasterizer shown through an SDL renderer)
+//   --scale M          fit (default, 4:3 letterbox), integer or stretch
+//   --filter F         nearest (default) or linear
+//   --no-vsync         present without waiting for the display refresh (always on with --uncapped/--frames)
 //   --mute             no audio output (the SPU still runs; audio is also off for --frames audit runs)
 //   --screenshot-every N DIR   save the window image every N frames
 //   --vram-dump PATH   save the whole VRAM as a BMP on exit
@@ -25,11 +30,15 @@
 #include <cstdlib>
 #include <filesystem>
 #include <map>
+#include <memory>
 #include <string>
+#include <vector>
 
-#include "dw3/host.h"
 #include "audio_out.h"
+#include "dw3/host.h"
 #include "dw3/platform.h"
+#include "present/native_window.h"
+#include "present/presenter.h"
 
 namespace {
 
@@ -47,6 +56,9 @@ struct Options {
     bool intro = false;
     int shot_every = 0;
     std::string shot_dir;
+    dw3app::RendererChoice renderer = dw3app::RendererChoice::Auto;
+    dw3app::PresentOptions present;
+    bool no_vsync = false;
     struct Press {
         uint16_t button;
         int64_t from, to;
@@ -135,6 +147,31 @@ Options parse(int argc, char** argv) {
         else if (a == "--uncapped") o.uncapped = true;
         else if (a == "--mute") o.mute = true;
         else if (a == "--intro") o.intro = true;
+        else if (a == "--renderer" && i + 1 < argc) {
+            std::string v = argv[++i];
+            if (v == "auto") o.renderer = dw3app::RendererChoice::Auto;
+            else if (v == "gpu" || v == "vulkan") o.renderer = dw3app::RendererChoice::Gpu;
+            else if (v == "software") o.renderer = dw3app::RendererChoice::Software;
+            else {
+                std::fprintf(stderr, "bad --renderer %s\n", v.c_str());
+                std::exit(2);
+            }
+        }
+        else if (a == "--scale" && i + 1 < argc) {
+            if (!dw3::parse_scale_mode(argv[++i], o.present.scale)) {
+                std::fprintf(stderr, "bad --scale %s\n", argv[i]);
+                std::exit(2);
+            }
+        }
+        else if (a == "--filter" && i + 1 < argc) {
+            std::string v = argv[++i];
+            if (v != "nearest" && v != "linear") {
+                std::fprintf(stderr, "bad --filter %s\n", v.c_str());
+                std::exit(2);
+            }
+            o.present.linear = v == "linear";
+        }
+        else if (a == "--no-vsync") o.no_vsync = true;
         else if (a == "--screenshot-every" && i + 2 < argc) {
             o.shot_every = std::atoi(argv[++i]);
             o.shot_dir = argv[++i];
@@ -196,13 +233,17 @@ int main(int argc, char** argv) {
         SDL_Log("SDL_Init failed: %s", SDL_GetError());
         return 1;
     }
+    opt.present.vsync = !(opt.no_vsync || opt.uncapped || opt.max_frames >= 0);
     SDL_Window* window = nullptr;
-    SDL_Renderer* renderer = nullptr;
-    // Temporary presentation path until the plume renderer lands.
-    if (!SDL_CreateWindowAndRenderer("Digimon World 3 Recomp", 1280, 960, SDL_WINDOW_RESIZABLE, &window, &renderer)) {
-        SDL_Log("window creation failed: %s", SDL_GetError());
+    std::unique_ptr<dw3app::Presenter> presenter = dw3app::create_presenter(
+        "Digimon World 3 Recomp", 1280, 960, opt.renderer, opt.present, [](const std::string& s) { SDL_Log("%s", s.c_str()); },
+        window);
+    if (!presenter) {
+        SDL_Log("no presentation path available");
         return 1;
     }
+    SDL_Log("presenting with %s", presenter->name());
+    presenter->attach(machine.gpu());
 
     dw3app::AudioOutput audio;
     audio.open(opt.mute || opt.uncapped || opt.max_frames >= 0);
@@ -242,15 +283,23 @@ int main(int argc, char** argv) {
                 static_cast<unsigned long long>(bios.interrupts_delivered()),
                 static_cast<unsigned long long>(machine.lookups()));
         audio.close();
-        SDL_DestroyRenderer(renderer);
+        machine.gpu().set_rasterizer(nullptr);
+        presenter.reset();
         SDL_DestroyWindow(window);
         SDL_Quit();
         return code;
     };
     // The game owns the main thread; each emulated VBLANK pumps the window and presents.
-    SDL_Texture* screen = nullptr;
-    int screen_w = 0, screen_h = 0;
-    std::vector<uint32_t> pixels;
+    dw3app::Capture capture;
+    auto save_capture = [&](const std::string& path) {
+        if (capture.rgba.empty()) return false;
+        SDL_Surface* s = SDL_CreateSurfaceFrom(capture.w, capture.h, SDL_PIXELFORMAT_ABGR8888, capture.rgba.data(),
+                                               capture.w * 4);
+        if (!s) return false;
+        bool ok = SDL_SaveBMP(s, path.c_str());
+        SDL_DestroySurface(s);
+        return ok;
+    };
     auto on_frame = [&](uint64_t frame) {
         host_pad.frame = static_cast<int64_t>(frame);
         audio.pump(machine.spu());
@@ -259,40 +308,19 @@ int main(int argc, char** argv) {
             if (e.type == SDL_EVENT_QUIT) dw3::host::Host::stop();
             if (e.type == SDL_EVENT_GAMEPAD_ADDED && !host_pad.gamepad) host_pad.gamepad = SDL_OpenGamepad(e.gdevice.which);
         }
-        SDL_SetRenderDrawColor(renderer, 0, 0, 0, 255);
-        SDL_RenderClear(renderer);
-        // Present the GPU's display area (software path until the plume renderer lands).
-        int w = 0, h = 0;
-        if (machine.gpu().snapshot_display(pixels, w, h)) {
-            if (!screen || w != screen_w || h != screen_h) {
-                if (screen) SDL_DestroyTexture(screen);
-                screen = SDL_CreateTexture(renderer, SDL_PIXELFORMAT_ABGR8888, SDL_TEXTUREACCESS_STREAMING, w, h);
-                SDL_SetTextureScaleMode(screen, SDL_SCALEMODE_NEAREST);
-                screen_w = w;
-                screen_h = h;
-            }
-            SDL_UpdateTexture(screen, nullptr, pixels.data(), w * 4);
-            SDL_RenderTexture(renderer, screen, nullptr, nullptr);
+        const bool last = opt.max_frames >= 0 && static_cast<int64_t>(frame) >= opt.max_frames;
+        const bool periodic = opt.shot_every > 0 && frame % static_cast<uint64_t>(opt.shot_every) == 0;
+        const bool want_shot = periodic || (last && !opt.screenshot.empty());
+        presenter->present(machine.gpu(), want_shot ? &capture : nullptr);
+        if (periodic) {
+            char name[64];
+            std::snprintf(name, sizeof(name), "/frame_%06llu.bmp", static_cast<unsigned long long>(frame));
+            save_capture(opt.shot_dir + name);
         }
-        if (opt.shot_every > 0 && frame % static_cast<uint64_t>(opt.shot_every) == 0) {
-            if (SDL_Surface* s = SDL_RenderReadPixels(renderer, nullptr)) {
-                char name[64];
-                std::snprintf(name, sizeof(name), "/frame_%06llu.bmp", static_cast<unsigned long long>(frame));
-                SDL_SaveBMP(s, (opt.shot_dir + name).c_str());
-                SDL_DestroySurface(s);
-            }
-        }
-        if (opt.max_frames >= 0 && static_cast<int64_t>(frame) >= opt.max_frames) {
-            if (!opt.screenshot.empty()) {
-                if (SDL_Surface* s = SDL_RenderReadPixels(renderer, nullptr)) {
-                    SDL_SaveBMP(s, opt.screenshot.c_str());
-                    SDL_DestroySurface(s);
-                    SDL_Log("saved screenshot %s", opt.screenshot.c_str());
-                }
-            }
+        if (last) {
+            if (!opt.screenshot.empty() && save_capture(opt.screenshot)) SDL_Log("saved screenshot %s", opt.screenshot.c_str());
             dw3::host::Host::stop();
         }
-        SDL_RenderPresent(renderer);
         // Real-time pacing against emulated time (exact NTSC/PAL frame period from the video clock).
         if (!opt.uncapped && opt.max_frames < 0) {
             static const uint64_t start_ns = SDL_GetTicksNS();

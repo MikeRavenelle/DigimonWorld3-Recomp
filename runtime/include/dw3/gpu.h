@@ -2,7 +2,7 @@
 
 // PS1 GPU front end: GP0/GP1 command processing, VRAM transfers, GPUSTAT/GPUREAD, display state and
 // DMA channel 2. Drawing primitives are decoded into structured form and handed to a Rasterizer
-// (software reference now; the plume hardware renderer later implements the same interface).
+// (the software reference, or the plume hardware renderer which implements the same interface).
 
 #include <array>
 #include <cstdint>
@@ -56,9 +56,20 @@ struct PrimitiveFlags {
     uint16_t clut = 0;  // CLUT attribute word (x/16 in bits 0-5, y in bits 6-14)
 };
 
+// Rectangle in VRAM pixels. x/y may be any value (taken modulo the VRAM size); w/h are 1..1024 / 1..512.
+struct VramRect {
+    int x = 0, y = 0, w = kVramWidth, h = kVramHeight;
+};
+
 class Rasterizer {
 public:
     virtual ~Rasterizer() = default;
+    // Coherency hooks for renderers that draw into a copy of VRAM elsewhere (the GPU renderer). The Gpu calls
+    // vram_read_begin before it reads the CPU-side VRAM array outside of a draw call (transfers, display
+    // snapshots), and vram_written after it modified a region of that array directly. The software rasterizer
+    // draws straight into the array and ignores both.
+    virtual void vram_read_begin(std::span<uint16_t> vram, const VramRect& r) {}
+    virtual void vram_written(std::span<const uint16_t> vram, const VramRect& r) {}
     virtual void triangle(std::span<uint16_t> vram, const DrawState& s, const PrimitiveFlags& f,
                           const GpuVertex v[3]) = 0;
     // Axis-aligned rectangle/sprite; v is the top-left vertex (uv = top-left texcoord).
@@ -104,9 +115,10 @@ public:
     const DrawState& draw_state() const { return draw_; }
 
     // Converts the displayed VRAM region to RGBA8888 (opaque). Returns false if display is disabled.
-    bool snapshot_display(std::vector<uint32_t>& rgba, int& width, int& height) const;
+    // Not const: a hardware renderer first syncs the region it drew back into VRAM.
+    bool snapshot_display(std::vector<uint32_t>& rgba, int& width, int& height);
     // Whole VRAM as RGBA8888 (15-bit interpretation), for debugging/audit dumps.
-    void snapshot_vram(std::vector<uint32_t>& rgba) const;
+    void snapshot_vram(std::vector<uint32_t>& rgba);
 
     // Diagnostics.
     uint64_t commands() const { return commands_; }

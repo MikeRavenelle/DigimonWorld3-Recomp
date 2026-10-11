@@ -1,0 +1,149 @@
+diff --git a/plume_render_interface_types.h b/plume_render_interface_types.h
+index 2281168..b7dd1de 100644
+--- a/plume_render_interface_types.h
++++ b/plume_render_interface_types.h
+@@ -43,10 +43,15 @@ namespace plume {
+     typedef SDL_Window *RenderWindow;
+ #elif defined(__linux__)
+     struct RenderWindow {
+-        Display* display;
+-        Window window;
++        Display* display = nullptr;
++        Window window = 0;
++        // Optional: a window described by callbacks instead of X11 handles (e.g. SDL, which covers Wayland too).
++        // createSurface returns a VkSurfaceKHR handle for the given VkInstance; getSize returns the size in pixels.
++        void* userData = nullptr;
++        uint64_t (*createSurface)(void* userData, void* vkInstance) = nullptr;
++        void (*getSize)(void* userData, uint32_t* width, uint32_t* height) = nullptr;
+         bool operator==(const struct RenderWindow& rhs) const {
+-            return display == rhs.display && window == rhs.window;
++            return display == rhs.display && window == rhs.window && userData == rhs.userData;
+         }
+         bool operator!=(const struct RenderWindow& rhs) const { return !(*this == rhs); }
+     };
+diff --git a/plume_vulkan.cpp b/plume_vulkan.cpp
+index 4a2a489..918aa96 100644
+--- a/plume_vulkan.cpp
++++ b/plume_vulkan.cpp
+@@ -41,6 +41,16 @@ namespace plume {
+     // so they're not under the limit set by the the device or the backend.
+     static const uint32_t MaxQueuesPerFamilyCount = 4;
+ 
++    // Extra instance extensions requested by the application (window system surface extensions).
++    static std::vector<std::string> &extraInstanceExtensions() {
++        static std::vector<std::string> extensions;
++        return extensions;
++    }
++
++    void SetVulkanExtraInstanceExtensions(const std::vector<std::string> &extensions) {
++        extraInstanceExtensions() = extensions;
++    }
++
+     // Required extensions.
+ 
+     static const std::unordered_set<std::string> RequiredInstanceExtensions = {
+@@ -54,7 +64,8 @@ namespace plume {
+         VK_KHR_ANDROID_SURFACE_EXTENSION_NAME,
+ #   elif defined(__linux__)
+ #   if !defined(PLUME_SDL_VULKAN_ENABLED)
+-        VK_KHR_XLIB_SURFACE_EXTENSION_NAME,
++        // Windows described by callbacks (see RenderWindow) bring their own surface extensions through
++        // SetVulkanExtraInstanceExtensions, so the Xlib one is only required when it is not used.
+ #   endif
+ #   elif defined(__APPLE__)
+         VK_EXT_METAL_SURFACE_EXTENSION_NAME,
+@@ -2115,18 +2126,27 @@ namespace plume {
+             return;
+         }
+ #   elif defined(__linux__)
+-        assert(desc.renderWindow.display != 0);
+-        assert(desc.renderWindow.window != 0);
+-        VkXlibSurfaceCreateInfoKHR surfaceCreateInfo = {};
+-        surfaceCreateInfo.sType = VK_STRUCTURE_TYPE_XLIB_SURFACE_CREATE_INFO_KHR;
+-        surfaceCreateInfo.dpy = desc.renderWindow.display;
+-        surfaceCreateInfo.window = desc.renderWindow.window;
+-
+         VulkanInterface *renderInterface = commandQueue->device->renderInterface;
+-        res = vkCreateXlibSurfaceKHR(renderInterface->instance, &surfaceCreateInfo, nullptr, &surface);
+-        if (res != VK_SUCCESS) {
+-            fprintf(stderr, "vkCreateXlibSurfaceKHR failed with error code 0x%X.\n", res);
+-            return;
++        if (desc.renderWindow.createSurface != nullptr) {
++            surface = VkSurfaceKHR(desc.renderWindow.createSurface(desc.renderWindow.userData, renderInterface->instance));
++            if (surface == VK_NULL_HANDLE) {
++                fprintf(stderr, "Window surface creation failed.\n");
++                return;
++            }
++        }
++        else {
++            assert(desc.renderWindow.display != 0);
++            assert(desc.renderWindow.window != 0);
++            VkXlibSurfaceCreateInfoKHR surfaceCreateInfo = {};
++            surfaceCreateInfo.sType = VK_STRUCTURE_TYPE_XLIB_SURFACE_CREATE_INFO_KHR;
++            surfaceCreateInfo.dpy = desc.renderWindow.display;
++            surfaceCreateInfo.window = desc.renderWindow.window;
++
++            res = vkCreateXlibSurfaceKHR(renderInterface->instance, &surfaceCreateInfo, nullptr, &surface);
++            if (res != VK_SUCCESS) {
++                fprintf(stderr, "vkCreateXlibSurfaceKHR failed with error code 0x%X.\n", res);
++                return;
++            }
+         }
+ #   elif defined(__APPLE__)
+         assert(desc.renderWindow.window != 0);
+@@ -2469,6 +2489,10 @@ namespace plume {
+         dstWidth = ANativeWindow_getWidth(desc.renderWindow);
+         dstHeight = ANativeWindow_getHeight(desc.renderWindow);
+ #   elif defined(__linux__)
++        if (desc.renderWindow.getSize != nullptr) {
++            desc.renderWindow.getSize(desc.renderWindow.userData, &dstWidth, &dstHeight);
++            return;
++        }
+         XWindowAttributes attributes;
+         XGetWindowAttributes(desc.renderWindow.display, desc.renderWindow.window, &attributes);
+         // The attributes width and height members do not include the border.
+@@ -3229,6 +3253,29 @@ namespace plume {
+             imageCopy.imageExtent.depth = srcLocation.placedFootprint.depth;
+             vkCmdCopyBufferToImage(vk, srcBuffer->vk, dstTexture->vk, toImageLayout(dstTexture->textureLayout), 1, &imageCopy);
+         }
++        else if ((dstLocation.type == RenderTextureCopyType::PLACED_FOOTPRINT) && (srcLocation.type == RenderTextureCopyType::SUBRESOURCE)) {
++            assert(srcTexture != nullptr);
++            assert(dstBuffer != nullptr);
++
++            const uint32_t blockWidth = RenderFormatBlockWidth(srcTexture->desc.format);
++            VkBufferImageCopy imageCopy = {};
++            imageCopy.bufferOffset = dstLocation.placedFootprint.offset;
++            imageCopy.bufferRowLength = ((dstLocation.placedFootprint.rowWidth + blockWidth - 1) / blockWidth) * blockWidth;
++            imageCopy.bufferImageHeight = ((dstLocation.placedFootprint.height + blockWidth - 1) / blockWidth) * blockWidth;
++            imageCopy.imageSubresource.aspectMask = toAspectFlags(srcTexture->desc.format, srcTexture->desc.flags);
++            imageCopy.imageSubresource.baseArrayLayer = srcLocation.subresource.arrayIndex;
++            imageCopy.imageSubresource.layerCount = 1;
++            imageCopy.imageSubresource.mipLevel = srcLocation.subresource.mipLevel;
++            if (srcBox != nullptr) {
++                imageCopy.imageOffset.x = srcBox->left;
++                imageCopy.imageOffset.y = srcBox->top;
++                imageCopy.imageOffset.z = srcBox->front;
++            }
++            imageCopy.imageExtent.width = dstLocation.placedFootprint.width;
++            imageCopy.imageExtent.height = dstLocation.placedFootprint.height;
++            imageCopy.imageExtent.depth = dstLocation.placedFootprint.depth;
++            vkCmdCopyImageToBuffer(vk, srcTexture->vk, toImageLayout(srcTexture->textureLayout), dstBuffer->vk, 1, &imageCopy);
++        }
+         else {
+             VkImageCopy imageCopy = {};
+             imageCopy.srcSubresource.aspectMask = toAspectFlags(srcTexture->desc.format, srcTexture->desc.flags);
+@@ -4495,6 +4542,14 @@ namespace plume {
+         vkEnumerateInstanceExtensionProperties(nullptr, &extensionCount, availableExtensions.data());
+ 
+         std::unordered_set<std::string> requiredExtensions = RequiredInstanceExtensions;
++        for (const std::string &extension : extraInstanceExtensions()) {
++            requiredExtensions.insert(extension);
++        }
++#   if defined(__linux__) && !defined(PLUME_SDL_VULKAN_ENABLED)
++        if (extraInstanceExtensions().empty()) {
++            requiredExtensions.insert(VK_KHR_XLIB_SURFACE_EXTENSION_NAME);
++        }
++#   endif
+         std::unordered_set<std::string> supportedOptionalExtensions;
+ #   if DLSS_ENABLED
+         const std::unordered_set<std::string> dlssExtensions = DLSS::getRequiredInstanceExtensionsVulkan();

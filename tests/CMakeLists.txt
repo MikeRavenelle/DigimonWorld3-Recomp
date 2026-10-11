@@ -25,6 +25,7 @@ dw3_add_test(test_runtime
             runtime/test_bios.cpp runtime/test_soft_rasterizer.cpp runtime/test_sio.cpp
             runtime/test_mdec.cpp runtime/test_memcard.cpp
             runtime/test_spu_dsp.cpp runtime/test_spu_voices.cpp runtime/test_xa.cpp
+            runtime/test_present_layout.cpp runtime/test_display_snapshot.cpp
     LIBS dw3runtime)
 
 # Differential emitter tests: emit_testgen recompiles the programs of psxrecomp/test_programs.h at build
@@ -51,6 +52,10 @@ dw3_add_test(test_emitter
     LIBS dw3runtime)
 target_include_directories(test_emitter PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/psxrecomp ${EMITTED_TESTS_DIR}
     ${PROJECT_SOURCE_DIR}/tools/psxrecomp/include)  # header-only use of CodeSegment via mips_asm.h
+
+dw3_add_test(test_render
+    SOURCES render/test_vram_regions.cpp render/test_vertex_builder.cpp render/test_hw_renderer.cpp
+    LIBS dw3render)
 
 dw3_add_test(test_scenario_format
     SOURCES scenario/test_scenario_format.cpp

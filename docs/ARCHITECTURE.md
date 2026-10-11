@@ -65,7 +65,16 @@ See `runtime/include/dw3/recomp.h`.
 The GPU is emulated at the command level (GP0/GP1, VRAM 1024×512×16) with a hardware renderer
 on plume, following Beetle-PSX-HW's design. This is the basis for internal-resolution upscaling,
 texture filtering, widescreen hacks, HDR output and DLSS/MetalFX later on. A software reference
-rasterizer is kept for golden-image tests.
+rasterizer is kept for golden-image tests and headless runs.
+
+`render/` holds the GPU renderer (`HwRenderer`, a `Rasterizer`). VRAM lives in two RGBA8 textures (5-bit channels
+expanded, mask bit in alpha): one drawn into and a sampled copy refreshed only where a draw reads something the GPU
+wrote since. The fragment shader reproduces the PS1 pixel path on integers (CLUT/texture-window fetch,
+modulation, dithering, 5-bit blending, mask bits), so output matches the software rasterizer except for GPU
+triangle edge/interpolation rounding. The CPU-side VRAM array stays authoritative for transfers: the Gpu calls
+`vram_written` after changing it and `vram_read_begin` before reading it, which uploads or reads back the affected
+regions. Only the Vulkan backend on Linux is built; plume's Metal and D3D12 backends are enabled per platform in
+`cmake/Platform.cmake`. plume is fetched at a pinned commit with `cmake/patches/plume-vulkan.patch` applied.
 
 ## Platforms
 

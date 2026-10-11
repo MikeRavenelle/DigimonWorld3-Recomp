@@ -23,6 +23,7 @@ add_subdirectory(tools/psxdisc)
 add_subdirectory(tools/dw3extract)
 add_subdirectory(tools/psxrecomp)
 add_subdirectory(runtime)
+add_subdirectory(render)
 
 if(EXISTS "${DW3_GENERATED_DIR}/sources.txt")
     set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${DW3_GENERATED_DIR}/sources.txt")

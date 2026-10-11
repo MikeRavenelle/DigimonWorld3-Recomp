@@ -7,6 +7,7 @@ add_library(dw3runtime STATIC
     core/memcard.cpp
     hw/gpu.cpp
     render/soft_rasterizer.cpp
+    render/present_layout.cpp
     hw/gte.cpp
     hw/scheduler.cpp
     hw/spu.cpp
