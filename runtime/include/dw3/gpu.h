@@ -70,6 +70,11 @@ public:
     // draws straight into the array and ignores both.
     virtual void vram_read_begin(std::span<uint16_t> vram, const VramRect& r) {}
     virtual void vram_written(std::span<const uint16_t> vram, const VramRect& r) {}
+    // VRAM fills and VRAM-to-VRAM copies done by the renderer itself. A renderer that returns true has performed
+    // the operation on its copy; the CPU-side array is not touched and is refreshed through vram_read_begin when
+    // it is next read. Returning false (the default) makes the Gpu do the operation on the array.
+    virtual bool vram_fill(const VramRect& r, uint16_t color) { return false; }
+    virtual bool vram_copy(const VramRect& src, int dx, int dy, bool check_mask, bool set_mask) { return false; }
     virtual void triangle(std::span<uint16_t> vram, const DrawState& s, const PrimitiveFlags& f,
                           const GpuVertex v[3]) = 0;
     // Axis-aligned rectangle/sprite; v is the top-left vertex (uv = top-left texcoord).

@@ -14,7 +14,7 @@ if(DW3_HAVE_PLUME)
     find_program(DW3_SPIRV_VAL spirv-val)
 
     set(SHADER_HEADERS)
-    foreach(shader psx_draw.vert psx_draw.frag present.vert present.frag)
+    foreach(shader psx_draw.vert psx_draw.frag present.vert present.frag vram_copy.vert vram_copy.frag)
         string(REPLACE "." "_" symbol ${shader})
         set(spv ${SHADER_OUT}/${shader}.spv)
         set(hdr ${SHADER_OUT}/${shader}.h)

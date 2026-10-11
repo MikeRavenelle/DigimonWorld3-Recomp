@@ -72,3 +72,42 @@ TEST(RegionSet, EmptyRegionsAreIgnored) {
     s.add({5, 5, 5, 9});
     EXPECT_TRUE(s.empty());
 }
+
+TEST(SplitWrapped, PlainAndWrapped) {
+    Region r[4];
+    ASSERT_EQ(split_wrapped({10, 20, 30, 40}, r), 1);
+    EXPECT_EQ(r[0], (Region{10, 20, 40, 60}));
+    ASSERT_EQ(split_wrapped({1000, 500, 50, 20}, r), 4);
+    int area = 0;
+    for (int i = 0; i < 4; ++i) area += r[i].width() * r[i].height();
+    EXPECT_EQ(area, 50 * 20);
+    EXPECT_EQ(r[0], (Region{1000, 500, 1024, 512}));
+    EXPECT_EQ(r[3], (Region{0, 0, 26, 8}));
+    ASSERT_EQ(split_wrapped({1000, 5, 50, 4}, r), 2);
+    EXPECT_EQ(r[1], (Region{0, 5, 26, 9}));
+}
+
+TEST(SplitWrapped, FullAxisAndEmpty) {
+    Region r[4];
+    ASSERT_EQ(split_wrapped({300, 7, 1024, 512}, r), 4);
+    int area = 0;
+    for (int i = 0; i < 4; ++i) area += r[i].width() * r[i].height();
+    EXPECT_EQ(area, kVramWidth * kVramHeight);
+    EXPECT_EQ(split_wrapped({0, 0, 0, 5}, r), 0);
+    EXPECT_EQ(split_wrapped({-4, 0, 8, 1}, r), 2);
+    EXPECT_EQ(r[0], (Region{1020, 0, 1024, 1}));
+}
+
+TEST(CopyHazard, DisjointOrSameRowsHaveNone) {
+    EXPECT_FALSE(copy_has_row_hazard({0, 0, 64, 64}, 200, 10));    // columns apart
+    EXPECT_FALSE(copy_has_row_hazard({0, 0, 64, 64}, 32, 0));      // same rows: each row is buffered
+    EXPECT_FALSE(copy_has_row_hazard({0, 0, 64, 64}, 0, 64));      // directly below, no overlap
+    EXPECT_FALSE(copy_has_row_hazard({0, 100, 64, 64}, 0, 20));    // destination above the source
+}
+
+TEST(CopyHazard, DownwardOverlapIsAHazard) {
+    EXPECT_TRUE(copy_has_row_hazard({0, 0, 64, 64}, 0, 1));
+    EXPECT_TRUE(copy_has_row_hazard({0, 0, 64, 64}, 30, 63));
+    EXPECT_TRUE(copy_has_row_hazard({0, 500, 64, 30}, 0, 510));    // wraps past the bottom edge
+    EXPECT_TRUE(copy_has_row_hazard({1000, 0, 64, 8}, 10, 4));     // columns overlap across the right edge
+}

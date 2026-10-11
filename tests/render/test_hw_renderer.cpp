@@ -315,5 +315,130 @@ TEST_F(HwCompare, RandomPrimitives) {
     EXPECT_LT(d.count, 400) << "differing pixels";
 }
 
+// Software reference for the two VRAM operations the Gpu front end performs on its array (the same row-by-row
+// loops as Gpu::copy_vram and Gpu::fill_rect).
+void ref_copy(std::vector<uint16_t>& v, const VramRect& src, int dx, int dy, bool check_mask, bool set_mask) {
+    std::vector<uint16_t> row(static_cast<std::size_t>(src.w));
+    for (int y = 0; y < src.h; ++y) {
+        for (int x = 0; x < src.w; ++x) row[x] = v[((src.y + y) & 511) * kVramWidth + ((src.x + x) & 1023)];
+        for (int x = 0; x < src.w; ++x) {
+            uint16_t& d = v[((dy + y) & 511) * kVramWidth + ((dx + x) & 1023)];
+            if (check_mask && (d & 0x8000)) continue;
+            d = static_cast<uint16_t>(row[x] | (set_mask ? 0x8000 : 0));
+        }
+    }
+}
+
+void ref_fill(std::vector<uint16_t>& v, const VramRect& r, uint16_t color) {
+    for (int y = 0; y < r.h; ++y)
+        for (int x = 0; x < r.w; ++x) v[((r.y + y) & 511) * kVramWidth + ((r.x + x) & 1023)] = color;
+}
+
+class HwVramOps : public HwCompare {
+protected:
+    // VRAM full of noise, mask bits included, uploaded to the GPU and mirrored in `ref`.
+    void SetUp() override {
+        HwCompare::SetUp();
+        if (!hw) return;
+        std::mt19937 rng(7);
+        ref.resize(kPixels);
+        for (auto& w : ref) w = static_cast<uint16_t>(rng());
+        hw->vram_written(ref, {});
+    }
+    void copy(const VramRect& src, int dx, int dy, bool check = false, bool set = false) {
+        ASSERT_TRUE(hw->vram_copy(src, dx, dy, check, set));
+        ref_copy(ref, src, dx, dy, check, set);
+    }
+    void fill(const VramRect& r, uint16_t c) {
+        ASSERT_TRUE(hw->vram_fill(r, c));
+        ref_fill(ref, r, c);
+    }
+    int mismatches() {
+        std::vector<uint16_t> got(kPixels);
+        hw->read_vram(got);
+        return compare(ref, got).count;
+    }
+    std::vector<uint16_t> ref;
+};
+
+TEST_F(HwVramOps, CopyBetweenDisjointAreas) {
+    copy({10, 20, 100, 60}, 400, 300);
+    EXPECT_EQ(mismatches(), 0);
+}
+
+TEST_F(HwVramOps, CopyWrapsAtTheEdges) {
+    copy({1000, 500, 60, 30}, 5, 5);       // source wraps on both axes
+    copy({30, 40, 80, 50}, 990, 490);      // destination wraps on both axes
+    copy({1010, 505, 50, 20}, 1000, 500);  // both wrap
+    EXPECT_EQ(mismatches(), 0);
+}
+
+TEST_F(HwVramOps, OverlappingCopiesFollowRowOrder) {
+    copy({100, 100, 200, 100}, 110, 100);  // same rows, shifted right
+    copy({100, 100, 200, 100}, 90, 100);   // same rows, shifted left
+    copy({100, 100, 200, 100}, 100, 101);  // one row down: later rows re-read earlier output
+    copy({100, 150, 200, 100}, 150, 120);  // up and across
+    copy({0, 500, 64, 30}, 10, 510);       // overlap across the bottom edge
+    EXPECT_EQ(mismatches(), 0);
+}
+
+TEST_F(HwVramOps, CopyHonoursMaskBits) {
+    copy({0, 0, 300, 200}, 300, 250, true, false);
+    copy({0, 0, 300, 200}, 320, 260, false, true);
+    copy({50, 50, 200, 100}, 250, 150, true, true);
+    EXPECT_EQ(mismatches(), 0);
+}
+
+TEST_F(HwVramOps, CopyOfFreshlyDrawnAndFilledAreas) {
+    // Sources that only exist on the GPU (drawn or filled, not yet read back) must be copied as they are.
+    Scene sc;
+    DrawState s = sc.s;
+    PrimitiveFlags f;
+    SoftRasterizer soft;
+    hw->rect(ref, s, f, gv(20, 20, 250, 10, 10), 60, 40);
+    soft.rect(ref, s, f, gv(20, 20, 250, 10, 10), 60, 40);
+    fill({200, 100, 64, 32}, 0x1234);
+    copy({0, 0, 300, 150}, 400, 200);
+    copy({200, 100, 64, 32}, 0, 400, true, true);
+    EXPECT_EQ(mismatches(), 0);
+}
+
+TEST_F(HwVramOps, FillsWrapAndIgnoreMask) {
+    fill({0, 0, 64, 64}, 0x7C1F);
+    fill({1000, 500, 100, 40}, 0x03E0);
+    fill({512, 256, 1024, 512}, 0x001F);
+    fill({16, 8, 16, 1}, 0x1111);
+    EXPECT_EQ(mismatches(), 0);
+}
+
+TEST_F(HwVramOps, CpuReadsSeeGpuSideOperations) {
+    std::vector<uint16_t> cpu = ref;
+    copy({10, 10, 64, 64}, 500, 100);
+    fill({600, 300, 32, 32}, 0x4321);
+    hw->vram_read_begin(cpu, {500, 100, 64, 64});
+    hw->vram_read_begin(cpu, {600, 300, 32, 32});
+    for (int y = 100; y < 164; ++y)
+        for (int x = 500; x < 564; ++x) ASSERT_EQ(cpu[y * kVramWidth + x], ref[y * kVramWidth + x]);
+    for (int y = 300; y < 332; ++y)
+        for (int x = 600; x < 632; ++x) ASSERT_EQ(cpu[y * kVramWidth + x], ref[y * kVramWidth + x]);
+}
+
+TEST_F(HwVramOps, ManyFramesOfWorkStayCorrect) {
+    // Enough submissions to cycle through the frame slots several times, with reads in between.
+    std::mt19937 rng(5);
+    auto rnd = [&](int lo, int hi) { return lo + static_cast<int>(rng() % static_cast<unsigned>(hi - lo + 1)); };
+    std::vector<uint16_t> cpu = ref;
+    for (int i = 0; i < 60; ++i) {
+        copy({rnd(0, 1023), rnd(0, 511), rnd(1, 200), rnd(1, 100)}, rnd(0, 1023), rnd(0, 511), rnd(0, 3) == 0, rnd(0, 3) == 0);
+        if (i % 7 == 0) fill({rnd(0, 1023) & ~15, rnd(0, 511), rnd(1, 4) * 16, rnd(1, 50)}, static_cast<uint16_t>(rng() & 0x7FFF));
+        if (i % 5 == 0) {
+            hw->vram_read_begin(cpu, {100, 100, 300, 200});
+            for (int y = 100; y < 300; ++y)
+                for (int x = 100; x < 400; ++x) ASSERT_EQ(cpu[y * kVramWidth + x], ref[y * kVramWidth + x]);
+        }
+    }
+    EXPECT_EQ(mismatches(), 0);
+}
+
 }  // namespace
 #endif  // DW3_HW_RENDERER

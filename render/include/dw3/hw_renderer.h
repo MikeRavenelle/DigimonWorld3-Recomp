@@ -9,8 +9,13 @@
 //   * vram_written(): the CPU changed a region; it is uploaded immediately (after queued draws, preserving order).
 //   * vram_read_begin(): the CPU is about to read a region; if the GPU drew into it, the dirty regions are read
 //     back first.
+//   * vram_fill()/vram_copy(): fills and VRAM-to-VRAM copies run on the GPU; the destination is marked dirty and the
+//     CPU array is only refreshed if something reads it later.
 //   * Draws that sample VRAM or read the destination (semi-transparency, mask check) first make sure the second,
 //     sampled copy of VRAM is current for the areas they touch.
+// Frames in flight. Work is recorded into one of two slots (command buffer, fence, vertex and upload buffers) and
+// submitted without waiting, so the CPU runs ahead while the GPU executes the previous frame. A slot is only
+// waited for when it is reused, and a read-back only waits for the submission that contains its copy.
 // Output is bit-exact with the software rasterizer except where noted in the implementation (rasterization of
 // triangle edges and attribute interpolation use the GPU's rules).
 
@@ -35,7 +40,7 @@ struct NativeWindow {
 };
 
 struct HwStats {
-    uint64_t draw_calls = 0, vertices = 0, uploads = 0, readbacks = 0, copy_syncs = 0, submits = 0;
+    uint64_t draw_calls = 0, vertices = 0, uploads = 0, readbacks = 0, copy_syncs = 0, submits = 0, fills = 0, copies = 0;
 };
 
 class HwRenderer final : public Rasterizer {
@@ -56,6 +61,8 @@ public:
               const GpuVertex& b) override;
     void vram_read_begin(std::span<uint16_t> vram, const VramRect& r) override;
     void vram_written(std::span<const uint16_t> vram, const VramRect& r) override;
+    bool vram_fill(const VramRect& r, uint16_t color) override;
+    bool vram_copy(const VramRect& src, int dx, int dy, bool check_mask, bool set_mask) override;
 
     // Shows the display area in the window and ends the frame. When `capture` is given the window image is also
     // read back into it (RGBA8, `capture_w` x `capture_h`). Returns false if nothing could be presented.

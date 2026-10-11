@@ -34,6 +34,43 @@ Region region_from(const VramRect& r) {
     return out;
 }
 
+int split_wrapped(const VramRect& r, Region out[4]) {
+    if (r.w <= 0 || r.h <= 0) return 0;
+    auto axis = [](int start, int len, int size, int a[2], int b[2]) {
+        len = std::min(len, size);
+        const int s = ((start % size) + size) % size;
+        if (s + len <= size) {
+            a[0] = s;
+            b[0] = s + len;
+            return 1;
+        }
+        a[0] = s;
+        b[0] = size;
+        a[1] = 0;
+        b[1] = s + len - size;
+        return 2;
+    };
+    int xa[2], xb[2], ya[2], yb[2];
+    const int nx = axis(r.x, r.w, kVramWidth, xa, xb);
+    const int ny = axis(r.y, r.h, kVramHeight, ya, yb);
+    int n = 0;
+    for (int j = 0; j < ny; ++j)
+        for (int i = 0; i < nx; ++i) out[n++] = {xa[i], ya[j], xb[i], yb[j]};
+    return n;
+}
+
+bool copy_has_row_hazard(const VramRect& src, int dx, int dy) {
+    if (src.w <= 0 || src.h <= 0) return false;
+    const int h = std::min(src.h, kVramHeight);
+    // Destination row j is source row k when k - j == dy - sy (mod height), which a later row k > j can hit.
+    const int d = (((dy - src.y) % kVramHeight) + kVramHeight) % kVramHeight;
+    if (d < 1 || d > h - 1) return false;
+    const int w = std::min(src.w, kVramWidth);
+    const int fwd = (((dx - src.x) % kVramWidth) + kVramWidth) % kVramWidth;
+    const int back = (kVramWidth - fwd) % kVramWidth;
+    return fwd < w || back < w;
+}
+
 void RegionSet::add(const Region& in) {
     if (in.empty()) return;
     Region r = in;

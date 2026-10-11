@@ -15,6 +15,8 @@
 #include "shaders/present.vert.h"
 #include "shaders/psx_draw.frag.h"
 #include "shaders/psx_draw.vert.h"
+#include "shaders/vram_copy.frag.h"
+#include "shaders/vram_copy.vert.h"
 
 namespace plume {
 extern std::unique_ptr<RenderInterface> CreateVulkanInterface();
@@ -38,6 +40,8 @@ constexpr std::size_t kVertexBufferBytes = 48u << 20;
 constexpr std::size_t kStagingBytes = 16u << 20;
 constexpr std::size_t kReadbackBytes = 8u << 20;
 constexpr std::size_t kMaxPendingVertices = 200000;
+// Frames the CPU may run ahead of the GPU: each slot has its own command buffer, fence and upload buffers.
+constexpr int kFramesInFlight = 2;
 
 struct PresentParams {
     float dest[4];
@@ -48,6 +52,16 @@ struct PresentParams {
     int32_t linear;
 };
 static_assert(sizeof(PresentParams) == 56);
+
+// Push constants of the VRAM copy/fill pass (see vram_copy.frag).
+struct CopyParams {
+    int32_t rect[4];  // source x, y, destination x, y
+    uint32_t flags;   // 1 fill, 2 check mask, 4 set mask
+    uint32_t color;
+    int32_t scale;
+    int32_t pad;
+};
+static_assert(sizeof(CopyParams) == 32);
 
 // 5-bit channel -> 8-bit expansion used to store VRAM words in an RGBA8 texture.
 std::array<uint8_t, 32> make_expand_table() {
@@ -80,8 +94,22 @@ struct HwRenderer::Impl {
     std::unique_ptr<RenderInterface> iface;
     std::unique_ptr<RenderDevice> device;
     std::unique_ptr<RenderCommandQueue> queue;
-    std::unique_ptr<RenderCommandList> cmd;
-    std::unique_ptr<RenderCommandFence> fence;
+    // One slot per frame in flight. `cmd`, the buffers and their mappings point into the current slot.
+    struct Slot {
+        std::unique_ptr<RenderCommandList> cmd;
+        std::unique_ptr<RenderCommandFence> fence;
+        std::unique_ptr<RenderBuffer> vertex_buf, staging_buf;
+        std::unique_ptr<RenderCommandSemaphore> acquire_sem;
+        uint8_t* vertex_map = nullptr;
+        uint8_t* staging_map = nullptr;
+        bool pending = false;  // submitted, fence not yet waited on
+    };
+    std::array<Slot, kFramesInFlight> slots;
+    int cur_slot = 0, last_submitted = 0;
+    bool slot_ready = false;  // the current slot's previous work has been waited for
+    RenderCommandList* cmd = nullptr;
+    RenderBuffer* vertex_buf = nullptr;
+    RenderBuffer* staging_buf = nullptr;
     bool recording = false;
     HwStats stats;
 
@@ -90,14 +118,14 @@ struct HwRenderer::Impl {
     std::unique_ptr<RenderFramebuffer> rt_fb;
     RenderTextureLayout rt_layout = RenderTextureLayout::UNKNOWN, tex_layout = RenderTextureLayout::UNKNOWN;
 
-    std::unique_ptr<RenderShader> draw_vs, draw_fs, present_vs, present_fs;
-    std::unique_ptr<RenderPipelineLayout> draw_layout, present_layout;
-    std::unique_ptr<RenderPipeline> draw_pipeline, present_pipeline;
+    std::unique_ptr<RenderShader> draw_vs, draw_fs, present_vs, present_fs, copy_vs, copy_fs;
+    std::unique_ptr<RenderPipelineLayout> draw_layout, present_layout, copy_layout;
+    std::unique_ptr<RenderPipeline> draw_pipeline, present_pipeline, copy_pipeline;
     std::unique_ptr<RenderDescriptorSet> draw_set, present_set;
     RenderInputSlot input_slot;
     std::vector<RenderInputElement> input_elements;
 
-    std::unique_ptr<RenderBuffer> vertex_buf, staging_buf, readback_buf;
+    std::unique_ptr<RenderBuffer> readback_buf;
     uint8_t* vertex_map = nullptr;
     uint8_t* staging_map = nullptr;
     std::size_t vertex_used = 0, staging_used = 0;
@@ -111,7 +139,6 @@ struct HwRenderer::Impl {
 
     // Presentation.
     std::unique_ptr<RenderSwapChain> swap;
-    std::unique_ptr<RenderCommandSemaphore> acquire_sem;
     std::vector<std::unique_ptr<RenderCommandSemaphore>> release_sems;
     std::vector<std::unique_ptr<RenderFramebuffer>> swap_fbs;
     std::unique_ptr<RenderTexture> capture_tex;
@@ -130,11 +157,34 @@ struct HwRenderer::Impl {
 
     // ---- command recording --------------------------------------------------------------------------
 
+    // Starts recording into the current slot, first waiting until the GPU is done with the frame that last
+    // used it (its command buffer and upload buffers). Every write to the slot's buffers comes after this.
     void ensure_recording() {
         if (!recording) {
+            if (!slot_ready) {
+                wait_slot(slots[cur_slot]);
+                slot_ready = true;
+            }
             cmd->begin();
             recording = true;
         }
+    }
+    void wait_slot(Slot& s) {
+        if (!s.pending) return;
+        queue->waitForCommandFence(s.fence.get());
+        s.pending = false;
+    }
+    void wait_all() {
+        for (Slot& s : slots) wait_slot(s);
+    }
+    void bind_slot() {
+        Slot& s = slots[cur_slot];
+        cmd = s.cmd.get();
+        vertex_buf = s.vertex_buf.get();
+        staging_buf = s.staging_buf.get();
+        vertex_map = s.vertex_map;
+        staging_map = s.staging_map;
+        slot_ready = false;
     }
     void transition(RenderTexture* t, RenderTextureLayout& cur, RenderTextureLayout want, bool force = false) {
         if (cur == want && !force) return;
@@ -144,6 +194,8 @@ struct HwRenderer::Impl {
     void submit(RenderCommandSemaphore* wait = nullptr, RenderCommandSemaphore* signal = nullptr);
     void record_draws();
     void sync_copy();
+    void begin_vram_pass(const CopyParams& p);
+    void copy_pass(const VramRect& src, int dx, int dy, bool check_mask, bool set_mask);
     std::size_t staging_alloc(std::size_t bytes);
 
     // ---- primitives ---------------------------------------------------------------------------------
@@ -174,12 +226,27 @@ bool HwRenderer::Impl::init(const NativeWindow* window, std::string& error) {
         return false;
     }
     queue = device->createCommandQueue(RenderCommandListType::DIRECT);
-    cmd = queue->createCommandList();
-    fence = device->createCommandFence();
-    if (!queue || !cmd || !fence) {
+    if (!queue) {
         error = "Vulkan queue creation failed";
         return false;
     }
+    for (Slot& sl : slots) {
+        sl.cmd = queue->createCommandList();
+        sl.fence = device->createCommandFence();
+        sl.vertex_buf = device->createBuffer(RenderBufferDesc::VertexBuffer(kVertexBufferBytes, RenderHeapType::UPLOAD));
+        sl.staging_buf = device->createBuffer(RenderBufferDesc::UploadBuffer(kStagingBytes));
+        if (!sl.cmd || !sl.fence || !sl.vertex_buf || !sl.staging_buf) {
+            error = "Vulkan queue creation failed";
+            return false;
+        }
+        sl.vertex_map = static_cast<uint8_t*>(sl.vertex_buf->map());
+        sl.staging_map = static_cast<uint8_t*>(sl.staging_buf->map());
+        if (!sl.vertex_map || !sl.staging_map) {
+            error = "buffer mapping failed";
+            return false;
+        }
+    }
+    bind_slot();
 
     rt = device->createTexture(RenderTextureDesc::ColorTarget(1024 * kScale, 512 * kScale, kVramFormat));
     tex = device->createTexture(RenderTextureDesc::Texture2D(1024 * kScale, 512 * kScale, 1, kVramFormat));
@@ -193,17 +260,9 @@ bool HwRenderer::Impl::init(const NativeWindow* window, std::string& error) {
     fbd.colorAttachmentsCount = 1;
     rt_fb = device->createFramebuffer(fbd);
 
-    vertex_buf = device->createBuffer(RenderBufferDesc::VertexBuffer(kVertexBufferBytes, RenderHeapType::UPLOAD));
-    staging_buf = device->createBuffer(RenderBufferDesc::UploadBuffer(kStagingBytes));
     readback_buf = device->createBuffer(RenderBufferDesc::ReadbackBuffer(kReadbackBytes));
-    if (!vertex_buf || !staging_buf || !readback_buf || !rt_fb) {
+    if (!readback_buf || !rt_fb) {
         error = "buffer creation failed";
-        return false;
-    }
-    vertex_map = static_cast<uint8_t*>(vertex_buf->map());
-    staging_map = static_cast<uint8_t*>(staging_buf->map());
-    if (!vertex_map || !staging_map) {
-        error = "buffer mapping failed";
         return false;
     }
 
@@ -227,7 +286,9 @@ bool HwRenderer::Impl::create_pipelines() {
     draw_fs = device->createShader(shaders::psx_draw_frag_spv, shaders::psx_draw_frag_spv_size, "main", fmt);
     present_vs = device->createShader(shaders::present_vert_spv, shaders::present_vert_spv_size, "main", fmt);
     present_fs = device->createShader(shaders::present_frag_spv, shaders::present_frag_spv_size, "main", fmt);
-    if (!draw_vs || !draw_fs || !present_vs || !present_fs) return false;
+    copy_vs = device->createShader(shaders::vram_copy_vert_spv, shaders::vram_copy_vert_spv_size, "main", fmt);
+    copy_fs = device->createShader(shaders::vram_copy_frag_spv, shaders::vram_copy_frag_spv_size, "main", fmt);
+    if (!draw_vs || !draw_fs || !present_vs || !present_fs || !copy_vs || !copy_fs) return false;
 
     const RenderDescriptorRange range(RenderDescriptorRangeType::TEXTURE, 0, 1);
     const RenderDescriptorSetDesc set_desc(&range, 1);
@@ -287,7 +348,26 @@ bool HwRenderer::Impl::create_pipelines() {
         pd.primitiveTopology = RenderPrimitiveTopology::TRIANGLE_LIST;
         present_pipeline = device->createGraphicsPipeline(pd);
     }
-    return draw_layout && draw_pipeline && present_layout && present_pipeline;
+    {
+        const RenderPushConstantRange pc(0, 0, 0, sizeof(CopyParams), RenderShaderStageFlag::PIXEL);
+        RenderPipelineLayoutDesc ld;
+        ld.pushConstantRanges = &pc;
+        ld.pushConstantRangesCount = 1;
+        ld.descriptorSetDescs = &set_desc;
+        ld.descriptorSetDescsCount = 1;
+        copy_layout = device->createPipelineLayout(ld);
+
+        RenderGraphicsPipelineDesc pd;
+        pd.pipelineLayout = copy_layout.get();
+        pd.vertexShader = copy_vs.get();
+        pd.pixelShader = copy_fs.get();
+        pd.renderTargetFormat[0] = kVramFormat;
+        pd.renderTargetBlend[0] = RenderBlendDesc::Copy();
+        pd.renderTargetCount = 1;
+        pd.primitiveTopology = RenderPrimitiveTopology::TRIANGLE_LIST;
+        copy_pipeline = device->createGraphicsPipeline(pd);
+    }
+    return draw_layout && draw_pipeline && present_layout && present_pipeline && copy_layout && copy_pipeline;
 }
 
 bool HwRenderer::Impl::create_swapchain(const NativeWindow& window) {
@@ -297,7 +377,7 @@ bool HwRenderer::Impl::create_swapchain(const NativeWindow& window) {
     w.getSize = window.get_size;
     swap = queue->createSwapChain(RenderSwapChainDesc(w, kSwapFormat, 2));
     if (!swap || !swap->resize()) return false;
-    acquire_sem = device->createCommandSemaphore();
+    for (Slot& sl : slots) sl.acquire_sem = device->createCommandSemaphore();
     create_swap_framebuffers();
     return !swap_fbs.empty();
 }
@@ -333,12 +413,17 @@ void HwRenderer::Impl::submit(RenderCommandSemaphore* wait, RenderCommandSemapho
     ensure_recording();
     cmd->end();
     recording = false;
-    const RenderCommandList* list = cmd.get();
+    const RenderCommandList* list = cmd;
     RenderCommandSemaphore* waits[1] = {wait};
     RenderCommandSemaphore* signals[1] = {signal};
+    Slot& s = slots[cur_slot];
     queue->executeCommandLists(&list, 1, wait ? waits : nullptr, wait ? 1 : 0, signal ? signals : nullptr,
-                               signal ? 1 : 0, fence.get());
-    queue->waitForCommandFence(fence.get());
+                               signal ? 1 : 0, s.fence.get());
+    s.pending = true;
+    last_submitted = cur_slot;
+    // The next slot's buffers are free once its own earlier work finishes; that is waited for on first use.
+    cur_slot = (cur_slot + 1) % kFramesInFlight;
+    bind_slot();
     vertex_used = 0;
     staging_used = 0;
     ++stats.submits;
@@ -346,9 +431,11 @@ void HwRenderer::Impl::submit(RenderCommandSemaphore* wait, RenderCommandSemapho
 
 std::size_t HwRenderer::Impl::staging_alloc(std::size_t bytes) {
     assert(bytes <= kStagingBytes);
+    ensure_recording();
     if (staging_used + bytes > kStagingBytes) {
         record_draws();
         submit();
+        ensure_recording();
     }
     const std::size_t off = staging_used;
     staging_used = align_up(staging_used + bytes, 512);
@@ -401,6 +488,46 @@ void HwRenderer::Impl::sync_copy() {
     ++stats.copy_syncs;
 }
 
+// Sets up the render target and copy pipeline for a fill/copy pass.
+void HwRenderer::Impl::begin_vram_pass(const CopyParams& p) {
+    record_draws();
+    ensure_recording();
+    transition(rt.get(), rt_layout, RenderTextureLayout::COLOR_WRITE);
+    transition(tex.get(), tex_layout, RenderTextureLayout::SHADER_READ);
+    cmd->setFramebuffer(rt_fb.get());
+    cmd->setViewports(RenderViewport(0.0f, 0.0f, 1024.0f * kScale, 512.0f * kScale));
+    cmd->setGraphicsPipelineLayout(copy_layout.get());
+    cmd->setPipeline(copy_pipeline.get());
+    cmd->setGraphicsDescriptorSet(draw_set.get(), 0);
+    cmd->setGraphicsPushConstants(0, &p);
+}
+
+// One copy over a rectangle that is read from the sampled copy, so the sampled copy must be current for the
+// source (and for the destination when the mask is checked).
+void HwRenderer::Impl::copy_pass(const VramRect& src, int dx, int dy, bool check_mask, bool set_mask) {
+    const VramRect dst{dx, dy, src.w, src.h};
+    const Region sb = region_from(src), db = region_from(dst);
+    if (stale.intersects(sb) || (check_mask && stale.intersects(db))) sync_copy();
+    CopyParams p{};
+    p.rect[0] = src.x & (kVramWidth - 1);
+    p.rect[1] = src.y & (kVramHeight - 1);
+    p.rect[2] = dx & (kVramWidth - 1);
+    p.rect[3] = dy & (kVramHeight - 1);
+    p.flags = (check_mask ? 2u : 0u) | (set_mask ? 4u : 0u);
+    p.scale = kScale;
+    begin_vram_pass(p);
+    Region pieces[4];
+    const int n = split_wrapped(dst, pieces);
+    for (int i = 0; i < n; ++i) {
+        const Region& r = pieces[i];
+        cmd->setScissors(RenderRect(r.x0 * kScale, r.y0 * kScale, r.x1 * kScale, r.y1 * kScale));
+        cmd->drawInstanced(3, 1, 0, 0);
+        ++stats.draw_calls;
+    }
+    stale.add(db);
+    dirty.add(db);
+}
+
 // -------------------------------------------------------------------------------------------------------
 // Primitives
 
@@ -445,7 +572,7 @@ void HwRenderer::Impl::upload(std::span<const uint16_t> vram, const Region& r) {
     ensure_recording();
     transition(rt.get(), rt_layout, RenderTextureLayout::COPY_DEST, true);
     cmd->copyTextureRegion(RenderTextureCopyLocation::Subresource(rt.get()),
-                           RenderTextureCopyLocation::PlacedFootprint(staging_buf.get(), kVramFormat, w, h, 1, pitch, off),
+                           RenderTextureCopyLocation::PlacedFootprint(staging_buf, kVramFormat, w, h, 1, pitch, off),
                            r.x0 * kScale, r.y0 * kScale, 0);
     stale.add(r);
     ++stats.uploads;
@@ -479,6 +606,7 @@ void HwRenderer::Impl::readback(const std::vector<Region>& in, std::span<uint16_
         off += align_up(static_cast<std::size_t>(pitch) * h * 4, 512);
     }
     submit();
+    wait_slot(slots[last_submitted]);  // the copy depends on everything queued before it, and on nothing after
     const auto* data = static_cast<const uint8_t*>(readback_buf->map());
     for (std::size_t i = 0; i < regions.size(); ++i) {
         const Region& r = regions[i];
@@ -550,8 +678,11 @@ HwRenderer::HwRenderer() : impl_(std::make_unique<Impl>()) {}
 HwRenderer::~HwRenderer() {
     if (impl_ && impl_->device) {
         if (impl_->recording) impl_->submit();
-        if (impl_->vertex_map) impl_->vertex_buf->unmap();
-        if (impl_->staging_map) impl_->staging_buf->unmap();
+        impl_->wait_all();
+        for (auto& sl : impl_->slots) {
+            if (sl.vertex_map) sl.vertex_buf->unmap();
+            if (sl.staging_map) sl.staging_buf->unmap();
+        }
     }
 }
 
@@ -615,6 +746,41 @@ void HwRenderer::vram_read_begin(std::span<uint16_t> vram, const VramRect& r) {
     m.readback(m.dirty.take_intersecting(want), vram);
 }
 
+bool HwRenderer::vram_fill(const VramRect& r, uint16_t color) {
+    Impl& m = *impl_;
+    CopyParams p{};
+    p.flags = 1;
+    p.color = word_to_rgba(color);
+    p.scale = kScale;
+    m.begin_vram_pass(p);
+    Region pieces[4];
+    const int n = split_wrapped(r, pieces);
+    for (int i = 0; i < n; ++i) {
+        const Region& q = pieces[i];
+        m.cmd->setScissors(RenderRect(q.x0 * kScale, q.y0 * kScale, q.x1 * kScale, q.y1 * kScale));
+        m.cmd->drawInstanced(3, 1, 0, 0);
+        ++m.stats.draw_calls;
+    }
+    const Region b = region_from(r);
+    m.stale.add(b);
+    m.dirty.add(b);
+    ++m.stats.fills;
+    return true;
+}
+
+bool HwRenderer::vram_copy(const VramRect& src, int dx, int dy, bool check_mask, bool set_mask) {
+    Impl& m = *impl_;
+    if (copy_has_row_hazard(src, dx, dy)) {
+        // Rows are copied in order and later rows read what earlier ones wrote, so do them one at a time.
+        for (int k = 0; k < src.h; ++k)
+            m.copy_pass({src.x, src.y + k, src.w, 1}, dx, dy + k, check_mask, set_mask);
+    } else {
+        m.copy_pass(src, dx, dy, check_mask, set_mask);
+    }
+    ++m.stats.copies;
+    return true;
+}
+
 void HwRenderer::read_vram(std::span<uint16_t> out) {
     impl_->readback({kWholeVram}, out);
     impl_->dirty.clear();
@@ -626,6 +792,7 @@ bool HwRenderer::present(const DisplayState& display, ScaleMode mode, bool linea
     if (!m.swap) return false;
     m.record_draws();
     if (m.swap->needsResize()) {
+        m.wait_all();
         m.swap_fbs.clear();
         if (!m.swap->resize()) return false;
         m.create_swap_framebuffers();
@@ -635,15 +802,17 @@ bool HwRenderer::present(const DisplayState& display, ScaleMode mode, bool linea
         return false;
     }
     uint32_t index = 0;
-    if (!m.swap->acquireTexture(m.acquire_sem.get(), &index)) {
+    m.ensure_recording();  // also waits for this slot's previous frame, which owns its acquire semaphore
+    RenderCommandSemaphore* acquire = m.slots[m.cur_slot].acquire_sem.get();
+    if (!m.swap->acquireTexture(acquire, &index)) {
         // Out of date: rebuild on the next frame. The acquire semaphore was not signalled.
         m.submit();
+        m.wait_all();
         m.swap_fbs.clear();
         if (m.swap->resize()) m.create_swap_framebuffers();
         return false;
     }
     const uint32_t w = m.swap->getWidth(), h = m.swap->getHeight();
-    m.ensure_recording();
     m.transition(m.rt.get(), m.rt_layout, RenderTextureLayout::SHADER_READ);
     RenderTexture* target = m.swap->getTexture(index);
     m.cmd->barriers(RenderBarrierStage::ALL, RenderTextureBarrier(target, RenderTextureLayout::COLOR_WRITE));
@@ -661,11 +830,12 @@ bool HwRenderer::present(const DisplayState& display, ScaleMode mode, bool linea
     }
     m.cmd->barriers(RenderBarrierStage::NONE, RenderTextureBarrier(target, RenderTextureLayout::PRESENT));
     RenderCommandSemaphore* release = m.release_sems[index].get();
-    m.submit(m.acquire_sem.get(), release);
+    m.submit(acquire, release);
     RenderCommandSemaphore* waits[1] = {release};
     m.swap->present(index, waits, 1);
 
     if (grab) {
+        m.wait_slot(m.slots[m.last_submitted]);
         const uint32_t pitch = upload_row_pixels(w);
         const auto* data = static_cast<const uint32_t*>(m.capture_buf->map());
         capture->resize(static_cast<std::size_t>(w) * h);

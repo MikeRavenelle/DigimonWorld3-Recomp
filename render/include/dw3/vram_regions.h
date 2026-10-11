@@ -28,6 +28,16 @@ constexpr Region kWholeVram{0, 0, kVramWidth, kVramHeight};
 // wrap is widened to cover the whole axis it wraps on.
 Region region_from(const VramRect& r);
 
+// Splits a rectangle that may wrap around the VRAM edges into up to four non-wrapping Regions (empty rectangles
+// give none). Returns the number of pieces written to `out`.
+int split_wrapped(const VramRect& r, Region out[4]);
+
+// Whether a VRAM-to-VRAM copy of `src` to (dx, dy) can read pixels that the same copy has already written. The
+// transfer runs row by row, so overlapping source and destination rows only matter when the destination is
+// below the source and the columns overlap (taking the wrap at the edges into account). A copy without this
+// hazard gives the same result as copying from a snapshot of the source.
+bool copy_has_row_hazard(const VramRect& src, int dx, int dy);
+
 class RegionSet {
 public:
     static constexpr std::size_t kMaxRegions = 48;

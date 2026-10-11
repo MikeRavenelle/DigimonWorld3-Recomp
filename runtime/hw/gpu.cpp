@@ -292,10 +292,12 @@ void Gpu::fill_rect(std::span<const uint32_t> c) {
     uint16_t col = rgb24_to_15(c[0]);
     int x0 = static_cast<int>(c[1] & 0x3F0), y0 = static_cast<int>((c[1] >> 16) & 0x1FF);
     int w = static_cast<int>(((c[2] & 0x3FF) + 0xF) & ~0xFu), h = static_cast<int>((c[2] >> 16) & 0x1FF);
+    if (w <= 0 || h <= 0) return;
+    if (raster_ && raster_->vram_fill({x0, y0, std::min(w, kVramWidth), std::min(h, kVramHeight)}, col)) return;
     for (int y = 0; y < h; ++y)
         for (int x = 0; x < w; ++x)
             vram_[static_cast<std::size_t>(((y0 + y) & 511) * kVramWidth + ((x0 + x) & 1023))] = col;
-    if (raster_ && w > 0 && h > 0) raster_->vram_written(vram_, {x0, y0, std::min(w, kVramWidth), std::min(h, kVramHeight)});
+    if (raster_) raster_->vram_written(vram_, {x0, y0, std::min(w, kVramWidth), std::min(h, kVramHeight)});
 }
 
 void Gpu::copy_vram(std::span<const uint32_t> c) {
@@ -303,6 +305,7 @@ void Gpu::copy_vram(std::span<const uint32_t> c) {
     int dx = static_cast<int>(c[2] & 0x3FF), dy = static_cast<int>((c[2] >> 16) & 0x1FF);
     int w = static_cast<int>(((c[3] & 0xFFFF) - 1) & 0x3FF) + 1;
     int h = static_cast<int>((((c[3] >> 16) & 0xFFFF) - 1) & 0x1FF) + 1;
+    if (raster_ && raster_->vram_copy({sx, sy, w, h}, dx, dy, draw_.check_mask, draw_.set_mask)) return;
     if (raster_) {
         raster_->vram_read_begin(vram_, {sx, sy, w, h});
         if (draw_.check_mask) raster_->vram_read_begin(vram_, {dx, dy, w, h});
