@@ -3,10 +3,14 @@
 // References: psx-spx "BIOS Memory Card Functions" / "BIOS File Functions" / "Memory Card Data Format";
 // behaviour cross-checked against PCSX-Redux's HLE BIOS (GPL-2+) and OpenBIOS (MIT). No code was copied.
 //
-// Every operation is applied to the image immediately. Completion is reported through the SwCARD
-// (0xF4000001) and HwCARD (0xF0000011) event classes a short time later, with the same spec in both:
+// Every operation is applied to the image immediately. Completion is reported a short time later with
 // EvSpIOE (0x0004) success, EvSpTIMOUT (0x0100) no card, EvSpNEW (0x2000) new card (_card_info only),
-// EvSpERROR (0x8000) bad sector / unformatted card.
+// EvSpERROR (0x8000) bad sector / unformatted card. Event classes: the card driver's interrupt handler
+// raises HwCARD (0xF0000011) for every low-level transfer (sector read/write, file I/O, directory reads);
+// the high-level _card_info/_card_load additionally report SwCARD (0xF4000001) once their result is
+// interpreted. This matches how the game waits (SwCARD for info/load, HwCARD for everything else). Source:
+// psx-spx "BIOS Memory Card Functions" event list and the game's own wait code; not verified against
+// OpenBIOS source text offline.
 
 #include <algorithm>
 #include <cstring>
@@ -59,9 +63,9 @@ bool wildcard(std::string_view pat, std::string_view str) {
 
 }  // namespace
 
-void Bios::card_async(uint32_t spec) {
-    m_.scheduler().schedule_in(kCardLatency, [this, spec](int64_t) {
-        deliver_event(kClassSwCard, spec);
+void Bios::card_async(uint32_t spec, bool software) {
+    m_.scheduler().schedule_in(kCardLatency, [this, spec, software](int64_t) {
+        if (software) deliver_event(kClassSwCard, spec);
         deliver_event(kClassHwCard, spec);
     });
 }
@@ -89,10 +93,10 @@ bool Bios::card_dispatch(RecompContext& c, uint32_t table, uint32_t fn) {
     if (table == 0xA0 && (fn == 0xAB || fn == 0xAC)) {  // _card_info(port) / _card_load(port)
         int slot = slot_of_port(a0);
         v0 = 1;
-        if (!slot_card(slot)) return card_async(kSpecTimeout), true;
-        if (fn == 0xAB) return card_async((m_.sio().card_flag(slot) & 0x08) ? kSpecNew : kSpecIoe), true;
+        if (!slot_card(slot)) return card_async(kSpecTimeout, true), true;
+        if (fn == 0xAB) return card_async((m_.sio().card_flag(slot) & 0x08) ? kSpecNew : kSpecIoe, true), true;
         memcard::CardFs fs(m_.sio().card_data(slot));
-        return card_async(fs.valid() ? kSpecIoe : kSpecError), true;
+        return card_async(fs.valid() ? kSpecIoe : kSpecError, true), true;
     }
     if (table != 0xB0) return false;
 
@@ -126,8 +130,8 @@ bool Bios::card_dispatch(RecompContext& c, uint32_t table, uint32_t fn) {
             files_[a0] = {};
             v0 = a0;
             return true;
-        case 0x42: v0 = file_first(c, a0, a1); return true;
-        case 0x43: v0 = file_next(c, a0); return true;
+        case 0x42: v0 = file_first_via_dcb(c, a0); return true;
+        case 0x43: v0 = file_next_via_dcb(c, a0); return true;
         case 0x41: case 0x44: case 0x45: v0 = file_misc(c, fn, a0, a1); return true;
         default: return false;
     }
@@ -213,16 +217,6 @@ std::optional<memcard::FileInfo> next_match(const memcard::CardFs& fs, const std
 }
 }  // namespace
 
-uint32_t Bios::file_first(RecompContext& c, uint32_t pattern, uint32_t entry) {
-    Path p = parse_path(read_cstr(c, pattern));
-    search_.active = false;
-    if (!p.ok || !m_.sio().has_card(p.slot)) return errno_ = 0x13, 0;
-    memcard::CardFs fs(m_.sio().card_data(p.slot));
-    if (!fs.valid()) return errno_ = 0x13, 0;
-    search_ = {true, p.slot, 0, p.name.empty() ? "*" : p.name};
-    return file_next(c, entry);
-}
-
 uint32_t Bios::file_next(RecompContext& c, uint32_t entry) {
     if (!search_.active || !m_.sio().has_card(search_.slot)) return 0;
     memcard::CardFs fs(m_.sio().card_data(search_.slot));
@@ -236,6 +230,28 @@ uint32_t Bios::file_next(RecompContext& c, uint32_t entry) {
     fill_direntry(c, entry, *f);
     errno_ = 0;
     return entry;
+}
+
+// Native "bu" DCB handlers. fcb+4 holds the port (0x00/0x10) stored by file_first_via_dcb. The directory
+// read completes later with a HwCARD event, like the real driver (TIMOUT: no card, ERROR: unformatted).
+uint32_t Bios::bu_first(RecompContext& c, uint32_t fcb, uint32_t name, uint32_t entry) {
+    int slot = slot_of_port(dw3_read32(&c, fcb + 4));
+    std::string pattern = read_cstr(c, name);
+    search_.active = false;
+    if (slot < 0 || !m_.sio().has_card(slot)) return card_async(kSpecTimeout), errno_ = 0x13, 0;
+    memcard::CardFs fs(m_.sio().card_data(slot));
+    if (!fs.valid()) return card_async(kSpecError), errno_ = 0x13, 0;
+    search_ = {true, slot, 0, pattern.empty() ? "*" : pattern, "bu"};
+    uint32_t r = file_next(c, entry);
+    card_async(kSpecIoe);
+    return r;
+}
+
+uint32_t Bios::bu_next(RecompContext& c, uint32_t, uint32_t entry) {
+    if (!search_.active || !m_.sio().has_card(search_.slot)) return card_async(kSpecTimeout), 0;
+    uint32_t r = file_next(c, entry);
+    card_async(kSpecIoe);
+    return r;
 }
 
 uint32_t Bios::file_misc(RecompContext& c, uint32_t fn, uint32_t a0, uint32_t a1) {

@@ -46,6 +46,7 @@ Bios::Bios(Machine& m) : m_(m) {
     m_.on_bios_call = [this](RecompContext& c, uint32_t t, uint32_t f) { call(c, t, f); };
     m_.on_syscall = [this](RecompContext& c, uint32_t pc) { syscall(c, pc); };
     m_.on_interrupt = [this](RecompContext& c) { interrupt(c); };
+    init_kernel_devices();
 }
 
 uint32_t Bios::load_exe(std::span<const uint8_t> f, uint32_t stack) {
@@ -242,6 +243,7 @@ void Bios::call(RecompContext& c, uint32_t table, uint32_t fn) {
         std::snprintf(b, sizeof(b), "BIOS %02X:%02X(%08X, %08X, %08X, %08X)", table, fn, a0, a1, a2, a3);
         log(b);
     }
+    if (table == 0xDE) return native_device_call(c, fn);
     if (card_dispatch(c, table, fn)) return;
     if (table == 0xA0) {
         switch (fn) {

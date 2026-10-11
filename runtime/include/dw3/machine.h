@@ -8,6 +8,7 @@
 #include <functional>
 #include <span>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 #include "dw3/bus.h"
@@ -68,6 +69,10 @@ public:
     // Resolves a recompiled function by address; fatal if no resident segment has it.
     RecompFunc lookup(uint32_t addr);
 
+    // Registers a native kernel routine at a low-RAM address (device table handlers); consulted before the
+    // recompiled segments. `addr` must be below 0x10000 (KUSEG/KSEG0/KSEG1 aliases all match).
+    void register_native(uint32_t addr, RecompFunc fn) { natives_[phys(addr)] = fn; }
+
     // Index of the resident segment covering `addr` (identifying overlays via probes if needed), or -1.
     int resident_segment(uint32_t addr);
     const RecompSegment& segment(std::size_t i) const { return segments_[i]; }
@@ -109,6 +114,7 @@ private:
     std::vector<bool> resident_;
     std::vector<bool> verified_;  // resident and confirmed since last invalidate
     uint64_t lookups_ = 0, identifications_ = 0;
+    std::unordered_map<uint32_t, RecompFunc> natives_;
     std::array<uint32_t, 16> mem_ctrl_{};  // 0x1F801000-0x1F80103F (delays/sizes), stored only
     uint32_t ram_size_ = 0x00000B88;       // 0x1F801060
     uint32_t cache_ctrl_ = 0;              // 0xFFFE0130

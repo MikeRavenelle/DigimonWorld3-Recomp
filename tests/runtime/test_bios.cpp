@@ -1575,14 +1575,18 @@ struct CardCase {
     uint32_t table, fn;
 };
 
-class CardTest : public BiosTest, public ::testing::WithParamInterface<CardCase> {};
+class CardTest : public BiosTest, public ::testing::WithParamInterface<CardCase> {
+protected:
+    // _card_info/_card_load report SwCARD (and HwCARD); sector transfers report HwCARD only.
+    uint32_t ev_class() const { return GetParam().table == 0xA0 ? kClassSw : kClassHw; }
+};
 
 TEST_P(CardTest, ReturnsOneAndCompletesAsynchronously) {
-    uint32_t sw = open_enabled(kClassSw, 0x100, Bios::kEvMdNoIntr);
+    uint32_t sw = open_enabled(ev_class(), 0x100, Bios::kEvMdNoIntr);
     uint32_t hw = open_enabled(kClassHw, 0x100, Bios::kEvMdNoIntr);
     EXPECT_EQ(call(GetParam().table, GetParam().fn), 1u);
     m.service_events();
-    EXPECT_EQ(b0(0x0B, sw), 0u);  // not yet
+    EXPECT_EQ(b0(0x0B, hw), 0u);  // not yet
     ctx().cycles = 19999;
     m.service_events();
     EXPECT_EQ(bios.event(0).status, Bios::kEvStActive);
@@ -1594,7 +1598,7 @@ TEST_P(CardTest, ReturnsOneAndCompletesAsynchronously) {
 
 TEST_P(CardTest, TimeoutIsMeasuredFromTheCall) {
     ctx().cycles = 100000;
-    uint32_t sw = open_enabled(kClassSw, 0x100, Bios::kEvMdNoIntr);
+    uint32_t sw = open_enabled(ev_class(), 0x100, Bios::kEvMdNoIntr);
     call(GetParam().table, GetParam().fn);
     ctx().cycles = 119999;
     m.service_events();
@@ -1623,7 +1627,7 @@ TEST_P(CardTest, WaitEventCompletesViaScheduledTimeout) {
 
 TEST_P(CardTest, IntrCallbackEventsGetCalledWithRegistersPreserved) {
     impl(5, [](RecompContext* c) { trash_regs(c); });
-    open_enabled(kClassSw, 0x100, Bios::kEvMdIntr, fn_addr(5));
+    open_enabled(ev_class(), 0x100, Bios::kEvMdIntr, fn_addr(5));
     call(GetParam().table, GetParam().fn);
     ctx().cycles = 20000;
     fill_regs(ctx());
@@ -1634,7 +1638,7 @@ TEST_P(CardTest, IntrCallbackEventsGetCalledWithRegistersPreserved) {
 TEST_P(CardTest, SeveralOutstandingRequestsEachFire) {
     int n = 0;
     impl(5, [&](RecompContext*) { ++n; });
-    open_enabled(kClassSw, 0x100, Bios::kEvMdIntr, fn_addr(5));
+    open_enabled(ev_class(), 0x100, Bios::kEvMdIntr, fn_addr(5));
     call(GetParam().table, GetParam().fn);
     ctx().cycles = 10;
     call(GetParam().table, GetParam().fn);
@@ -1899,7 +1903,7 @@ TEST_F(CardBiosTest, ReadSectorCopiesFrameToRam) {
     std::copy(d.begin(), d.end(), cards[0].begin() + 77 * 128);
     EXPECT_EQ(b0(0x4F, 0x00, 77, kBuf), 1u);
     EXPECT_EQ(get(kBuf, 128), d);  // immediate, before the event
-    EXPECT_EQ(settle(), "SW:IOE HW:IOE");
+    EXPECT_EQ(settle(), "HW:IOE");
 }
 
 TEST_F(CardBiosTest, ReadSectorDoesNotTouchNeighbouringRam) {
@@ -1921,7 +1925,7 @@ TEST_F(CardBiosTest, ReadLastSectorIsValid) {
     cards[0][1023 * 128 + 5] = 0x42;
     b0(0x4F, 0x00, 1023, kBuf);
     EXPECT_EQ(get(kBuf + 5, 1)[0], 0x42);
-    EXPECT_EQ(settle(), "SW:IOE HW:IOE");
+    EXPECT_EQ(settle(), "HW:IOE");
 }
 
 TEST_F(CardBiosTest, ReadSectorOutOfRangeIsError) {
@@ -1929,12 +1933,12 @@ TEST_F(CardBiosTest, ReadSectorOutOfRangeIsError) {
     put(kBuf, std::vector<uint8_t>(128, 0x11));
     EXPECT_EQ(b0(0x4F, 0x00, 1024, kBuf), 1u);
     EXPECT_EQ(get(kBuf, 128), std::vector<uint8_t>(128, 0x11));
-    EXPECT_EQ(settle(), "SW:ERR HW:ERR");
+    EXPECT_EQ(settle(), "HW:ERR");
 }
 
 TEST_F(CardBiosTest, ReadSectorNoCardTimesOut) {
     EXPECT_EQ(b0(0x4F, 0x00, 0, kBuf), 1u);
-    EXPECT_EQ(settle(), "SW:TMO HW:TMO");
+    EXPECT_EQ(settle(), "HW:TMO");
 }
 
 TEST_F(CardBiosTest, ReadSectorSlotTwo) {
@@ -1950,7 +1954,7 @@ TEST_F(CardBiosTest, WriteSectorStoresRamData) {
     put(kBuf, d);
     EXPECT_EQ(b0(0x4E, 0x00, 200, kBuf), 1u);
     EXPECT_TRUE(std::equal(d.begin(), d.end(), cards[0].begin() + 200 * 128));  // immediate
-    EXPECT_EQ(settle(), "SW:IOE HW:IOE");
+    EXPECT_EQ(settle(), "HW:IOE");
 }
 
 TEST_F(CardBiosTest, WriteSectorNeighboursUntouched) {
@@ -1983,14 +1987,14 @@ TEST_F(CardBiosTest, WriteSectorOutOfRangeIsErrorAndNoNotification) {
     insert(0);
     auto before = cards[0];
     b0(0x4E, 0x00, 1024, kBuf);
-    EXPECT_EQ(settle(), "SW:ERR HW:ERR");
+    EXPECT_EQ(settle(), "HW:ERR");
     EXPECT_EQ(cards[0], before);
     EXPECT_TRUE(writes.empty());
 }
 
 TEST_F(CardBiosTest, WriteSectorNoCardTimesOutWithoutNotification) {
     b0(0x4E, 0x00, 0, kBuf);
-    EXPECT_EQ(settle(), "SW:TMO HW:TMO");
+    EXPECT_EQ(settle(), "HW:TMO");
     EXPECT_TRUE(writes.empty());
 }
 
@@ -2123,7 +2127,7 @@ TEST_F(CardBiosTest, CloseTwiceFails) {
 TEST_F(CardBiosTest, AsyncOpenSignalsIoe) {
     insert(0);
     open("bu00:A", creat(1, kFasync | kFwrite));
-    EXPECT_EQ(settle(), "SW:IOE HW:IOE");
+    EXPECT_EQ(settle(), "HW:IOE");
 }
 
 TEST_F(CardBiosTest, SyncOpenSignalsNothing) {
@@ -2282,10 +2286,10 @@ TEST_F(CardBiosTest, AsyncReadAndWriteSignalIoe) {
     uint32_t fd = make("A", 1, kFwrite | kFread | kFasync);
     settle();
     EXPECT_EQ(b0(0x35, fd, kBuf, 128), 128u);
-    EXPECT_EQ(settle(), "SW:IOE HW:IOE");
+    EXPECT_EQ(settle(), "HW:IOE");
     b0(0x33, fd, 0, 0);
     EXPECT_EQ(b0(0x34, fd, kBuf, 128), 128u);
-    EXPECT_EQ(settle(), "SW:IOE HW:IOE");
+    EXPECT_EQ(settle(), "HW:IOE");
 }
 
 TEST_F(CardBiosTest, SyncReadAndWriteSignalNothing) {
@@ -2656,6 +2660,135 @@ TEST_F(CardBiosTest, BiosFileLayerSeesCardPreparedByOtherCode) {
     ASSERT_EQ(fd, 2u);
     EXPECT_EQ(b0(0x34, fd, kBuf, 256), 256u);
     EXPECT_EQ(get(kBuf, 256), d);
+}
+
+// ---- Kernel device table ----
+
+constexpr uint32_t kBuDcb = Bios::kDcbBase + 2 * Bios::kDcbSize;
+
+TEST_F(CardBiosTest, DeviceTableIsBuiltInKernelRam) {
+    EXPECT_EQ(peek(0x150), Bios::kDcbBase);
+    EXPECT_EQ(peek(0x154), 3 * 0x50u);
+    EXPECT_EQ(peek(0x140), Bios::kFcbBase);
+    EXPECT_EQ(peek(0x144), Bios::kFcbCount * Bios::kFcbSize);
+    EXPECT_EQ(get(peek(kBuDcb), 3), (std::vector<uint8_t>{'b', 'u', 0}));
+    EXPECT_EQ(get(peek(Bios::kDcbBase + 0x50), 6), (std::vector<uint8_t>{'c', 'd', 'r', 'o', 'm', 0}));
+    EXPECT_EQ(peek(kBuDcb + 0x08), 0x80u);  // sector size
+    EXPECT_EQ(peek(kBuDcb + 0x34), Bios::native_addr(Bios::kNativeBuFirst));
+    EXPECT_EQ(peek(kBuDcb + 0x38), Bios::native_addr(Bios::kNativeBuNext));
+    EXPECT_NO_THROW(m.lookup(peek(kBuDcb + 0x34)));
+    EXPECT_NO_THROW(m.lookup(peek(kBuDcb + 0x10)));  // unimplemented handlers still resolve
+}
+
+// Stands in for the game's libcard wrapper (0x8003D404): records its arguments, restores the original
+// DCB pointer and forwards to it.
+struct FirstFileSpy {
+    uint32_t a0 = 0, a1 = 0, a2 = 0;
+    std::string name;
+    int calls = 0;
+};
+
+TEST_F(CardBiosTest, FirstFileDispatchesThroughPatchedDcbPointer) {
+    insert(0);
+    make("SAVE1", 1);
+    FirstFileSpy spy;
+    uint32_t orig = peek(kBuDcb + 0x34);
+    impl(1, [&](RecompContext* c) {
+        ++spy.calls;
+        spy.a0 = c->r[4];
+        spy.a1 = c->r[5];
+        spy.a2 = c->r[6];
+        for (uint32_t i = 0; i < 16 && dw3_read8(c, spy.a1 + i); ++i) spy.name += static_cast<char>(dw3_read8(c, spy.a1 + i));
+        dw3_write32(c, kBuDcb + 0x34, orig);
+        dw3_call(c, orig);
+    });
+    poke(kBuDcb + 0x34, fn_addr(1));
+    str(kPath, "bu00:SAVE*");
+    EXPECT_EQ(b0(0x42, kPath, kEntry), kEntry);
+    EXPECT_EQ(spy.calls, 1);
+    EXPECT_EQ(spy.a0, Bios::kFcbBase);
+    EXPECT_EQ(spy.a1, kPath + 5);
+    EXPECT_EQ(spy.name, "SAVE*");
+    EXPECT_EQ(spy.a2, kEntry);
+    EXPECT_EQ(peek(kBuDcb + 0x34), orig);
+    EXPECT_EQ(get(kEntry, 6), (std::vector<uint8_t>{'S', 'A', 'V', 'E', '1', 0}));
+    EXPECT_EQ(b0(0x42, kPath, kEntry), kEntry);  // pointer restored: spy not hit again
+    EXPECT_EQ(spy.calls, 1);
+}
+
+TEST_F(CardBiosTest, FirstFileSelectsPortFromPath) {
+    insert(1);
+    str(kPath, "bu10:*");
+    b0(0x42, kPath, kEntry);
+    EXPECT_EQ(peek(Bios::kFcbBase + 4), 0x10u);
+    EXPECT_EQ(settle(), "HW:IOE");
+}
+
+TEST_F(CardBiosTest, FirstFileCompletesWithHwCardEventOnly) {
+    insert(0);
+    make("A", 1);
+    str(kPath, "bu00:*");
+    b0(0x42, kPath, kEntry);
+    EXPECT_EQ(b0(0x0B, hw[0]), 0u);  // asynchronous: nothing yet
+    EXPECT_EQ(settle(), "HW:IOE");
+}
+
+TEST_F(CardBiosTest, FirstFileNoCardTimesOut) {
+    str(kPath, "bu00:*");
+    EXPECT_EQ(b0(0x42, kPath, kEntry), 0u);
+    EXPECT_EQ(settle(), "HW:TMO");
+}
+
+TEST_F(CardBiosTest, FirstFileUnformattedCardIsError) {
+    insert(0, false);
+    str(kPath, "bu00:*");
+    EXPECT_EQ(b0(0x42, kPath, kEntry), 0u);
+    EXPECT_EQ(settle(), "HW:ERR");
+}
+
+TEST_F(CardBiosTest, NextFileGoesThroughDcbAndSignalsHwCard) {
+    insert(0);
+    make("ONE", 1);
+    make("TWO", 1);
+    str(kPath, "bu00:*");
+    ASSERT_EQ(b0(0x42, kPath, kEntry), kEntry);
+    settle();
+    int calls = 0;
+    uint32_t a0 = 0, a1 = 0;
+    uint32_t orig = peek(kBuDcb + 0x38);
+    impl(2, [&](RecompContext* c) {
+        ++calls;
+        a0 = c->r[4];
+        a1 = c->r[5];
+        dw3_call(c, orig);
+    });
+    poke(kBuDcb + 0x38, fn_addr(2));
+    EXPECT_EQ(b0(0x43, kEntry), kEntry);
+    EXPECT_EQ(calls, 1);
+    EXPECT_EQ(a0, Bios::kFcbBase);
+    EXPECT_EQ(a1, kEntry);
+    EXPECT_EQ(get(kEntry, 4), (std::vector<uint8_t>{'T', 'W', 'O', 0}));
+    EXPECT_EQ(settle(), "HW:IOE");
+    EXPECT_EQ(b0(0x43, kEntry), 0u);  // exhausted
+}
+
+TEST_F(CardBiosTest, FirstFileOnUnknownDeviceFails) {
+    str(kPath, "xx00:*");
+    EXPECT_EQ(b0(0x42, kPath, kEntry), 0u);
+    EXPECT_EQ(settle(), "");
+}
+
+TEST_F(CardBiosTest, CardInfoReportsSwAndHw) {
+    insert(0);
+    m.sio().clear_card_new(0);
+    call(0xA0, 0xAB, 0);
+    EXPECT_EQ(settle(), "SW:IOE HW:IOE");
+}
+
+TEST_F(CardBiosTest, SectorReadReportsHwOnly) {
+    insert(0);
+    call(0xB0, 0x4F, 0, 1, kBuf);
+    EXPECT_EQ(settle(), "HW:IOE");
 }
 
 }  // namespace

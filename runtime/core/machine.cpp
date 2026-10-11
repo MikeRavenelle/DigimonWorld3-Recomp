@@ -125,6 +125,10 @@ RecompFunc Machine::lookup(uint32_t addr) {
         case 0xC0: return bios_vector_c0;
         default: break;
     }
+    if (phys(addr) < 0x10000 && !natives_.empty()) {
+        auto it = natives_.find(phys(addr));
+        if (it != natives_.end()) return it->second;
+    }
     for (int pass = 0; pass < 2; ++pass) {
         int idx = resident_segment(key);
         if (idx >= 0) {

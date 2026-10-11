@@ -46,6 +46,20 @@ public:
     static constexpr uint32_t kEvStWait = 0x1000, kEvStActive = 0x2000, kEvStAlready = 0x4000;
     static constexpr uint32_t kEvMdIntr = 0x1000, kEvMdNoIntr = 0x2000;
 
+    // Kernel device structures built in low RAM at construction (psx-spx "BIOS File Functions" / "Kernel
+    // Variables": device table pointer/size at 0x150/0x154, FCB table at 0x140/0x144). Region 0x1000-0x1240
+    // is otherwise unused by the HLE kernel (A0/B0/C0 tables are read at 0x674/0x874).
+    static constexpr uint32_t kDevNames = 0x1000;   // "tty\0cdrom\0bu\0" strings and descriptions
+    static constexpr uint32_t kDcbBase = 0x1040;    // DCB array, 0x50 bytes each: tty, cdrom, bu
+    static constexpr uint32_t kDcbSize = 0x50;
+    static constexpr uint32_t kDcbCount = 3;
+    static constexpr uint32_t kFcbBase = 0x1140;    // FCB array, 0x2C bytes each
+    static constexpr uint32_t kFcbSize = 0x2C;
+    static constexpr uint32_t kFcbCount = 4;
+    static constexpr uint32_t kNativeBase = 0x1200; // native handler entry points, 4 bytes apart
+    enum NativeId : uint32_t { kNativeNop = 0, kNativeBuFirst = 1, kNativeBuNext = 2, kNativeCount = 3 };
+    static constexpr uint32_t native_addr(NativeId id) { return kNativeBase + 4 * id; }
+
     explicit Bios(Machine& m);
     Bios(const Bios&) = delete;
     Bios& operator=(const Bios&) = delete;
@@ -90,16 +104,25 @@ private:
         bool active = false;
         int slot = 0, last_block = 0;
         std::string pattern;
+        std::string device;  // DCB name used by firstfile ("bu")
     };
-    void card_async(uint32_t spec);
+    void card_async(uint32_t spec, bool software = false);
     void card_modified(int slot);
     std::string read_cstr(RecompContext& c, uint32_t addr) const;
     bool card_dispatch(RecompContext& c, uint32_t table, uint32_t fn);  // false = not a card/file function
     uint32_t file_open(RecompContext& c, uint32_t path, uint32_t mode);
     uint32_t file_transfer(RecompContext& c, uint32_t fd, uint32_t buf, uint32_t len, bool write);
     uint32_t file_seek(uint32_t fd, int32_t off, uint32_t whence);
-    uint32_t file_first(RecompContext& c, uint32_t pattern, uint32_t entry);
-    uint32_t file_next(RecompContext& c, uint32_t entry);
+    // Kernel device table (runtime/bios/bios_devices.cpp).
+    void init_kernel_devices();
+    uint32_t find_dcb(const std::string& device);  // 0 if absent
+    uint32_t file_first_via_dcb(RecompContext& c, uint32_t path);
+    uint32_t file_next_via_dcb(RecompContext& c, uint32_t entry);
+    uint32_t call_dcb_fn(RecompContext& c, uint32_t fn, uint32_t a0, uint32_t a1, uint32_t a2);
+    void native_device_call(RecompContext& c, uint32_t id);
+    uint32_t bu_first(RecompContext& c, uint32_t fcb, uint32_t name, uint32_t entry);
+    uint32_t bu_next(RecompContext& c, uint32_t fcb, uint32_t entry);
+    uint32_t file_next(RecompContext& c, uint32_t entry);  // no completion event
     uint32_t file_misc(RecompContext& c, uint32_t fn, uint32_t a0, uint32_t a1);  // format / rename / erase
     [[noreturn]] void unknown(uint32_t table, uint32_t fn);
 
