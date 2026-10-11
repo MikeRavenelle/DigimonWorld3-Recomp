@@ -1,5 +1,7 @@
 #include <gtest/gtest.h>
 
+#include <algorithm>
+
 #include "mips_asm.h"
 #include "psxrecomp/analysis.h"
 
@@ -52,6 +54,19 @@ TEST(Analysis, ForwardBranchSkipsDeadCode) {
     p.emit({beqz(a0, 2), nop(), li(v0, 1), li(v0, 2), jr(ra), nop()});
     auto r = analyze(p.segment(), entry_only(kBase));
     EXPECT_EQ(get(r, kBase).end, kBase + 24);
+}
+
+TEST(Analysis, BranchIntoDelaySlotContinuesPastIt) {
+    Program p(kBase);
+    // The bltz lands on the delay slot of the unconditional branch; from there execution runs on into
+    // the word after the slot, which no other path reaches.
+    p.emit({bltz(a0, 3), nop(), li(v0, 1), b(3), li(v1, 2), li(v0, 7), nop(), jr(ra), nop()});
+    auto r = analyze(p.segment(), entry_only(kBase));
+    const Function& f = get(r, kBase);
+    EXPECT_TRUE(f.errors.empty());
+    EXPECT_TRUE(f.tail_calls.empty());
+    EXPECT_TRUE(std::find(f.insns.begin(), f.insns.end(), kBase + 20) != f.insns.end());
+    EXPECT_EQ(f.end, kBase + 36);
 }
 
 TEST(Analysis, UnconditionalBranchEndsPath) {

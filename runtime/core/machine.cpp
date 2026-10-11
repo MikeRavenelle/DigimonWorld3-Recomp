@@ -102,20 +102,40 @@ bool Machine::probes_match(const RecompSegment& s) const {
     return true;
 }
 
-int Machine::resident_segment(uint32_t addr) {
-    // Verified residents first (fast path).
-    for (std::size_t k = 0; k < segments_.size(); ++k)
-        if (verified_[k] && covers(segments_[k], addr)) return static_cast<int>(k);
-    // Identify which candidate overlay is actually in RAM now.
-    for (std::size_t k = 1; k < segments_.size(); ++k) {
-        if (!covers(segments_[k], addr) || !probes_match(segments_[k])) continue;
-        for (std::size_t j = 1; j < segments_.size(); ++j)
-            if (j != k && resident_[j] && covers(segments_[j], segments_[k].base)) resident_[j] = verified_[j] = false;
-        resident_[k] = verified_[k] = true;
-        ++identifications_;
-        return static_cast<int>(k);
+// Full check of an overlay's recompiled code against RAM. Many overlays share their first functions' words,
+// so the probes alone can name the wrong one; this is only run when identifying, not on every lookup.
+bool Machine::code_matches(const RecompSegment& s) const {
+    if (s.range_count == 0) return true;
+    uint32_t h = 2166136261u;
+    for (uint32_t i = 0; i < s.range_count; ++i) {
+        const uint8_t* p = bus_.ram() + phys(s.ranges[i].start);
+        for (uint32_t n = s.ranges[i].end - s.ranges[i].start; n; --n) h = (h ^ *p++) * 16777619u;
     }
-    return -1;
+    return h == s.code_hash;
+}
+
+int Machine::resident_segment(uint32_t addr) {
+    // Verified residents first (fast path). The CPU may copy a different overlay over a resident one without
+    // any DMA (the game stages stage code in the heap and copies it into place), so overlays are re-probed.
+    for (std::size_t k = 0; k < segments_.size(); ++k) {
+        if (!verified_[k] || !covers(segments_[k], addr)) continue;
+        if (k == 0 || segments_[k].probe_count == 0 || probes_match(segments_[k])) return static_cast<int>(k);
+        resident_[k] = verified_[k] = false;
+    }
+    // Identify which candidate overlay is actually in RAM now. When one overlay's code is a prefix of another's
+    // both verify; the larger one wins.
+    int best = -1;
+    for (std::size_t k = 1; k < segments_.size(); ++k) {
+        if (!covers(segments_[k], addr) || !probes_match(segments_[k]) || !code_matches(segments_[k])) continue;
+        if (best < 0 || segments_[k].size > segments_[static_cast<std::size_t>(best)].size) best = static_cast<int>(k);
+    }
+    if (best < 0) return -1;
+    auto k = static_cast<std::size_t>(best);
+    for (std::size_t j = 1; j < segments_.size(); ++j)
+        if (j != k && resident_[j] && covers(segments_[j], segments_[k].base)) resident_[j] = verified_[j] = false;
+    resident_[k] = verified_[k] = true;
+    ++identifications_;
+    return best;
 }
 
 RecompFunc Machine::lookup(uint32_t addr) {
@@ -145,11 +165,11 @@ RecompFunc Machine::lookup(uint32_t addr) {
                 verified_[static_cast<std::size_t>(idx)] = false;
                 continue;
             }
-            fatal("no recompiled function at " + hex(addr) + " in segment " + s.name);
+            fatal("no recompiled function at " + hex(addr) + " in segment " + s.name + " (ra " + hex(ctx().r[31]) + ")");
         }
         break;
     }
-    fatal("jump to " + hex(addr) + " outside any resident recompiled segment");
+    fatal("jump to " + hex(addr) + " outside any resident recompiled segment (ra " + hex(ctx().r[31]) + ", sp " + hex(ctx().r[29]) + ")");
 }
 
 }  // namespace dw3

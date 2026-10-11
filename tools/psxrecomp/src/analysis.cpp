@@ -157,6 +157,7 @@ Function Analyzer::trace(uint32_t start) const {
         return f;
     }
     std::set<uint32_t> visited;
+    std::set<uint32_t> flowed;  // addresses walked as ordinary instructions (not just as a delay slot)
     std::deque<uint32_t> work{start};
     uint32_t max_pc = start;
 
@@ -174,7 +175,7 @@ Function Analyzer::trace(uint32_t start) const {
         uint32_t pc = work.front();
         work.pop_front();
         while (true) {
-            if (visited.count(pc)) break;
+            if (flowed.count(pc)) break;
             if (!in_code(pc)) {
                 f.errors.push_back("runs off segment at " + hex(pc));
                 break;
@@ -189,6 +190,7 @@ Function Analyzer::trace(uint32_t start) const {
                 break;
             }
             visit(pc);
+            flowed.insert(pc);
             if (i.has_delay_slot()) {
                 Instruction ds = decode(seg_.word(pc + 4), pc + 4);
                 if (ds.op == Op::Invalid) {

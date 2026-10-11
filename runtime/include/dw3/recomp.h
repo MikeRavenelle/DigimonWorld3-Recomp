@@ -234,6 +234,10 @@ typedef struct RecompProbe {
     uint32_t word;
 } RecompProbe;
 
+typedef struct RecompRange {
+    uint32_t start, end; /* [start, end) of recompiled code */
+} RecompRange;
+
 typedef struct RecompSegment {
     const char* name;
     uint32_t base;
@@ -241,8 +245,11 @@ typedef struct RecompSegment {
     uint32_t checksum;  /* FNV-1a of the original image */
     const RecompFuncEntry* funcs; /* sorted by addr */
     uint32_t func_count;
-    const RecompProbe* probes;
+    const RecompProbe* probes;  /* words that tell this overlay apart from the others in its slot */
     uint32_t probe_count;
+    const RecompRange* ranges;  /* recompiled code, for full verification of an overlay */
+    uint32_t range_count;
+    uint32_t code_hash;         /* FNV-1a over the bytes of `ranges` */
 } RecompSegment;
 
 /* Emitted by psxrecomp into dw3_tables.c. Segment 0 is the main executable. */

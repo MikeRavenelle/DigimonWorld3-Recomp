@@ -141,6 +141,54 @@ TEST(Machine, LookupIdentifiesOverlayByProbe) {
     EXPECT_EQ(m.identifications(), 2u);
 }
 
+TEST(Machine, CpuCopyOfAnotherOverlayIsDetected) {
+    dw3::Machine m(kSegs);
+    g_calls_a = g_calls_b = 0;
+    poke32(m, kSlot + 0x10, 0x27BDFFE8);
+    dw3_call(&m.ctx(), kSlot + 0x10);
+    ASSERT_EQ(g_calls_a, 1);
+    poke32(m, kSlot + 0x10, 0x27BDFFD0);  // plain stores: no DMA, no invalidate call
+    dw3_call(&m.ctx(), kSlot + 0x10);
+    EXPECT_EQ(g_calls_b, 1);
+    EXPECT_EQ(g_calls_a, 1);
+}
+
+namespace {
+
+// Two overlays whose probe words agree; only the full code check can tell them apart.
+constexpr uint32_t kCode0 = 0x24020001, kCode1 = 0x24020002;
+const RecompFuncEntry kCFuncs[] = {{kSlot + 0x20, fn_a}};
+const RecompFuncEntry kDFuncs[] = {{kSlot + 0x20, fn_b}};
+const RecompProbe kCDProbes[] = {{kSlot + 0x20, 0x27BDFFE8}};
+const RecompRange kCDRanges[] = {{kSlot + 0x20, kSlot + 0x28}};
+uint32_t fnv(std::initializer_list<uint32_t> words) {
+    uint32_t h = 2166136261u;
+    for (uint32_t w : words)
+        for (int i = 0; i < 4; ++i) h = (h ^ ((w >> (8 * i)) & 0xFF)) * 16777619u;
+    return h;
+}
+const RecompSegment kSimilar[] = {
+    {"MAIN", 0x80010000, 0x1000, 0, kMainFuncs, 1, nullptr, 0},
+    {"OVC", kSlot, 0x100, 0, kCFuncs, 1, kCDProbes, 1, kCDRanges, 1, fnv({0x27BDFFE8, kCode0})},
+    {"OVD", kSlot, 0x100, 0, kDFuncs, 1, kCDProbes, 1, kCDRanges, 1, fnv({0x27BDFFE8, kCode1})},
+};
+
+}  // namespace
+
+TEST(Machine, OverlaysWithEqualProbesAreToldApartByCode) {
+    dw3::Machine m(kSimilar);
+    g_calls_a = g_calls_b = 0;
+    poke32(m, kSlot + 0x20, 0x27BDFFE8);
+    poke32(m, kSlot + 0x24, kCode1);
+    dw3_call(&m.ctx(), kSlot + 0x20);
+    EXPECT_EQ(g_calls_b, 1);
+    EXPECT_EQ(g_calls_a, 0);
+    poke32(m, kSlot + 0x24, kCode0);
+    m.invalidate(kSlot, 0x100);
+    dw3_call(&m.ctx(), kSlot + 0x20);
+    EXPECT_EQ(g_calls_a, 1);
+}
+
 TEST(Machine, DmaRamWriteInvalidatesOverlay) {
     dw3::Machine m(kSegs);
     g_calls_a = g_calls_b = 0;
