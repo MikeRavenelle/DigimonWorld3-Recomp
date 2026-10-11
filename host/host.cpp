@@ -102,6 +102,8 @@ struct Host::Impl {
 Host::Host() : impl_(std::make_unique<Impl>()) {}
 Host::~Host() = default;
 
+const std::vector<uint8_t>& Host::card_image(int slot) const { return impl_->image[static_cast<std::size_t>(slot)]; }
+
 int Host::card_count() const { return (impl_->image[0].empty() ? 0 : 1) + (impl_->image[1].empty() ? 0 : 1); }
 
 std::unique_ptr<Host> Host::create(const Config& cfg, std::string& error) {
@@ -128,8 +130,12 @@ std::unique_ptr<Host> Host::create(const Config& cfg, std::string& error) {
     m.spu().start(m.scheduler());  // timed sample generation (a periodic event; plain Machine tests stay quiet)
 
     if (cfg.card_mode == CardMode::Blank) {
-        im.image[0].assign(memcard::kCardSize, 0);
-        memcard::format_memory_card(std::span<uint8_t, memcard::kCardSize>(im.image[0].data(), memcard::kCardSize));
+        if (cfg.blank_card.size() == memcard::kCardSize) {
+            im.image[0] = cfg.blank_card;
+        } else {
+            im.image[0].assign(memcard::kCardSize, 0);
+            memcard::format_memory_card(std::span<uint8_t, memcard::kCardSize>(im.image[0].data(), memcard::kCardSize));
+        }
         m.sio().attach_card(0, im.image[0]);
     } else if (cfg.card_mode == CardMode::Files) {
         auto dir = platform::user_data_dir() / "memcards";
