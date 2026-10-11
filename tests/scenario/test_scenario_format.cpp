@@ -137,6 +137,33 @@ TEST(ScenarioFormat, RebootMustBeInsideTheRunAndOrdered) {
     EXPECT_THROW(parse("name=\"t\"\nframes=100\n[[reboot]]\nat=50\n[[reboot]]\nat=40\n"), std::runtime_error);
 }
 
+TEST(ScenarioFormat, SaveAndLoadStateEntries) {
+    Scenario s = parse(
+        "name=\"t\"\nframes=100\nstart_state=\"a.state\"\nstart_frame=10\n"
+        "[[loadstate]]\nat=60\npath=\"b.state\"\nreplay=true\n"
+        "[[savestate]]\nat=50\npath=\"b.state\"\n"
+        "[[savestate]]\nat=20\npath=\"c.state\"\n");
+    EXPECT_EQ(s.start_state, "a.state");
+    EXPECT_EQ(s.start_frame, 10);
+    ASSERT_EQ(s.saves.size(), 2u);
+    EXPECT_EQ(s.saves[0].at, 20);  // sorted
+    EXPECT_EQ(s.saves[1].path, "b.state");
+    ASSERT_EQ(s.loads.size(), 1u);
+    EXPECT_TRUE(s.loads[0].replay);
+}
+
+TEST(ScenarioFormat, BadStateEntriesRejected) {
+    EXPECT_THROW(parse("name=\"t\"\nframes=100\n[[savestate]]\nat=5\n"), std::runtime_error);
+    EXPECT_THROW(parse("name=\"t\"\nframes=100\n[[savestate]]\nat=101\npath=\"x\"\n"), std::runtime_error);
+    EXPECT_THROW(parse("name=\"t\"\nframes=100\n[[savestate]]\nat=5\npath=\"x\"\nreplay=true\n"), std::runtime_error);
+    EXPECT_THROW(parse("name=\"t\"\nframes=100\nstart_frame=5\n"), std::runtime_error);
+    EXPECT_THROW(parse("name=\"t\"\nframes=100\nstart_state=\"x\"\nstart_frame=100\n"), std::runtime_error);
+    // a replayed load needs the save it replays from, before it
+    EXPECT_THROW(parse("name=\"t\"\nframes=100\n[[loadstate]]\nat=50\npath=\"x\"\nreplay=true\n"), std::runtime_error);
+    EXPECT_THROW(parse("name=\"t\"\nframes=100\n[[savestate]]\nat=60\npath=\"x\"\n"
+                       "[[loadstate]]\nat=50\npath=\"x\"\nreplay=true\n"), std::runtime_error);
+}
+
 TEST(ScenarioInput, IntroSkipCanBeDisabled) {
     Scenario s = parse("name=\"t\"\nframes=1000\nskip_intro=false\n");
     EXPECT_EQ(buttons_at(s, 300), 0);

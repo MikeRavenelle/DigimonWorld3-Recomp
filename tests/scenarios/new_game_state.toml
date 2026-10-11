@@ -1,0 +1,10 @@
+name = "new_game_state"
+description = "New Game up to the first free movement in Asuka City Central Sector; saves the state that field_battle and save_load_roundtrip start from."
+include = ["common/new_game.toml"]
+frames = 1480
+memcard = "blank"
+
+# The shared prefix ends with the wait at script frame 1472; the scenarios that load this state continue at 1474.
+[[savestate]]
+at = 1473
+path = "new_game.state"

@@ -220,6 +220,35 @@ Scenario parse(const std::string& text, const std::string& src) {
             s.reboots.push_back(at);
         }
     }
+    s.start_state = root["start_state"].value_or(std::string());
+    s.start_frame = root["start_frame"].value_or(int64_t{0});
+    if (s.start_frame < 0 || s.start_frame >= s.frames) fail(src, "`start_frame` must be within [0, frames)");
+    if (s.start_frame && s.start_state.empty()) fail(src, "`start_frame` needs `start_state`");
+    for (const char* key : {"savestate", "loadstate"}) {
+        auto* arr = root[key].as_array();
+        if (!arr) continue;
+        const bool load = std::string(key) == "loadstate";
+        for (auto& n : *arr) {
+            auto& t = *n.as_table();
+            StateOp op;
+            op.at = t["at"].value_or(int64_t{-1});
+            op.path = t["path"].value_or(std::string());
+            op.replay = t["replay"].value_or(false);
+            if (op.at < 0 || op.at > s.frames) fail(src, std::string("[[") + key + "]] `at` must be within [0, frames]");
+            if (op.path.empty()) fail(src, std::string("[[") + key + "]] needs `path`");
+            if (op.replay && !load) fail(src, "[[savestate]] has no `replay`");
+            (load ? s.loads : s.saves).push_back(std::move(op));
+        }
+    }
+    auto by_at = [](const StateOp& a, const StateOp& b) { return a.at < b.at; };
+    std::stable_sort(s.saves.begin(), s.saves.end(), by_at);
+    std::stable_sort(s.loads.begin(), s.loads.end(), by_at);
+    for (const auto& l : s.loads) {
+        if (!l.replay) continue;
+        bool found = false;
+        for (const auto& sv : s.saves) found = found || (sv.path == l.path && sv.at < l.at);
+        if (!found) fail(src, "[[loadstate]] with `replay` needs an earlier [[savestate]] with the same `path`");
+    }
     auto add_wait = [&](Wait w) {
         if (w.at <= 0 || w.at > s.frames) fail(src, "[[wait]]/[[walk]] `at` must be within (0, frames]");
         s.waits.push_back(std::move(w));
@@ -348,7 +377,7 @@ void Timeline::advance(int64_t real_frame, const RamReader& read) {
     steer_ = 0;
     if (timed_out_ || guard_failed_) return;
     if (waiting_) {
-        const Wait& w = s_.waits[next_];
+        const Wait& w = s_->waits[next_];
         if (satisfied(w, read)) {
             waiting_ = false;
             last_wait_frames_ = real_ - wait_start_;
@@ -360,8 +389,8 @@ void Timeline::advance(int64_t real_frame, const RamReader& read) {
     }
     if (!waiting_) {
         script_ = real_ - offset_;
-        while (next_ < s_.waits.size() && s_.waits[next_].at <= script_) {
-            if (satisfied(s_.waits[next_], read)) {
+        while (next_ < s_->waits.size() && s_->waits[next_].at <= script_) {
+            if (satisfied(s_->waits[next_], read)) {
                 last_wait_frames_ = 0;
                 ++next_;
                 continue;
@@ -372,7 +401,7 @@ void Timeline::advance(int64_t real_frame, const RamReader& read) {
         }
     }
     if (waiting_) {
-        const Wait& w = s_.waits[next_];
+        const Wait& w = s_->waits[next_];
         script_ = w.at;
         offset_ = real_ - script_;
         for (const auto& g : w.guard) {
@@ -391,9 +420,9 @@ void Timeline::advance(int64_t real_frame, const RamReader& read) {
 }
 
 uint16_t Timeline::buttons() const {
-    uint16_t b = buttons_at(s_, script_);
+    uint16_t b = buttons_at(*s_, script_);
     if (waiting_) {
-        const Wait& w = s_.waits[next_];
+        const Wait& w = s_->waits[next_];
         b |= w.hold | steer_;
         if (w.tap && (real_ - wait_start_) % w.tap_every < w.tap_hold) b |= w.tap;
     }

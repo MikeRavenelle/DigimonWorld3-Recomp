@@ -11,6 +11,20 @@
 //   at = 4000                  # memory card image is kept. Frames in the file stay global; the intro skip
 //                              # (when enabled) is pressed kIntroSkipFrame frames after every boot.
 //
+//   [[savestate]]              # write a save state once the script reaches frame `at` (a relative path is placed
+//   at = 1472                  # under --state-dir). A state can be taken only at a safe point of the recompiled
+//   path = "new_game.state"    # game, so it is written within a few emulated instructions after that frame.
+//
+//   [[loadstate]]              # restore a save state at frame `at`; the script clock and real frame counter keep
+//   at = 1500                  # running from their current values.
+//   path = "new_game.state"
+//   replay = false             # true: also rewind the script to the matching [[savestate]] and re-run it, requiring
+//                              # every frame in between to match the first pass (RAM, VRAM and display hashes)
+//
+//   start_state = "new_game.state"   # top level: boot, then load this state before the first frame (the intro skip
+//   start_frame = 1472               # should be disabled). The script clock starts at `start_frame`, so entries keep
+//                                    # the frame numbers of the scenario that produced the state.
+//
 //   [[press]]                  # hold `button` from `at` for `hold` frames (default 4)
 //   button = "START"
 //   at = 900
@@ -157,6 +171,13 @@ struct Check {
     bool wav = false;
 };
 
+// [[savestate]] / [[loadstate]]
+struct StateOp {
+    int64_t at = 0;
+    std::string path;
+    bool replay = false;  // loadstate only
+};
+
 struct Scenario {
     std::string name;
     std::string description;
@@ -165,6 +186,9 @@ struct Scenario {
     std::string memcard = "none";
     std::vector<Press> presses;
     std::vector<int64_t> reboots;  // sorted, within (0, frames)
+    std::vector<StateOp> saves, loads;  // sorted by `at`
+    std::string start_state;
+    int64_t start_frame = 0;
     std::vector<Wait> waits;  // sorted by `at`
     std::vector<Check> checks;  // sorted by `at`
 };
@@ -216,7 +240,16 @@ uint16_t buttons_at(const Scenario& s, int64_t frame);
 class Timeline {
 public:
     using RamReader = dw3::scenario::RamReader;
-    explicit Timeline(const Scenario& s) : s_(s) {}
+    explicit Timeline(const Scenario& s) : s_(&s) {}
+
+    // Continues from script frame `script` at real frame `real` (after a state was loaded).
+    void seek(int64_t real, int64_t script) {
+        real_ = real;
+        script_ = script;
+        offset_ = real - script;
+        waiting_ = false;
+        steer_ = 0;
+    }
 
     void advance(int64_t real_frame, const RamReader& read);
     int64_t script_frame() const { return script_; }
@@ -227,14 +260,14 @@ public:
     // Set once a pending wait's `guard` stopped holding (the walk left its map); `failed_wait()` is that wait.
     bool guard_failed() const { return guard_failed_; }
     bool failed() const { return timed_out_ || guard_failed_; }
-    const Wait* failed_wait() const { return failed() ? &s_.waits[next_] : nullptr; }
+    const Wait* failed_wait() const { return failed() ? &s_->waits[next_] : nullptr; }
     // Real frames the most recently finished wait took (0 before the first).
     int64_t last_wait_frames() const { return last_wait_frames_; }
     std::size_t completed_waits() const { return next_; }
 
 private:
     bool satisfied(const Wait& w, const RamReader& read) const;
-    const Scenario& s_;
+    const Scenario* s_;
     std::size_t next_ = 0;  // index of the pending or active wait
     bool waiting_ = false, timed_out_ = false, guard_failed_ = false;
     uint16_t steer_ = 0;  // d-pad buttons chosen for the current frame

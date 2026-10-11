@@ -71,8 +71,24 @@ if(TARGET dw3scenario)
     foreach(scenario_file ${DW3_SCENARIO_FILES})
         get_filename_component(scenario_name "${scenario_file}" NAME_WE)
         add_test(NAME scenario.${scenario_name}
-            COMMAND dw3scenario "${scenario_file}" --disc "${DW3_GAME_DIR}/Digimon World 3 (USA).cue")
+            COMMAND dw3scenario "${scenario_file}" --disc "${DW3_GAME_DIR}/Digimon World 3 (USA).cue"
+                    --state-dir "${CMAKE_BINARY_DIR}/states")
         set_tests_properties(scenario.${scenario_name} PROPERTIES
             LABELS scenario SKIP_RETURN_CODE 77 TIMEOUT 1800)
+        # Save states are build products (they contain game data): a scenario that writes one is the fixture setup
+        # for the scenarios that start from it, so ctest runs it first.
+        file(READ "${scenario_file}" scenario_text)
+        string(REGEX MATCHALL "\\[\\[savestate\\]\\][^\\[]*path *= *\"[^\"]+\"" saved_states "${scenario_text}")
+        set(setup_fixtures "")
+        foreach(entry ${saved_states})
+            string(REGEX REPLACE ".*path *= *\"([^\"]+)\"" "\\1" state_file "${entry}")
+            list(APPEND setup_fixtures "state_${state_file}")
+        endforeach()
+        if(setup_fixtures)
+            set_tests_properties(scenario.${scenario_name} PROPERTIES FIXTURES_SETUP "${setup_fixtures}")
+        endif()
+        if(scenario_text MATCHES "start_state *= *\"([^\"]+)\"")
+            set_tests_properties(scenario.${scenario_name} PROPERTIES FIXTURES_REQUIRED "state_${CMAKE_MATCH_1}")
+        endif()
     endforeach()
 endif()

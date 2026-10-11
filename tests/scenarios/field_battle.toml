@@ -1,10 +1,12 @@
 name = "field_battle"
 description = "New Game, walk out of Asuka City over the Asuka Bridge into Central Park, fight a random encounter to victory and return to the field."
-include = ["common/new_game.toml"]
+start_state = "new_game.state"   # written by new_game_state.toml
+start_frame = 1473
 frames = 2964
+memcard = "blank"
 
-# The shared prefix (common/new_game.toml) plays New Game up to Asuka City Central Sector and documents the RAM
-# words used below. From there the script is driven by RAM:
+# The start state is New Game up to Asuka City Central Sector (new_game_state.toml plays the shared prefix
+# common/new_game.toml, which documents the RAM words used below). From there the script is driven by RAM:
 #
 #   map id    0x800554D4 (word): 0x1C3 Asuka City Central Sector, 0x1C4 Asuka Bridge (gate chamber), 0x1D2
 #                                Central Park (field), 0x1FA battle arena

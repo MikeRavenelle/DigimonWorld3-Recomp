@@ -1,6 +1,6 @@
 // dw3scenario: headless in-game scenario runner.
 //
-//   dw3scenario <file.toml> [--disc PATH] [--record] [--out DIR] [--wav PATH] [--no-xa] [--watch ADDR[:SIZE]]... [--dump FRAME:PATH]...
+//   dw3scenario <file.toml> [--disc PATH] [--state-dir DIR] [--record] [--out DIR] [--wav PATH] [--no-xa] [--watch ADDR[:SIZE]]... [--dump FRAME:PATH]...
 //
 // Boots the recompiled game with the scenario's scripted pad on port 1 (no window, no SDL, uncapped), evaluates
 // every check at its frame and writes BMPs of the display to <out>/<name>/<at>_<label>.bmp for checks with
@@ -11,6 +11,8 @@
 // real and script frame, for finding the addresses that [[wait]] and [[check]] conditions use. --watch
 // *PTR+OFFSET[:SIZE] follows the pointer word at PTR first (like `via` in a ram condition). --dump FRAME:PATH
 // writes the 2 MiB of main RAM to PATH once the script reaches FRAME (repeatable), for diffing game states.
+// [[savestate]] / [[loadstate]] / start_state entries (see scenario.h) read and write save states under --state-dir
+// (default game/audit/states); relative state paths are resolved against it.
 //
 // Exit codes: 0 all checks pass, 1 failure, 2 usage/scenario error, 77 disc missing (ctest SKIP).
 
@@ -21,12 +23,14 @@
 #include <cstring>
 #include <filesystem>
 #include <fstream>
+#include <map>
 #include <span>
 #include <string>
 #include <vector>
 
 #include "dw3/host.h"
 #include "dw3/recomp.h"
+#include "dw3/state.h"
 #include "scenario.h"
 
 namespace {
@@ -37,6 +41,7 @@ struct Options {
     std::string file;
     std::string disc = std::string(DW3_SOURCE_DIR) + "/game/Digimon World 3 (USA).cue";
     std::string out = std::string(DW3_SOURCE_DIR) + "/game/audit/scenarios";
+    std::string state_dir = std::string(DW3_SOURCE_DIR) + "/game/audit/states";
     bool record = false;
     std::string wav;  // --wav: whole-run audio dump
     std::vector<sc::RamCheck> watches;  // --watch (value/mask unused)
@@ -101,6 +106,40 @@ std::string hex32(uint32_t v) {
     char b[16];
     std::snprintf(b, sizeof(b), "0x%08X", v);
     return b;
+}
+
+// What a replayed stretch of the script must reproduce frame by frame.
+struct FrameDigest {
+    uint64_t ram = 0, vram = 0, regs = 0;
+    bool operator==(const FrameDigest&) const = default;
+};
+
+uint64_t fnv_words(const void* data, std::size_t bytes) {
+    uint64_t h = 1469598103934665603ull;
+    const auto* p = static_cast<const uint8_t*>(data);
+    std::size_t n = bytes / 8;
+    for (std::size_t i = 0; i < n; ++i) {
+        uint64_t w;
+        std::memcpy(&w, p + i * 8, 8);
+        h = (h ^ w) * 1099511628211ull;
+    }
+    return h;
+}
+
+FrameDigest digest_of(dw3::Machine& m) {
+    FrameDigest d;
+    d.ram = fnv_words(m.bus().ram(), DW3_RAM_SIZE);
+    auto v = m.gpu().vram();
+    d.vram = fnv_words(v.data(), v.size() * sizeof(uint16_t));
+    const RecompContext& c = m.ctx();
+    uint64_t regs[] = {c.hi, c.lo, static_cast<uint64_t>(c.cycles), c.r[29], c.r[31], c.r[4], c.r[2], c.r[16]};
+    d.regs = fnv_words(regs, sizeof(regs));
+    return d;
+}
+
+std::string resolve_state_path(const Options& opt, const std::string& p) {
+    std::filesystem::path path(p);
+    return path.is_absolute() ? p : (std::filesystem::path(opt.state_dir) / path).string();
 }
 
 struct Results {
@@ -209,6 +248,7 @@ int main(int argc, char** argv) {
         std::string a = argv[i];
         if (a == "--disc" && i + 1 < argc) opt.disc = argv[++i];
         else if (a == "--out" && i + 1 < argc) opt.out = argv[++i];
+        else if (a == "--state-dir" && i + 1 < argc) opt.state_dir = argv[++i];
         else if (a == "--record") opt.record = true;
         else if (a == "--wav" && i + 1 < argc) opt.wav = argv[++i];
         else if (a == "--no-xa") opt.no_xa = true;
@@ -246,12 +286,12 @@ int main(int argc, char** argv) {
         }
         else if (!a.empty() && a[0] != '-' && opt.file.empty()) opt.file = a;
         else {
-            std::fprintf(stderr, "usage: dw3scenario <file.toml> [--disc PATH] [--record] [--out DIR] [--wav PATH] [--no-xa] [--watch ADDR[:SIZE]] [--dump FRAME:PATH]\n");
+            std::fprintf(stderr, "usage: dw3scenario <file.toml> [--disc PATH] [--state-dir DIR] [--record] [--out DIR] [--wav PATH] [--no-xa] [--watch ADDR[:SIZE]] [--dump FRAME:PATH]\n");
             return 2;
         }
     }
     if (opt.file.empty()) {
-        std::fprintf(stderr, "usage: dw3scenario <file.toml> [--disc PATH] [--record] [--out DIR] [--wav PATH] [--no-xa] [--watch ADDR[:SIZE]] [--dump FRAME:PATH]\n");
+        std::fprintf(stderr, "usage: dw3scenario <file.toml> [--disc PATH] [--state-dir DIR] [--record] [--out DIR] [--wav PATH] [--no-xa] [--watch ADDR[:SIZE]] [--dump FRAME:PATH]\n");
         return 2;
     }
     sc::Scenario scenario;
@@ -269,6 +309,7 @@ int main(int argc, char** argv) {
 
     dw3::host::Config cfg;
     cfg.disc_path = opt.disc;
+    cfg.disc_index_cache = (std::filesystem::path(opt.state_dir) / "disc.index").string();
     if (scenario.memcard == "none") cfg.card_mode = dw3::host::CardMode::None;
     else if (scenario.memcard == "blank") cfg.card_mode = dw3::host::CardMode::Blank;
     else {
@@ -294,6 +335,27 @@ int main(int argc, char** argv) {
     sc::AudioMeter meter(want_wav);
     std::vector<int16_t> pcm_buf(4096);
 
+    // Save states. A [[savestate]] snapshots the runner next to the machine so that a replayed [[loadstate]] can
+    // rewind the script and check that the second pass reproduces the first one frame by frame.
+    struct Snapshot {
+        sc::Timeline timeline;
+        std::size_t next_check = 0, waits_seen = 0;
+        int64_t last_frame = 0;
+        std::vector<FrameDigest> digests;  // frames run since the state was taken (first pass)
+        bool recording = false;
+    };
+    std::map<std::string, Snapshot> snapshots;
+    std::size_t save_next = 0, load_next = 0;
+    int64_t compare_index = 0;
+    const Snapshot* comparing = nullptr;
+    bool state_failed = false;
+    int64_t replayed_frames = 0;
+    std::string state_error;
+    auto fail_state = [&](const std::string& what) {
+        state_failed = true;
+        state_error = what;
+    };
+
     std::printf("scenario %s: %s\n", scenario.name.c_str(), scenario.description.c_str());
     Results total;
     std::size_t next = 0;
@@ -311,7 +373,28 @@ int main(int argc, char** argv) {
         }
         if (opt.no_xa) host->machine().cdrom().set_xa_sink(nullptr);
         host->machine().sio().set_pad_source(0, &pad);
-        const int64_t base = last_frame;  // real frames before this boot
+        int64_t base = last_frame;  // real frames before this boot; shifted when a state is loaded
+        if (boot == 0 && !scenario.start_state.empty()) {
+            std::vector<uint8_t> file;
+            std::string err;
+            const std::string path = resolve_state_path(opt, scenario.start_state);
+            if (!dw3::savestate::read_file(path, file, err)) {
+                std::printf("FAIL start_state: %s (does the fixture scenario that writes it run first?)\n", err.c_str());
+                return 1;
+            }
+            host->load_state(std::move(file), [&](const std::string& e) {
+                if (!e.empty()) fail_state("start_state " + path + ": " + e);
+            });
+            if (state_failed) {
+                std::printf("FAIL %s\n", state_error.c_str());
+                return 1;
+            }
+            // Real frames continue from the script frame the state belongs to.
+            base = scenario.start_frame - static_cast<int64_t>(host->machine().video().frame_count());
+            last_frame = scenario.start_frame;
+            timeline.seek(scenario.start_frame, scenario.start_frame);
+            std::printf("  start_state %s at script frame %lld\n", path.c_str(), static_cast<long long>(scenario.start_frame));
+        }
         const int64_t until = boot < scenario.reboots.size() ? scenario.reboots[boot] : -1;  // script frame
         if (boot) std::printf("  reboot @%lld\n", static_cast<long long>(scenario.reboots[boot - 1]));
         result = host->run([&](uint64_t frame) {
@@ -352,9 +435,81 @@ int main(int argc, char** argv) {
                 if (n < pcm_buf.size() / 2) break;
             }
             if (until >= 0 && script >= until) dw3::host::Host::stop();
+            // Replay bookkeeping: record the frames after a save, compare them after a replayed load.
+            if (comparing) {
+                FrameDigest d = digest_of(host->machine());
+                const FrameDigest& want = comparing->digests[static_cast<std::size_t>(compare_index)];
+                if (!(d == want)) {
+                    std::printf("  FAIL replay diverged %lld frames after the state was loaded (script frame %lld): %s%s%s\n",
+                                static_cast<long long>(compare_index + 1), static_cast<long long>(script),
+                                d.ram != want.ram ? "RAM " : "", d.vram != want.vram ? "VRAM " : "",
+                                d.regs != want.regs ? "CPU/time " : "");
+                    fail_state("replay diverged");
+                    dw3::host::Host::stop();
+                }
+                if (++compare_index == static_cast<int64_t>(comparing->digests.size())) {
+                    replayed_frames = compare_index;
+                    std::printf("  PASS replay: %lld frames identical (RAM, VRAM, CPU state)\n", static_cast<long long>(compare_index));
+                    comparing = nullptr;
+                }
+            }
+            for (auto& [path, snap] : snapshots)
+                if (snap.recording) snap.digests.push_back(digest_of(host->machine()));
             while (next < scenario.checks.size() && script >= scenario.checks[next].at)
                 evaluate(opt, scenario, scenario.checks[next++], *host, total, meter);
-            if (until < 0 && next >= scenario.checks.size() && script >= scenario.frames) dw3::host::Host::stop();
+            while (save_next < scenario.saves.size() && script >= scenario.saves[save_next].at) {
+                const std::string name = scenario.saves[save_next++].path;
+                const std::string path = resolve_state_path(opt, name);
+                host->save_state([&, name, path](std::vector<uint8_t> file, const std::string& err) {
+                    std::string werr;
+                    if (!err.empty() || !dw3::savestate::write_file(path, file, werr)) {
+                        fail_state("savestate " + path + ": " + (err.empty() ? werr : err));
+                        return;
+                    }
+                    std::printf("  savestate @%lld -> %s (%zu bytes)\n", static_cast<long long>(timeline.script_frame()),
+                                path.c_str(), file.size());
+                    Snapshot snap{timeline, next, waits_seen, last_frame, {}, false};
+                    for (const auto& l : scenario.loads)
+                        if (l.path == name && l.replay) snap.recording = true;
+                    snapshots.insert_or_assign(name, std::move(snap));
+                });
+            }
+            while (load_next < scenario.loads.size() && script >= scenario.loads[load_next].at) {
+                const sc::StateOp op = scenario.loads[load_next++];
+                const std::string path = resolve_state_path(opt, op.path);
+                std::vector<uint8_t> file;
+                std::string err;
+                if (!dw3::savestate::read_file(path, file, err)) {
+                    fail_state("loadstate: " + err);
+                    dw3::host::Host::stop();
+                }
+                host->load_state(std::move(file), [&, op, path](const std::string& e) {
+                    if (!e.empty()) {
+                        fail_state("loadstate " + path + ": " + e);
+                        return;
+                    }
+                    int64_t continue_at = last_frame;
+                    if (op.replay) {
+                        Snapshot& snap = snapshots.at(op.path);
+                        snap.recording = false;
+                        timeline = snap.timeline;
+                        next = snap.next_check;
+                        waits_seen = snap.waits_seen;
+                        continue_at = snap.last_frame;
+                        comparing = &snap;
+                        compare_index = 0;
+                    }
+                    base = continue_at - static_cast<int64_t>(host->machine().video().frame_count());
+                    last_frame = continue_at;
+                    std::printf("  loadstate @%lld <- %s%s\n", static_cast<long long>(op.at), path.c_str(),
+                                op.replay ? " (replay)" : "");
+                });
+                if (state_failed) dw3::host::Host::stop();
+            }
+            if (state_failed) dw3::host::Host::stop();
+            if (until < 0 && next >= scenario.checks.size() && script >= scenario.frames && !comparing &&
+                save_next >= scenario.saves.size() && load_next >= scenario.loads.size())
+                dw3::host::Host::stop();
         });
         if (wait_timeout || result.end != dw3::host::RunResult::End::Stopped) break;
     }
@@ -376,6 +531,10 @@ int main(int argc, char** argv) {
         broken = true;
     } else if (result.end == dw3::host::RunResult::End::Returned) {
         std::printf("  FAIL game entry returned at frame %lld\n", static_cast<long long>(last_frame));
+        broken = true;
+    }
+    if (state_failed) {
+        std::printf("  FAIL %s\n", state_error.c_str());
         broken = true;
     }
     if (wait_timeout) {

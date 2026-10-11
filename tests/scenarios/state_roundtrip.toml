@@ -1,0 +1,34 @@
+name = "state_roundtrip"
+description = "Save a state during boot loading and again at the title screen; load each and require the replayed frames to match the first pass."
+frames = 1100
+memcard = "blank"
+
+# Boot: disc streaming, FMV and XA audio are active.
+[[savestate]]
+at = 600
+path = "state_roundtrip_boot.state"
+
+[[loadstate]]
+at = 700
+path = "state_roundtrip_boot.state"
+replay = true
+
+# Title screen with music; START at 900 and 1 s of pad input fall inside the replayed stretch.
+[[savestate]]
+at = 850
+path = "state_roundtrip_title.state"
+
+[[press]]
+button = "START"
+at = 900
+
+[[loadstate]]
+at = 1000
+path = "state_roundtrip_title.state"
+replay = true
+
+[[check]]
+at = 1090
+label = "after the replays"
+display_enabled = true
+min_primitives = 1000
