@@ -169,6 +169,87 @@ TEST(Analysis, UnresolvedJrIsRecorded) {
     EXPECT_EQ(get(r, kBase).indirect_jumps, std::vector<uint32_t>{kBase + 8});
 }
 
+TEST(Analysis, JumpTableWithBaseSpilledToTheStack) {
+    Program p(kBase);
+    uint32_t table = kBase + 0x100;
+    // The entry address is computed early, stored in a stack slot and reloaded just before the load.
+    p.emit({addiu(sp, sp, -32), lui(v0, table >> 16), addiu(v0, v0, static_cast<int16_t>(table & 0xFFFF)),
+            sll(v1, a0, 2), addu(v1, v1, v0), sw(v1, 24, sp), sltiu(v0, a0, 2), beqz(v0, 8), nop(),
+            lw(t0, 24, sp), nop(), lw(v0, 0, t0), nop(), jr(v0), nop()});
+    uint32_t c0 = p.pc();
+    p.emit({jr(ra), li(v0, 1)});
+    uint32_t c1 = p.pc();
+    p.emit({jr(ra), li(v0, 2)});
+    while (p.pc() < table) p.emit(nop());
+    p.emit({c0, c1});
+    auto r = analyze(p.segment(), entry_only(kBase));
+    const auto& f = get(r, kBase);
+    ASSERT_EQ(f.jump_tables.size(), 1u);
+    EXPECT_EQ(f.jump_tables[0].table_addr, table);
+    EXPECT_EQ(f.jump_tables[0].targets, (std::vector<uint32_t>{c0, c1}));
+    EXPECT_TRUE(f.indirect_jumps.empty());
+}
+
+TEST(Analysis, JrThroughFixedMemoryCellIsAPointerJump) {
+    Program p(kBase);
+    uint32_t cell = 0x80082000;
+    p.emit({lui(t1, cell >> 16), lw(t1, static_cast<int16_t>(cell & 0xFFFF), t1), nop(), jr(t1), nop()});
+    auto r = analyze(p.segment(), entry_only(kBase));
+    const auto& f = get(r, kBase);
+    ASSERT_EQ(f.pointer_jumps.size(), 1u);
+    EXPECT_EQ(f.pointer_jumps[0].jr_addr, kBase + 12);
+    EXPECT_EQ(f.pointer_jumps[0].addr, cell);
+    EXPECT_TRUE(f.pointer_jumps[0].via_slot);
+    EXPECT_TRUE(f.indirect_jumps.empty());
+}
+
+TEST(Analysis, JrToConstantOutsideTheSegmentIsAnExternalTailCall) {
+    Program p(kBase);
+    p.emit({lui(v0, 0xA001), addiu(v0, v0, -8276), jr(v0), nop()});
+    auto r = analyze(p.segment(), entry_only(kBase));
+    const auto& f = get(r, kBase);
+    ASSERT_EQ(f.pointer_jumps.size(), 1u);
+    EXPECT_FALSE(f.pointer_jumps[0].via_slot);
+    EXPECT_EQ(f.pointer_jumps[0].addr, 0xA000DFACu);
+    EXPECT_TRUE(f.indirect_jumps.empty());
+    EXPECT_TRUE(r.external_calls.count(0xA000DFACu));
+}
+
+TEST(Analysis, JrToConstantInsideTheFunctionIsALocalJump) {
+    Program p(kBase);
+    uint32_t target = kBase + 0x20;
+    p.emit({lui(v0, target >> 16), ori(v0, v0, target & 0xFFFF), jr(v0), nop()});
+    while (p.pc() < target) p.emit(nop());
+    p.emit({li(v0, 3), jr(ra), nop()});
+    auto r = analyze(p.segment(), entry_only(kBase));
+    const auto& f = get(r, kBase);
+    ASSERT_EQ(f.pointer_jumps.size(), 1u);
+    EXPECT_EQ(f.pointer_jumps[0].addr, target);
+    EXPECT_TRUE(f.tail_calls.empty());
+    EXPECT_TRUE(std::find(f.insns.begin(), f.insns.end(), target) != f.insns.end());
+}
+
+TEST(Analysis, JrToConstantBeforeTheFunctionIsATailCall) {
+    Program p(kBase);
+    p.emit({jr(ra), nop()});
+    uint32_t f2 = p.pc();
+    p.emit({lui(v0, kBase >> 16), ori(v0, v0, kBase & 0xFFFF), jr(v0), nop()});
+    AnalysisConfig c;
+    c.entries = {f2};
+    auto r = analyze(p.segment(), c);
+    EXPECT_TRUE(get(r, f2).tail_calls.count(kBase));
+    EXPECT_TRUE(r.functions.count(kBase));
+}
+
+TEST(Analysis, JrWithStrayBitsIsNotCode) {
+    Program p(kBase);
+    // 0x00010708 decodes as "jr zero" with junk in rt/rd; it is data, so no function may be built from it.
+    p.emit({jr(ra), nop(), 0x00010708u, 0x000901E0u, jr(ra), nop()});
+    AnalysisConfig c = entry_only(kBase);
+    auto r = analyze(p.segment(), c);
+    EXPECT_FALSE(r.functions.count(kBase + 8));
+}
+
 TEST(Analysis, JalrRecordedAndContinues) {
     Program p(kBase);
     p.emit({addiu(sp, sp, -24), sw(ra, 16, sp), jalr(v0), nop(), lw(ra, 16, sp), jr(ra), addiu(sp, sp, 24)});

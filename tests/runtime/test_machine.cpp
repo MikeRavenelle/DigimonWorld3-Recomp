@@ -189,6 +189,50 @@ TEST(Machine, OverlaysWithEqualProbesAreToldApartByCode) {
     EXPECT_EQ(g_calls_a, 1);
 }
 
+namespace {
+
+// OVE is small. OVF is larger and has its code beyond OVE's end, so a load of OVE over OVF leaves OVF's code in
+// place and no word of OVF can tell the two apart.
+constexpr uint32_t kCodeE = 0x24020005, kCodeF = 0x24020006;
+const RecompFuncEntry kEFuncs[] = {{kSlot + 0x10, fn_a}};
+const RecompFuncEntry kFFuncs[] = {{kSlot + 0x80, fn_b}};
+const RecompProbe kEProbes[] = {{kSlot + 0x10, kCodeE}};
+const RecompProbe kFProbes[] = {{kSlot + 0x80, kCodeF}};
+const uint16_t kFStale[] = {1};  // OVE
+const RecompSegment kTail[] = {
+    {"MAIN", 0x80010000, 0x1000, 0, kMainFuncs, 1, nullptr, 0},
+    {"OVE", kSlot, 0x20, 0, kEFuncs, 1, kEProbes, 1},
+    {"OVF", kSlot, 0x100, 0, kFFuncs, 1, kFProbes, 1, nullptr, 0, 0, kFStale, 1},
+};
+const RecompSegment kTailUnmarked[] = {
+    {"MAIN", 0x80010000, 0x1000, 0, kMainFuncs, 1, nullptr, 0},
+    {"OVE", kSlot, 0x20, 0, kEFuncs, 1, kEProbes, 1},
+    {"OVF", kSlot, 0x100, 0, kFFuncs, 1, kFProbes, 1},
+};
+
+}  // namespace
+
+TEST(Machine, SmallOverlayLoadedOverLargerOneIsNotMistakenForIt) {
+    dw3::Machine m(kTail);
+    g_calls_a = g_calls_b = 0;
+    poke32(m, kSlot + 0x80, kCodeF);
+    dw3_call(&m.ctx(), kSlot + 0x80);
+    ASSERT_EQ(g_calls_b, 1);
+    poke32(m, kSlot + 0x10, kCodeE);  // OVE copied over the slot by the CPU; OVF's tail at +0x80 stays
+    dw3_call(&m.ctx(), kSlot + 0x10);
+    EXPECT_EQ(g_calls_a, 1);
+    dw3_call(&m.ctx(), kSlot + 0x10);
+    EXPECT_EQ(g_calls_a, 2);
+}
+
+TEST(Machine, LeftoverTailWithoutStaleMarkingWouldWin) {
+    Throwing t;
+    dw3::Machine m(kTailUnmarked);
+    poke32(m, kSlot + 0x80, kCodeF);
+    poke32(m, kSlot + 0x10, kCodeE);
+    EXPECT_THROW(dw3_lookup_func(&m.ctx(), kSlot + 0x10), std::runtime_error);  // larger image picked: no function
+}
+
 TEST(Machine, DmaRamWriteInvalidatesOverlay) {
     dw3::Machine m(kSegs);
     g_calls_a = g_calls_b = 0;

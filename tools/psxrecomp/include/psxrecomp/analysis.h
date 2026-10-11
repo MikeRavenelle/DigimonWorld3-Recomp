@@ -33,6 +33,17 @@ struct JumpTable {
     std::vector<uint32_t> targets;
 };
 
+// A JR (not ra) whose target is not a table of in-function labels but is still known in form:
+//  - Constant: the register holds a fixed address (lui/addiu), e.g. a jump into kernel RAM.
+//  - Slot: the register is loaded from a fixed memory cell, e.g. a hook pointer filled in at run time.
+// Both are emitted as a dynamic call (dw3_call), which is a hard error at run time if the target is not a
+// recompiled function entry.
+struct PointerJump {
+    uint32_t jr_addr = 0;
+    uint32_t addr = 0;  // the constant target, or the address of the memory cell
+    bool via_slot = false;
+};
+
 enum class FuncKind : uint8_t {
     Normal,
     BiosStub,  // li t2,0xA0/B0/C0 ; jr t2 ; li t1,N
@@ -60,7 +71,8 @@ struct Function {
     std::set<uint32_t> tail_calls;       // J/branch targets that are other functions
     std::vector<JumpTable> jump_tables;
     std::vector<uint32_t> indirect_calls;  // JALR sites
-    std::vector<uint32_t> indirect_jumps;  // JR (not ra) sites with no recovered table
+    std::vector<PointerJump> pointer_jumps;  // JR (not ra) to a constant address or through a fixed memory cell
+    std::vector<uint32_t> indirect_jumps;  // JR (not ra) sites that match none of the above
     std::vector<std::string> errors;       // decode failures, running off the segment, ...
 };
 

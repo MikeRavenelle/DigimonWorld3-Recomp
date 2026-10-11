@@ -250,6 +250,8 @@ typedef struct RecompSegment {
     const RecompRange* ranges;  /* recompiled code, for full verification of an overlay */
     uint32_t range_count;
     uint32_t code_hash;         /* FNV-1a over the bytes of `ranges` */
+    const uint16_t* stale_if;   /* segment indices whose code in RAM shows this overlay is only a leftover tail */
+    uint32_t stale_count;
 } RecompSegment;
 
 /* Emitted by psxrecomp into dw3_tables.c. Segment 0 is the main executable. */

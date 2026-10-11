@@ -53,12 +53,13 @@ std::vector<std::string> expand_glob(const fs::path& root, const std::string& pa
 }
 
 void report_segment(FILE* out, const SegmentJob& job, const AnalysisResult& r, bool verbose) {
-    std::size_t bios = 0, jt = 0, ijmp = 0, icall = 0, errs = 0;
+    std::size_t bios = 0, jt = 0, pjmp = 0, ijmp = 0, icall = 0, errs = 0;
     std::size_t by_src[6]{};
     uint64_t covered = 0;
     for (const auto& [s, f] : r.functions) {
         if (f.kind == FuncKind::BiosStub) ++bios;
         jt += f.jump_tables.size();
+        pjmp += f.pointer_jumps.size();
         ijmp += f.indirect_jumps.size();
         icall += f.indirect_calls.size();
         if (!f.errors.empty()) ++errs;
@@ -68,10 +69,10 @@ void report_segment(FILE* out, const SegmentJob& job, const AnalysisResult& r, b
     }
     uint32_t code_end = job.cfg.code_end ? job.cfg.code_end : job.seg.end();
     std::fprintf(out,
-                 "%-14s base=%08X funcs=%4zu cover=%5.1f%% bios=%zu jtables=%zu unresolved_jr=%zu jalr=%zu "
+                 "%-14s base=%08X funcs=%4zu cover=%5.1f%% bios=%zu jtables=%zu ptr_jr=%zu unresolved_jr=%zu jalr=%zu "
                  "errfuncs=%zu warn=%zu ext=%zu  [entry=%zu jal=%zu tail=%zu ptr=%zu gap=%zu hint=%zu]\n",
                  job.seg.name.c_str(), job.seg.base, r.functions.size(),
-                 100.0 * static_cast<double>(covered) / static_cast<double>(code_end - job.seg.base), bios, jt, ijmp,
+                 100.0 * static_cast<double>(covered) / static_cast<double>(code_end - job.seg.base), bios, jt, pjmp, ijmp,
                  icall, errs, r.warnings.size(), r.external_calls.size(), by_src[0], by_src[1], by_src[2], by_src[3],
                  by_src[4], by_src[5]);
     if (!verbose) return;
@@ -80,6 +81,8 @@ void report_segment(FILE* out, const SegmentJob& job, const AnalysisResult& r, b
                      f.kind == FuncKind::BiosStub ? " BIOS" : "");
         if (f.kind == FuncKind::BiosStub) std::fprintf(out, " %02X:%02X", f.bios_table, f.bios_fn);
         for (const auto& t : f.jump_tables) std::fprintf(out, " jt@%08X[%zu]", t.table_addr, t.targets.size());
+        for (const auto& pj : f.pointer_jumps)
+            std::fprintf(out, " %s@%08X->%08X", pj.via_slot ? "jr[slot]" : "jr[const]", pj.jr_addr, pj.addr);
         for (uint32_t a : f.indirect_jumps) std::fprintf(out, " jr?@%08X", a);
         for (const auto& e : f.errors) std::fprintf(out, " ERR(%s)", e.c_str());
         std::fprintf(out, "\n");
@@ -177,10 +180,31 @@ int main(int argc, char** argv) {
     }
     std::printf("total functions: %zu across %zu segments\n", total, jobs.size());
 
+    std::vector<TableSegment> tables;
+    for (std::size_t k = 0; k < jobs.size(); ++k) {
+        uint32_t extent = jobs[k].cfg.code_end ? jobs[k].cfg.code_end - jobs[k].seg.base : 0;
+        tables.push_back({&jobs[k].seg, &results[k].functions, extent});
+    }
+    std::size_t jump_tables = 0, pointer_jumps = 0, unresolved = 0, bad_funcs = 0;
+    for (const auto& r : results)
+        for (const auto& [a, f] : r.functions) {
+            jump_tables += f.jump_tables.size();
+            pointer_jumps += f.pointer_jumps.size();
+            unresolved += f.indirect_jumps.size();
+            bad_funcs += !f.errors.empty();
+        }
+    SlotRelations slots = analyze_slots(tables);
+    std::size_t stale_links = 0, stale_overlays = 0;
+    for (const auto& l : slots.stale_if) stale_links += l.size(), stale_overlays += !l.empty();
+    for (const auto& a : slots.ambiguous) std::printf("ambiguous overlays: %s\n", a.c_str());
+    std::printf("summary: %zu functions, %zu jump tables, %zu pointer jumps, %zu unresolved jr, %zu functions with errors, "
+                "%zu overlays with stale-tail checks (%zu links), %zu ambiguous overlay pairs\n",
+                total, jump_tables, pointer_jumps, unresolved, bad_funcs, stale_overlays, stale_links,
+                slots.ambiguous.size());
+
     if (mode == "emit") {
         fs::create_directories(out_dir);
         std::vector<std::string> warnings;
-        std::vector<TableSegment> tables;
         std::size_t files = 0, changed = 0;
         std::string manifest;
         for (std::size_t k = 0; k < jobs.size(); ++k) {
@@ -193,8 +217,6 @@ int main(int argc, char** argv) {
                 manifest += f.name + "\n";
                 ++files;
             }
-            uint32_t extent = jobs[k].cfg.code_end ? jobs[k].cfg.code_end - jobs[k].seg.base : 0;
-            tables.push_back({&jobs[k].seg, &results[k].functions, extent});
         }
         auto t = emit_tables(tables, &warnings);
         changed += write_if_changed(fs::path(out_dir) / t.name, t.text);
