@@ -74,7 +74,7 @@ TEST(EmitterText, LabelsOnlyWhereNeeded) {
 TEST(EmitterText, BackwardJumpChecksEvents) {
     Program p(kBase);
     p.emit({addiu(t0, t0, -1), bnez(t0, -2), nop(), jr(ra), nop()});
-    EXPECT_TRUE(contains(emit_entry(p, nullptr, true), "DW3_CHECK_EVENTS(ctx); goto L_80010000;"));
+    EXPECT_TRUE(contains(emit_entry(p, nullptr, true), "DW3_CHECK_EVENTS(ctx, 0x80010000u); goto L_80010000;"));
     std::string off = emit_entry(p, nullptr, false);
     EXPECT_FALSE(contains(off, "DW3_CHECK_EVENTS"));
     EXPECT_FALSE(contains(off, "ctx->cycles"));
@@ -151,6 +151,31 @@ TEST(EmitterText, IndirectJumpAndCallUseLookup) {
     std::string c = emit_entry(p, nullptr, false);
     EXPECT_TRUE(contains(c, "dw3_call(ctx, t); }"));
     EXPECT_TRUE(contains(c, "dw3_call(ctx, t); return; }"));
+}
+
+TEST(EmitterText, CallReturnPointsAreResumeLabelsAndTailCallsAreNot) {
+    Program p(kBase);
+    p.emit({jal(kBase + 0x40), nop(), j(kBase + 0x80), nop()});
+    std::string c = emit_entry(p, nullptr, false);
+    EXPECT_TRUE(contains(c, "dw3_call(ctx, 0x80010040u);"));
+    // The return point is a resume label; the tail jump is a plain call and return.
+    EXPECT_TRUE(contains(c, "case 0x80010008u: goto L_80010008;"));
+    EXPECT_TRUE(contains(c, "L_80010008:;"));
+    EXPECT_TRUE(contains(c, "dw3_call(ctx, 0x80010080u); return;"));
+    EXPECT_FALSE(contains(c, "L_80010010"));  // nothing returns to a tail jump
+}
+
+TEST(EmitterText, BackwardJumpTargetIsAResumePoint) {
+    Program p(kBase);
+    p.emit({addiu(t0, t0, -1), bnez(t0, -2), nop(), jr(ra), nop()});
+    std::string c = emit_entry(p, nullptr, true);
+    EXPECT_TRUE(contains(c, "case 0x80010000u: goto L_80010000;"));
+}
+
+TEST(EmitterText, FunctionsWithoutCallsOrLoopsHaveNoResumeDispatch) {
+    Program p(kBase);
+    p.emit({addiu(v0, zero, 1), jr(ra), nop()});
+    EXPECT_FALSE(contains(emit_entry(p), "ctx->resume"));
 }
 
 TEST(EmitterText, ChainedLoadsKeepBothDelaySlots) {
@@ -292,4 +317,30 @@ TEST(EmitterText, JrThroughMemoryCellKeepsTheDynamicLookup) {
     p.emit({lui(t1, 0x8008), lw(t1, 0x2000, t1), nop(), jr(t1), nop()});
     std::string c = emit_entry(p, nullptr, false);
     EXPECT_TRUE(contains(c, "dw3_call(ctx, t); return; }"));
+}
+
+TEST(EmitterText, ReturnWhoseDelaySlotOverwritesRaIsRejected) {
+    Program p(kBase);
+    p.emit({jr(ra), addiu(ra, zero, 1)});
+    EXPECT_THROW(emit_entry(p), std::runtime_error);
+}
+
+TEST(EmitterText, ResumePointsAreReported) {
+    Program p(kBase);
+    p.emit({jal(kBase + 0x40), nop(), addiu(t0, t0, -1), bnez(t0, -2), nop(), jr(ra), nop()});
+    static CodeSegment seg;
+    seg = p.segment("TXT");
+    AnalysisConfig cfg;
+    cfg.entries = {p.base()};
+    cfg.scan_data_pointers = false;
+    cfg.scan_jal_words = false;
+    cfg.gap_fill = false;
+    AnalysisResult r = analyze(seg, cfg);
+    EmitContext ec;
+    ec.seg = &seg;
+    ec.local = &r.functions;
+    std::vector<uint32_t> points;
+    emit_function(ec, r.functions.at(p.base()), nullptr, &points);
+    // the call's return point, which is also the loop head the backward branch jumps to
+    EXPECT_EQ(points, (std::vector<uint32_t>{0x80010008}));
 }

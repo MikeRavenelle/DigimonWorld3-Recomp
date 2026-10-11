@@ -36,4 +36,10 @@ void IrqController::write(uint32_t off, uint32_t value, int size) {
     notify(before);
 }
 
+void IrqController::io(StateIo& s) {
+    StateIo::Section sec(s, "IRQC");
+    s.io(stat_);
+    s.io(mask_);
+}
+
 }  // namespace dw3

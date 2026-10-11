@@ -72,7 +72,142 @@ Machine::Machine(std::span<const RecompSegment> segments)
 
 void Machine::service_events() {
     sched_.run_due();
-    if (on_interrupt && cpu_interrupt_deliverable(ctx(), irq_)) on_interrupt(ctx());
+    if (on_interrupt && cpu_interrupt_deliverable(ctx(), irq_)) {
+        // The handler runs recompiled code that records its own event-check position; the interrupted code's
+        // must survive it.
+        const uint32_t pc = ctx().cur_pc;
+        on_interrupt(ctx());
+        ctx().cur_pc = pc;
+    }
+    if (!safe_actions_.empty()) run_safe_actions();
+}
+
+bool Machine::at_safe_point() {
+    const RecompContext& c = bus_.ctx();
+    return c.cur_pc != 0 && (!kernel_idle || kernel_idle());
+}
+
+void Machine::run_safe_actions() {
+    if (!at_safe_point()) return;
+    auto actions = std::move(safe_actions_);
+    safe_actions_.clear();
+    for (auto& a : actions) a();
+}
+
+void Machine::io(StateIo& s) {
+    RecompContext& c = ctx();
+    {
+        StateIo::Section sec(s, "MACH");
+        s.io(mem_ctrl_);
+        s.io(ram_size_);
+        s.io(cache_ctrl_);
+        // Overlays are identified by name: indices change when the set of segments does.
+        std::vector<std::string> res, ver;
+        if (!s.loading()) {
+            for (std::size_t k = 0; k < segments_.size(); ++k) {
+                if (resident_[k]) res.emplace_back(segments_[k].name);
+                if (verified_[k]) ver.emplace_back(segments_[k].name);
+            }
+        }
+        s.io(res);
+        s.io(ver);
+        if (s.loading()) {
+            auto mark = [&](const std::vector<std::string>& names, std::vector<bool>& flags) {
+                flags.assign(segments_.size(), false);
+                for (const auto& n : names) {
+                    std::size_t k = 0;
+                    while (k < segments_.size() && n != segments_[k].name) ++k;
+                    if (k == segments_.size()) throw StateError("save state needs the overlay " + n + ", which this build lacks");
+                    flags[k] = true;
+                }
+            };
+            mark(res, resident_);
+            mark(ver, verified_);
+        }
+        for (auto& r : c.r) s.io(r);
+        s.io(c.hi);
+        s.io(c.lo);
+        for (auto& r : c.cop0) s.io(r);
+        s.io(c.cycles);
+        uint32_t pc = c.cur_pc;
+        if (!s.loading() && !at_safe_point()) throw StateError("a save state can only be taken at a safe point");
+        s.io(pc);
+        if (s.loading()) {
+            if (pc == 0) throw StateError("save state has no resume address");
+            resume_pc_ = pc;
+            c.resume = 0;
+            c.cur_pc = 0;
+        }
+    }
+    {
+        StateIo::Section sec(s, "MEM0");
+        s.bytes(bus_.ram(), DW3_RAM_SIZE);
+        s.bytes(bus_.scratchpad(), DW3_SCRATCHPAD_SIZE);
+    }
+    s.events = 0;
+    sched_.io(s);
+    irq_.io(s);
+    video_.io(s);
+    timers_.io(s);
+    dma_.io(s);
+    gte_.io(s);
+    gpu_.io(s);
+    cdrom_.io(s);
+    xa_.io(s);
+    spu_.io(s);
+    sio_.io(s);
+    mdec_.io(s);
+    if (s.events != static_cast<int>(sched_.pending_count()))
+        throw StateError(s.loading() ? "save state has inconsistent scheduler events"
+                                     : "scheduler holds events no device saves");
+    if (s.loading()) {
+        precise_.clear();
+        if (!find_resume(resume_pc_)) {
+            char b[96];
+            std::snprintf(b, sizeof(b), "this build has no entry point at 0x%08X, where the save state resumes", resume_pc_);
+            throw StateError(b);
+        }
+        resume_pending_ = true;
+    }
+}
+
+RecompFunc Machine::find_resume(uint32_t pc) {
+    const uint32_t key = 0x80000000u | phys(pc);
+    int idx = resident_segment(key);
+    if (idx < 0) return nullptr;
+    const RecompSegment& seg = segments_[static_cast<std::size_t>(idx)];
+    if (!seg.resume) return nullptr;
+    auto k = static_cast<std::size_t>(idx);
+    if (resume_counts_.empty()) {
+        resume_counts_.resize(segments_.size());
+        for (std::size_t j = 0; j < segments_.size(); ++j) {
+            uint32_t n = 0;
+            if (segments_[j].resume)
+                while (segments_[j].resume[n].addr != 0) ++n;
+            resume_counts_[j] = n;
+        }
+    }
+    const RecompResumeEntry* end = seg.resume + resume_counts_[k];
+    auto it = std::lower_bound(seg.resume, end, key, [](const RecompResumeEntry& e, uint32_t a) { return e.addr < a; });
+    return it != end && it->addr == key ? it->func : nullptr;
+}
+
+void Machine::resume() {
+    if (!resume_pending_) fatal("resume without a loaded state");
+    resume_pending_ = false;
+    RecompContext& c = ctx();
+    uint32_t pc = resume_pc_;
+    while (pc != 0) {  // a return to 0 leaves the game entry
+        RecompFunc f = find_resume(pc);
+        if (!f) {
+            char b[96];
+            std::snprintf(b, sizeof(b), "guest returned to 0x%08X, which has no resume entry in the recompiled code", pc);
+            fatal(b);
+        }
+        c.resume = pc;
+        f(&c);
+        pc = c.r[31];
+    }
 }
 
 void Machine::enable_precise_geometry() {
@@ -210,6 +345,10 @@ void dw3_syscall(RecompContext* ctx, uint32_t pc) {
     auto* m = dw3::machine_of(ctx);
     if (!m->on_syscall) fatal("syscall at " + dw3::hex(pc) + " with no handler");
     m->on_syscall(*ctx, pc);
+}
+
+void dw3_bad_resume(RecompContext* ctx, uint32_t fn) {
+    fatal("function " + dw3::hex(fn) + " cannot resume a saved call chain at " + dw3::hex(ctx->resume));
 }
 
 void dw3_break(RecompContext*, uint32_t pc) { fatal("BREAK at " + dw3::hex(pc)); }

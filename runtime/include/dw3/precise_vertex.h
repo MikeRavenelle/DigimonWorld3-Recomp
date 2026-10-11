@@ -46,7 +46,8 @@ public:
     // Looks up a GP0 vertex word. Returns false on a miss, a stale entry or a mismatch with the integer word.
     bool find(uint32_t word, PreciseVertex& out) const;
 
-    // Drops every entry.
+    // Drops every entry. The cache is transient (entries expire after kMaxAge frames) and is not part of a save
+    // state; a restored machine starts with it cleared.
     void clear();
 
     uint64_t hits() const { return hits_; }

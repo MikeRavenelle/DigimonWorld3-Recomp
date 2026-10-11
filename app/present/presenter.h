@@ -9,6 +9,7 @@
 
 #include "dw3/gpu.h"
 #include "dw3/present_layout.h"
+#include "osd.h"
 
 struct SDL_Window;
 
@@ -39,6 +40,12 @@ public:
     virtual bool present(dw3::Gpu& gpu, Capture* capture) = 0;
     // Called once with the machine's GPU before the game starts, so a presenter can install its rasterizer.
     virtual void attach(dw3::Gpu&) {}
+    // Shows a short message over the top-left of the window for a couple of seconds. It is drawn after the
+    // emulated picture and is not part of captures.
+    void notify(std::string text);
+
+protected:
+    Osd osd_;
 };
 
 enum class RendererChoice { Auto, Gpu, Software };

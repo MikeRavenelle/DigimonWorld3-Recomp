@@ -22,8 +22,9 @@ dw3_add_test(test_runtime
     SOURCES runtime/test_bus.cpp runtime/test_platform.cpp runtime/test_gte.cpp
             runtime/test_scheduler.cpp runtime/test_irq.cpp runtime/test_video_timing.cpp
             runtime/test_timers.cpp runtime/test_dma.cpp runtime/test_cdrom.cpp runtime/test_machine.cpp runtime/test_spu.cpp
-            runtime/test_bios.cpp runtime/test_soft_rasterizer.cpp runtime/test_sio.cpp
-            runtime/test_mdec.cpp runtime/test_memcard.cpp
+            runtime/test_bios.cpp runtime/test_state.cpp runtime/test_state_bios.cpp runtime/test_state_core.cpp
+            runtime/test_state_cdrom.cpp runtime/test_state_sio.cpp runtime/test_state_spu.cpp runtime/test_soft_rasterizer.cpp runtime/test_sio.cpp
+            runtime/test_mdec.cpp runtime/test_memcard.cpp runtime/test_disc_ref.cpp
             runtime/test_spu_dsp.cpp runtime/test_spu_voices.cpp runtime/test_xa.cpp
             runtime/test_present_layout.cpp runtime/test_display_snapshot.cpp runtime/test_precise_vertex.cpp
     LIBS dw3runtime)
@@ -70,8 +71,30 @@ if(TARGET dw3scenario)
     foreach(scenario_file ${DW3_SCENARIO_FILES})
         get_filename_component(scenario_name "${scenario_file}" NAME_WE)
         add_test(NAME scenario.${scenario_name}
-            COMMAND dw3scenario "${scenario_file}" --disc "${DW3_GAME_DIR}/Digimon World 3 (USA).cue")
+            COMMAND dw3scenario "${scenario_file}" --disc "${DW3_GAME_DIR}/Digimon World 3 (USA).cue"
+                    --state-dir "${CMAKE_BINARY_DIR}/states")
         set_tests_properties(scenario.${scenario_name} PROPERTIES
             LABELS scenario SKIP_RETURN_CODE 77 TIMEOUT 1800)
+        # Save states are build products (they contain game data): a scenario that writes one is the fixture setup
+        # for the scenarios that start from it, so ctest runs it first.
+        file(READ "${scenario_file}" scenario_text)
+        string(REGEX MATCHALL "\\[\\[savestate\\]\\][^\\[]*path *= *\"[^\"]+\"" saved_states "${scenario_text}")
+        set(setup_fixtures "")
+        foreach(entry ${saved_states})
+            string(REGEX REPLACE ".*path *= *\"([^\"]+)\"" "\\1" state_file "${entry}")
+            list(APPEND setup_fixtures "state_${state_file}")
+        endforeach()
+        if(setup_fixtures)
+            set_tests_properties(scenario.${scenario_name} PROPERTIES FIXTURES_SETUP "${setup_fixtures}")
+        endif()
+        if(scenario_text MATCHES "start_state *= *\"([^\"]+)\"")
+            set_tests_properties(scenario.${scenario_name} PROPERTIES FIXTURES_REQUIRED "state_${CMAKE_MATCH_1}")
+        endif()
     endforeach()
 endif()
+
+# On-screen notification text rasterization (app/present/osd.cpp has no SDL dependency).
+dw3_add_test(test_osd
+    SOURCES app/test_osd.cpp ${PROJECT_SOURCE_DIR}/app/present/osd.cpp
+    LIBS dw3runtime)
+target_include_directories(test_osd PRIVATE ${PROJECT_SOURCE_DIR}/app)

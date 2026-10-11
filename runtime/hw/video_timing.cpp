@@ -75,13 +75,15 @@ int VideoTiming::scanline(int64_t cycle) const {
 }
 
 void VideoTiming::schedule_vblank() {
-    vblank_event_ = sched_.schedule(vblank_cycle(next_k_), [this](int64_t) {
-        ++next_k_;
-        ++frame_count_;
-        irq_.raise(IrqSource::Vblank);
-        schedule_vblank();  // absolute time from the frame index: never drifts
-        if (on_frame) on_frame(frame_count_);
-    });
+    vblank_event_ = sched_.schedule(vblank_cycle(next_k_), [this](int64_t) { on_vblank(); });
+}
+
+void VideoTiming::on_vblank() {
+    ++next_k_;
+    ++frame_count_;
+    irq_.raise(IrqSource::Vblank);
+    schedule_vblank();  // absolute time from the frame index: never drifts
+    if (on_frame) on_frame(frame_count_);
 }
 
 template <class F>
@@ -110,6 +112,20 @@ void VideoTiming::set_interlaced(bool on) {
 
 void VideoTiming::set_dot_divider(int divider) {
     if (divider > 0 && divider != dot_divider_) reconfigure([&] { dot_divider_ = divider; }, false);
+}
+
+void VideoTiming::io(StateIo& s) {
+    StateIo::Section sec(s, "VTIM");
+    s.io(standard_);
+    s.io(interlaced_);
+    s.io(dot_divider_);
+    s.io(origin_);
+    s.io(hblank_base_);
+    s.io(next_k_);
+    s.io(frame_count_);
+    sched_.io_event(s, vblank_event_, [this] {
+        return Scheduler::Callback([this](int64_t) { on_vblank(); });
+    });
 }
 
 }  // namespace dw3

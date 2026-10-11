@@ -43,7 +43,8 @@ void Cdrom::set_disc(SectorSource* disc) {
 }
 
 void Cdrom::reset() {
-    ++epoch_;
+    for (auto& d : deferred_) sched_.cancel(d.ev);
+    deferred_.clear();
     sched_.cancel(sector_ev_);
     sched_.cancel(flush_ev_);
     sector_ev_ = flush_ev_ = kNoEvent;
@@ -215,11 +216,52 @@ void Cdrom::update_line() {
     line_ = now;
 }
 
-void Cdrom::later(int64_t delay, std::function<void()> fn) {
-    uint64_t ep = epoch_;
-    sched_.schedule_in(delay, [this, ep, fn = std::move(fn)](int64_t) {
-        if (ep == epoch_) fn();
-    });
+void Cdrom::defer(int64_t delay, Deferred::Kind kind, uint8_t a, int64_t b, std::vector<uint8_t> data) {
+    Deferred& d = deferred_.emplace_back();
+    d.kind = kind;
+    d.a = a;
+    d.b = b;
+    d.data = std::move(data);
+    d.id = ++deferred_seq_;
+    d.ev = sched_.schedule_in(delay, deferred_callback(d.id));
+}
+
+Scheduler::Callback Cdrom::deferred_callback(uint64_t id) {
+    return [this, id](int64_t) {
+        auto it = std::find_if(deferred_.begin(), deferred_.end(), [id](const Deferred& d) { return d.id == id; });
+        if (it == deferred_.end()) return;
+        Deferred d = std::move(*it);
+        deferred_.erase(it);
+        run_deferred(d);
+    };
+}
+
+void Cdrom::run_deferred(const Deferred& d) {
+    using K = Deferred::Kind;
+    switch (d.kind) {
+        case K::Execute: execute(d.a, d.data); break;
+        case K::SecondOk: enqueue(2, {stat()}); break;
+        case K::SecondErr: enqueue(5, {static_cast<uint8_t>(stat() | kStatError), d.a}); break;
+        case K::MotorOn:
+            motor_on_ = true;
+            enqueue(2, {stat()});
+            break;
+        case K::Stop:
+            motor_on_ = false;
+            enqueue(2, {stat()});
+            break;
+        case K::Init:
+            motor_on_ = disc_ != nullptr;
+            enqueue(2, {stat()});
+            break;
+        case K::SeekDone:
+            state_ = State::Idle;
+            lba_ = last_lba_ = d.b;
+            enqueue(2, {stat()});
+            break;
+        case K::GetIdFail: enqueue(5, {0x08, 0x40, 0, 0, 0, 0, 0, 0}); break;
+        case K::GetIdOk: enqueue(2, {stat(), 0x00, 0x20, 0x00, 'S', 'C', 'E', 'A'}); break;
+    }
 }
 
 void Cdrom::deliver(Resp r) {
@@ -240,14 +282,17 @@ void Cdrom::enqueue(uint8_t int_no, std::vector<uint8_t> data, bool first) {
 
 void Cdrom::schedule_flush() {
     if (sched_.is_pending(flush_ev_)) return;
-    uint64_t ep = epoch_;
-    flush_ev_ = sched_.schedule_in(kAckGap, [this, ep](int64_t) {
+    flush_ev_ = sched_.schedule_in(kAckGap, flush_callback());
+}
+
+Scheduler::Callback Cdrom::flush_callback() {
+    return [this](int64_t) {
         flush_ev_ = kNoEvent;
-        if (ep != epoch_ || flag_ != 0 || queue_.empty()) return;
+        if (flag_ != 0 || queue_.empty()) return;
         Resp r = std::move(queue_.front());
         queue_.pop_front();
         deliver(std::move(r));
-    });
+    };
 }
 
 // ---- commands ----
@@ -257,16 +302,16 @@ void Cdrom::start_command(uint8_t cmd) {
     busy_ = true;
     std::vector<uint8_t> p = std::move(params_);
     params_.clear();
-    later(kFirstResponse, [this, cmd, p = std::move(p)] { execute(cmd, p); });
+    defer(kFirstResponse, Deferred::Kind::Execute, cmd, 0, std::move(p));
 }
 
 void Cdrom::execute(uint8_t cmd, const std::vector<uint8_t>& p) {
     const uint8_t st = stat();
     auto first = [&](std::vector<uint8_t> d) { enqueue(3, std::move(d), true); };
     auto fail = [&](uint8_t code) { enqueue(5, {static_cast<uint8_t>(st | kStatError), code}, true); };
-    auto second_ok = [&](int64_t delay) { later(delay, [this] { enqueue(2, {stat()}); }); };
+    auto second_ok = [&](int64_t delay) { defer(delay, Deferred::Kind::SecondOk); };
     auto second_err = [&](int64_t delay, uint8_t code) {
-        later(delay, [this, code] { enqueue(5, {static_cast<uint8_t>(stat() | kStatError), code}); });
+        defer(delay, Deferred::Kind::SecondErr, code);
     };
 
     int lo, hi;
@@ -298,18 +343,12 @@ void Cdrom::execute(uint8_t cmd, const std::vector<uint8_t>& p) {
         case 0x07:  // MotorOn
             if (motor_on_) return fail(kErrBadParamCount);
             first({st});
-            later(kMotorOnDelay, [this] {
-                motor_on_ = true;
-                enqueue(2, {stat()});
-            });
+            defer(kMotorOnDelay, Deferred::Kind::MotorOn);
             break;
         case 0x08:  // Stop
             first({st});
             stop_stream();
-            later(motor_on_ ? kStopDelay : kPauseIdle, [this] {
-                motor_on_ = false;
-                enqueue(2, {stat()});
-            });
+            defer(motor_on_ ? kStopDelay : kPauseIdle, Deferred::Kind::Stop);
             break;
         case 0x09: {  // Pause
             first({st});
@@ -324,10 +363,7 @@ void Cdrom::execute(uint8_t cmd, const std::vector<uint8_t>& p) {
             mode_ = 0;
             muted_ = false;
             setloc_pending_ = false;
-            later(kInitDelay, [this] {
-                motor_on_ = disc_ != nullptr;
-                enqueue(2, {stat()});
-            });
+            defer(kInitDelay, Deferred::Kind::Init);
             break;
         case 0x0B: muted_ = true; first({st}); break;
         case 0x0C: muted_ = false; first({st}); break;
@@ -385,11 +421,7 @@ void Cdrom::execute(uint8_t cmd, const std::vector<uint8_t>& p) {
                 break;
             }
             state_ = State::Seeking;
-            later(delay, [this, target] {
-                state_ = State::Idle;
-                lba_ = last_lba_ = target;
-                enqueue(2, {stat()});
-            });
+            defer(delay, Deferred::Kind::SeekDone, 0, target);
             break;
         }
         case 0x19:  // Test
@@ -403,11 +435,9 @@ void Cdrom::execute(uint8_t cmd, const std::vector<uint8_t>& p) {
         case 0x1A:  // GetID
             first({st});
             if (!ready) {
-                later(kGetIdDelay, [this] { enqueue(5, {0x08, 0x40, 0, 0, 0, 0, 0, 0}); });
+                defer(kGetIdDelay, Deferred::Kind::GetIdFail);
             } else {
-                later(kGetIdDelay, [this] {
-                    enqueue(2, {stat(), 0x00, 0x20, 0x00, 'S', 'C', 'E', 'A'});
-                });
+                defer(kGetIdDelay, Deferred::Kind::GetIdOk);
             }
             break;
         case 0x1E:  // ReadTOC
@@ -443,7 +473,7 @@ void Cdrom::start_stream(bool play) {
     }
     stream_play_ = play;
     state_ = State::Seeking;
-    sector_ev_ = sched_.schedule_in(delay + period(), [this](int64_t due) { sector_tick(due); });
+    sector_ev_ = sched_.schedule_in(delay + period(), sector_callback());
 }
 
 // Applies the XA-ADPCM rules; true if the sector was consumed (not delivered as data).
@@ -454,6 +484,10 @@ bool Cdrom::route_xa(const uint8_t* raw) {
     if ((mode_ & kModeFilter) && (raw[16] != filter_file_ || raw[17] != filter_chan_)) return true;  // dropped
     if (xa_sink_) xa_sink_->xa_sector(raw);
     return true;
+}
+
+Scheduler::Callback Cdrom::sector_callback() {
+    return [this](int64_t due) { sector_tick(due); };
 }
 
 void Cdrom::sector_tick(int64_t due) {
@@ -471,7 +505,7 @@ void Cdrom::sector_tick(int64_t due) {
     last_lba_ = lba_++;
     have_last_ = true;
     std::copy_n(raw_.begin() + 12, 8, last_hdr_.begin());
-    sector_ev_ = sched_.schedule(due + period(), [this](int64_t d) { sector_tick(d); });
+    sector_ev_ = sched_.schedule(due + period(), sector_callback());
     if (stream_play_ || route_xa(raw_.data())) return;
 
     // A new data sector can only be announced when the previous interrupt was acknowledged and nothing is
@@ -483,6 +517,74 @@ void Cdrom::sector_tick(int64_t due) {
     ready_ = raw_;
     have_ready_ = true;
     enqueue(1, {stat()});
+}
+
+// ---- save state ----
+
+void Cdrom::io(StateIo& s) {
+    StateIo::Section sec(s, "CDRM");
+    s.io(index_);
+    s.io(enable_);
+    s.io(flag_);
+    s.io(line_);
+    s.io(busy_);
+    s.io(request_);
+    s.io(params_);
+    s.io(resp_);
+    s.io(resp_len_);
+    s.io(resp_pos_);
+    s.list(queue_, [&](Resp& r) {
+        s.io(r.int_no);
+        s.io(r.data);
+        s.io(r.first);
+    });
+    s.io(data_);
+    s.io(data_len_);
+    s.io(data_pos_);
+    s.io(ready_);
+    s.io(have_ready_);
+    s.io(volume_.ll);
+    s.io(volume_.lr);
+    s.io(volume_.rl);
+    s.io(volume_.rr);
+    s.io(pending_volume_.ll);
+    s.io(pending_volume_.lr);
+    s.io(pending_volume_.rl);
+    s.io(pending_volume_.rr);
+    s.io(adpcm_mute_);
+    s.io(muted_);
+    s.io(sound_map_);
+    s.io(sound_coding_);
+    s.io(state_);
+    s.io(stream_play_);
+    s.io(motor_on_);
+    s.io(shell_open_);
+    s.io(mode_);
+    s.io(filter_file_);
+    s.io(filter_chan_);
+    s.io(lba_);
+    s.io(last_lba_);
+    s.io(setloc_pending_);
+    s.io(setloc_lba_);
+    s.io(have_last_);
+    s.io(last_hdr_);
+    s.io(overruns_);
+    s.io(deferred_seq_);
+
+    if (s.loading()) {
+        for (auto& d : deferred_) sched_.cancel(d.ev);
+        deferred_.clear();
+    }
+    s.list(deferred_, [&](Deferred& d) {
+        s.io(d.kind);
+        s.io(d.a);
+        s.io(d.b);
+        s.io(d.data);
+        s.io(d.id);
+        sched_.io_event(s, d.ev, [this, id = d.id] { return deferred_callback(id); });
+    });
+    sched_.io_event(s, flush_ev_, [this] { return flush_callback(); });
+    sched_.io_event(s, sector_ev_, [this] { return sector_callback(); });
 }
 
 }  // namespace dw3

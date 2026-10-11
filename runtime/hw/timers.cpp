@@ -227,4 +227,26 @@ void Timers::write(uint32_t off, uint32_t value, int size) {
     }
 }
 
+void Timers::io(StateIo& s) {
+    StateIo::Section sec(s, "TMRS");
+    for (int n = 0; n < 3; ++n) {
+        State& t = t_[n];
+        s.io(t.value);
+        s.io(t.target);
+        s.io(t.mode);
+        s.io(t.reached_target);
+        s.io(t.reached_ffff);
+        s.io(t.toggled_low);
+        s.io(t.irq_used);
+        s.io(t.sync_open);
+        s.io(t.raise);
+        s.io(t.pulse_fired);
+        s.io(t.last);
+        s.io(t.origin);
+        s.io(t.pulse_until);
+        s.io(t.events);
+        sched_.io_event(s, t.wake, [this, n] { return Scheduler::Callback([this, n](int64_t due) { on_wake(n, due); }); });
+    }
+}
+
 }  // namespace dw3

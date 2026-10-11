@@ -24,6 +24,7 @@
 #include "dw3/sio.h"
 #include "dw3/soft_rasterizer.h"
 #include "dw3/spu.h"
+#include "dw3/state.h"
 #include "dw3/timers.h"
 #include "dw3/video_timing.h"
 #include "dw3/xa.h"
@@ -35,6 +36,30 @@ namespace dw3 {
 using FatalHandler = std::function<void(const std::string& message)>;
 void set_fatal_handler(FatalHandler h);
 [[noreturn]] void fatal(const std::string& message);
+
+// Save states.
+//
+// A state is guest state only: RAM, registers, hardware blocks and one guest PC, the label the code was about to
+// jump to at an event check. It does not depend on how the recompiler laid out the host code.
+//
+// The recompiled game keeps its call stack on the host stack, but the guest call chain is also in guest memory:
+// every non-leaf function saved $ra in its frame, and a leaf keeps it in r31. So only the innermost function has
+// to be resumed. Machine::resume enters it with RecompContext::resume set to the PC (each generated function
+// starts with a dispatch from that label address to the label) and, when it returns, continues at the address its
+// `jr $ra` jumped to by entering whichever function has a label there, and so on. Generated code provides the
+// labels: every return point of a call and every backward-jump target (RecompSegment::resume). The emitter
+// refuses delay slots that overwrite $ra on a return, so r31 still holds the return target once the function has
+// returned. Frames the host stack had above the innermost function are never rebuilt; the guest returns into them
+// through the dispatcher instead, which is equivalent because generated code keeps no state outside the context.
+//
+// A state can only be taken at a safe point: the event check of a backward jump (after due events and any
+// interrupt were handled) while no native kernel frame is active (no interrupt handler, event callback or
+// WaitEvent in progress; see Bios::host_depth). Machine::run_at_safe_point queues work for the next such moment;
+// the game reaches one every frame or so, because it spins in recompiled VSync/DrawSync loops.
+//
+// Loading unwinds whatever host stack exists (the load throws StateRestored out of the safe point to the code that
+// started the game, which then calls Machine::resume).
+struct StateRestored {};
 
 class Machine {
 public:
@@ -93,6 +118,26 @@ public:
     std::function<void(RecompContext&)> on_interrupt;
     std::function<void(RecompContext&, uint32_t pc)> on_syscall;
 
+    // ---- Save states (see the comment above StateRestored) ----
+
+    // Writes or reads the whole machine except the native BIOS and host-owned data (disc, memory cards, pads).
+    // Throws StateError; saving also throws when not at a safe point. After a load, call resume() (directly or by
+    // unwinding to the code that started the game) to continue. Overlays are matched by name, so a state loads in
+    // any build that has the overlays it was taken with and a label at the saved PC.
+    void io(StateIo& s);
+    // True inside the event check of a backward jump with no native kernel frame active.
+    bool at_safe_point();
+    // Reports whether native kernel frames are active (installed by the BIOS); null means none.
+    std::function<bool()> kernel_idle;
+    // Runs `fn` at the next safe point, at the end of service_events. Actions may throw (StateRestored).
+    void run_at_safe_point(std::function<void()> fn) { safe_actions_.push_back(std::move(fn)); }
+    // True after a load, until resume() has been called.
+    bool resume_pending() const { return resume_pending_; }
+    // Continues the loaded state; returns when the guest returns to address 0 (the game entry returned).
+    void resume();
+    // The function that has a resume label at `pc` in the resident segment covering it, or null.
+    RecompFunc find_resume(uint32_t pc);
+
     // Diagnostics.
     uint64_t lookups() const { return lookups_; }
     uint64_t identifications() const { return identifications_; }
@@ -126,6 +171,11 @@ private:
     std::vector<bool> verified_;  // resident and confirmed since last invalidate
     uint64_t lookups_ = 0, identifications_ = 0;
     std::unordered_map<uint32_t, RecompFunc> natives_;
+    void run_safe_actions();
+    std::vector<std::function<void()>> safe_actions_;
+    bool resume_pending_ = false;
+    uint32_t resume_pc_ = 0;
+    std::vector<uint32_t> resume_counts_;  // entries of each segment's resume table
     std::array<uint32_t, 16> mem_ctrl_{};  // 0x1F801000-0x1F80103F (delays/sizes), stored only
     uint32_t ram_size_ = 0x00000B88;       // 0x1F801060
     uint32_t cache_ctrl_ = 0;              // 0xFFFE0130

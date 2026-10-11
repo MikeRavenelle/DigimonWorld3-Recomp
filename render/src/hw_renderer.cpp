@@ -11,6 +11,8 @@
 #include "dw3/vertex_builder.h"
 #include "dw3/vram_regions.h"
 #include "plume_render_interface.h"
+#include "shaders/osd.frag.h"
+#include "shaders/osd.vert.h"
 #include "shaders/present.frag.h"
 #include "shaders/present.vert.h"
 #include "shaders/psx_draw.frag.h"
@@ -52,6 +54,15 @@ struct PresentParams {
     int32_t layer;  // show the display layer where it is valid
 };
 static_assert(sizeof(PresentParams) == 64);
+
+// Push constants of the notification pass (see osd.vert).
+struct OsdParams {
+    float dest[4];
+    float window[2];
+    float opacity;
+    float pad;
+};
+static_assert(sizeof(OsdParams) == 32);
 
 // Push constants of the VRAM copy/fill pass (see vram_copy.frag).
 struct CopyParams {
@@ -128,10 +139,10 @@ struct HwRenderer::Impl {
                         nat_layout = RenderTextureLayout::UNKNOWN, hi_layout = RenderTextureLayout::UNKNOWN,
                         hi_tex_layout = RenderTextureLayout::UNKNOWN;
 
-    std::unique_ptr<RenderShader> draw_vs, draw_fs, present_vs, present_fs, copy_vs, copy_fs;
-    std::unique_ptr<RenderPipelineLayout> draw_layout, present_layout, copy_layout;
-    std::unique_ptr<RenderPipeline> draw_pipeline, present_pipeline, copy_pipeline;
-    std::unique_ptr<RenderDescriptorSet> draw_set, vram_set, present_set, display_set, nat_set;
+    std::unique_ptr<RenderShader> draw_vs, draw_fs, present_vs, present_fs, copy_vs, copy_fs, osd_vs, osd_fs;
+    std::unique_ptr<RenderPipelineLayout> draw_layout, present_layout, copy_layout, osd_layout;
+    std::unique_ptr<RenderPipeline> draw_pipeline, present_pipeline, copy_pipeline, osd_pipeline;
+    std::unique_ptr<RenderDescriptorSet> draw_set, vram_set, present_set, display_set, nat_set, osd_set;
     RenderInputSlot input_slot;
     std::vector<RenderInputElement> input_elements;
 
@@ -156,6 +167,12 @@ struct HwRenderer::Impl {
     std::unique_ptr<RenderBuffer> capture_buf;
     RenderTextureLayout capture_layout = RenderTextureLayout::UNKNOWN;
     uint32_t capture_w = 0, capture_h = 0;
+
+    // Notification image: `osd_tex` holds the last uploaded overlay.
+    std::unique_ptr<RenderTexture> osd_tex;
+    RenderTextureLayout osd_tex_layout = RenderTextureLayout::UNKNOWN;
+    uint32_t osd_w = 0, osd_h = 0;
+    uint64_t osd_serial = 0;
 
     // ---- setup -------------------------------------------------------------------------------------
 
@@ -220,6 +237,8 @@ struct HwRenderer::Impl {
 
     void draw_display(RenderFramebuffer* fb, uint32_t w, uint32_t h, const DisplayState& d, ScaleMode mode, bool linear);
     bool ensure_capture(uint32_t w, uint32_t h);
+    bool upload_overlay(const HwOverlay& o);
+    void draw_overlay(uint32_t w, uint32_t h, const HwOverlay& o);
 };
 
 // -------------------------------------------------------------------------------------------------------
@@ -327,7 +346,9 @@ bool HwRenderer::Impl::create_pipelines() {
     present_fs = device->createShader(shaders::present_frag_spv, shaders::present_frag_spv_size, "main", fmt);
     copy_vs = device->createShader(shaders::vram_copy_vert_spv, shaders::vram_copy_vert_spv_size, "main", fmt);
     copy_fs = device->createShader(shaders::vram_copy_frag_spv, shaders::vram_copy_frag_spv_size, "main", fmt);
-    if (!draw_vs || !draw_fs || !present_vs || !present_fs || !copy_vs || !copy_fs) return false;
+    osd_vs = device->createShader(shaders::osd_vert_spv, shaders::osd_vert_spv_size, "main", fmt);
+    osd_fs = device->createShader(shaders::osd_frag_spv, shaders::osd_frag_spv_size, "main", fmt);
+    if (!draw_vs || !draw_fs || !present_vs || !present_fs || !copy_vs || !copy_fs || !osd_vs || !osd_fs) return false;
 
     const RenderDescriptorRange range(RenderDescriptorRangeType::TEXTURE, 0, 1);
     const RenderDescriptorSetDesc set_desc(&range, 1);
@@ -429,7 +450,28 @@ bool HwRenderer::Impl::create_pipelines() {
         pd.primitiveTopology = RenderPrimitiveTopology::TRIANGLE_LIST;
         copy_pipeline = device->createGraphicsPipeline(pd);
     }
-    return draw_layout && draw_pipeline && present_layout && present_pipeline && copy_layout && copy_pipeline;
+    {
+        const RenderPushConstantRange pc(0, 0, 0, sizeof(OsdParams),
+                                         RenderShaderStageFlag::VERTEX | RenderShaderStageFlag::PIXEL);
+        RenderPipelineLayoutDesc ld;
+        ld.pushConstantRanges = &pc;
+        ld.pushConstantRangesCount = 1;
+        ld.descriptorSetDescs = &set_desc;
+        ld.descriptorSetDescsCount = 1;
+        osd_layout = device->createPipelineLayout(ld);
+
+        RenderGraphicsPipelineDesc pd;
+        pd.pipelineLayout = osd_layout.get();
+        pd.vertexShader = osd_vs.get();
+        pd.pixelShader = osd_fs.get();
+        pd.renderTargetFormat[0] = kSwapFormat;
+        pd.renderTargetBlend[0] = RenderBlendDesc::AlphaBlend();
+        pd.renderTargetCount = 1;
+        pd.primitiveTopology = RenderPrimitiveTopology::TRIANGLE_LIST;
+        osd_pipeline = device->createGraphicsPipeline(pd);
+    }
+    return draw_layout && draw_pipeline && present_layout && present_pipeline && copy_layout && copy_pipeline &&
+           osd_layout && osd_pipeline;
 }
 
 bool HwRenderer::Impl::create_swapchain(const NativeWindow& window) {
@@ -780,6 +822,55 @@ void HwRenderer::Impl::draw_display(RenderFramebuffer* fb, uint32_t w, uint32_t 
     ++stats.draw_calls;
 }
 
+// Copies the overlay image into `osd_tex` (recreated when its size changes). Must run before the frame's render
+// pass is recorded.
+bool HwRenderer::Impl::upload_overlay(const HwOverlay& o) {
+    const uint32_t w = static_cast<uint32_t>(o.w), h = static_cast<uint32_t>(o.h);
+    if (!osd_tex || osd_w != w || osd_h != h) {
+        wait_all();  // earlier frames may still sample the old texture
+        osd_set.reset();
+        const RenderDescriptorRange range(RenderDescriptorRangeType::TEXTURE, 0, 1);
+        osd_tex = device->createTexture(RenderTextureDesc::Texture2D(w, h, 1, kVramFormat));
+        if (!osd_tex) return false;
+        osd_set = device->createDescriptorSet(RenderDescriptorSetDesc(&range, 1));
+        osd_set->setTexture(0, osd_tex.get(), RenderTextureLayout::SHADER_READ);
+        osd_tex_layout = RenderTextureLayout::UNKNOWN;
+        osd_w = w;
+        osd_h = h;
+        osd_serial = 0;
+    } else if (osd_serial == o.serial) {
+        return true;
+    }
+    const uint32_t pitch = upload_row_pixels(w);
+    const std::size_t off = staging_alloc(static_cast<std::size_t>(pitch) * h * 4);
+    auto* dst = reinterpret_cast<uint32_t*>(staging_map + off);
+    for (uint32_t y = 0; y < h; ++y) std::memcpy(dst + static_cast<std::size_t>(y) * pitch, o.rgba + static_cast<std::size_t>(y) * w, w * 4);
+    transition(osd_tex.get(), osd_tex_layout, RenderTextureLayout::COPY_DEST, true);
+    cmd->copyTextureRegion(RenderTextureCopyLocation::Subresource(osd_tex.get()),
+                           RenderTextureCopyLocation::PlacedFootprint(staging_buf, kVramFormat, w, h, 1, pitch, off), 0, 0, 0);
+    transition(osd_tex.get(), osd_tex_layout, RenderTextureLayout::SHADER_READ);
+    osd_serial = o.serial;
+    return true;
+}
+
+// Alpha-blends the uploaded overlay into the framebuffer that is already bound by draw_display.
+void HwRenderer::Impl::draw_overlay(uint32_t w, uint32_t h, const HwOverlay& o) {
+    OsdParams p{};
+    p.dest[0] = static_cast<float>(o.x);
+    p.dest[1] = static_cast<float>(o.y);
+    p.dest[2] = static_cast<float>(o.w);
+    p.dest[3] = static_cast<float>(o.h);
+    p.window[0] = static_cast<float>(w);
+    p.window[1] = static_cast<float>(h);
+    p.opacity = o.opacity;
+    cmd->setGraphicsPipelineLayout(osd_layout.get());
+    cmd->setPipeline(osd_pipeline.get());
+    cmd->setGraphicsDescriptorSet(osd_set.get(), 0);
+    cmd->setGraphicsPushConstants(0, &p);
+    cmd->drawInstanced(6, 1, 0, 0);
+    ++stats.draw_calls;
+}
+
 bool HwRenderer::Impl::ensure_capture(uint32_t w, uint32_t h) {
     if (capture_tex && capture_w == w && capture_h == h) return true;
     capture_fb.reset();
@@ -976,10 +1067,11 @@ bool HwRenderer::read_display(const VramRect& r, std::vector<uint32_t>& rgba) {
 }
 
 bool HwRenderer::present(const DisplayState& display, ScaleMode mode, bool linear, std::vector<uint32_t>* capture,
-                         int* capture_w, int* capture_h) {
+                         int* capture_w, int* capture_h, const HwOverlay* overlay) {
     Impl& m = *impl_;
     if (!m.swap) return false;
     m.record_draws();
+    if (overlay && (!overlay->rgba || overlay->w <= 0 || overlay->h <= 0 || !m.upload_overlay(*overlay))) overlay = nullptr;
     if (m.swap->needsResize()) {
         m.wait_all();
         m.swap_fbs.clear();
@@ -1007,6 +1099,7 @@ bool HwRenderer::present(const DisplayState& display, ScaleMode mode, bool linea
     RenderTexture* target = m.swap->getTexture(index);
     m.cmd->barriers(RenderBarrierStage::ALL, RenderTextureBarrier(target, RenderTextureLayout::COLOR_WRITE));
     m.draw_display(m.swap_fbs[index].get(), w, h, display, mode, linear);
+    if (overlay) m.draw_overlay(w, h, *overlay);
 
     const bool grab = capture != nullptr && m.ensure_capture(w, h);
     if (grab) {

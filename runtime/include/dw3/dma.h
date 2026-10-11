@@ -11,6 +11,7 @@
 #include "dw3/bus.h"
 #include "dw3/irq.h"
 #include "dw3/scheduler.h"
+#include "dw3/state.h"
 
 namespace dw3 {
 
@@ -65,6 +66,10 @@ public:
     std::function<void(uint32_t addr, uint32_t len)> on_ram_written;
     // Diagnostics (loop guard, invalid modes). Default: ignored.
     std::function<void(const std::string&)> on_error;
+
+    // Save state: channel registers, DPCR/DICR and the completion event of each running transfer. Transfers move
+    // their data when they start, so nothing else is in flight. Attached devices are wiring, not state.
+    void io(StateIo& s);
 
 private:
     struct Channel {

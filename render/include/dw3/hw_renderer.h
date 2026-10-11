@@ -67,6 +67,16 @@ struct HwOptions {
     bool precise_geometry = false;
 };
 
+// A small RGBA8 image (red in the lowest byte, straight alpha) blended over the window at (x, y) in window pixels.
+// `serial` changes whenever the pixels do, so the upload is skipped for an unchanged image.
+struct HwOverlay {
+    const uint32_t* rgba = nullptr;
+    int w = 0, h = 0;
+    int x = 0, y = 0;
+    uint64_t serial = 0;
+    float opacity = 1.0f;
+};
+
 struct HwStats {
     uint64_t draw_calls = 0, vertices = 0, uploads = 0, readbacks = 0, copy_syncs = 0, submits = 0, fills = 0, copies = 0;
 };
@@ -96,8 +106,9 @@ public:
 
     // Shows the display area in the window and ends the frame. When `capture` is given the window image is also
     // read back into it (RGBA8, `capture_w` x `capture_h`). Returns false if nothing could be presented.
+    // `overlay` is blended over the window image after the picture; it is not part of `capture`.
     bool present(const DisplayState& display, ScaleMode mode, bool linear, std::vector<uint32_t>* capture = nullptr,
-                 int* capture_w = nullptr, int* capture_h = nullptr);
+                 int* capture_w = nullptr, int* capture_h = nullptr, const HwOverlay* overlay = nullptr);
     void set_vsync(bool enabled);
 
     // Reads the whole GPU-side VRAM into `out` (1024x512 words). For tests and diagnostics.

@@ -1,11 +1,12 @@
 name = "save_load_roundtrip"
 description = "New Game, walk to the Asuka Inn save officer, save to slot 1, power-cycle keeping the card, Continue, load slot 1 and resume in the Inn."
-include = ["common/new_game.toml"]
+start_state = "new_game.state"   # written by new_game_state.toml
+start_frame = 1473
 frames = 12793
 memcard = "blank"
 
-# The shared prefix (common/new_game.toml) plays New Game up to Asuka City Central Sector and documents the RAM
-# words used below. From there the script walks to the Lamb Chop door and back and on to the Asuka Inn (1F), where
+# The start state is New Game up to Asuka City Central Sector (new_game_state.toml plays the shared prefix
+# common/new_game.toml, which documents the RAM words used below). From there the script walks to the Lamb Chop door and back and on to the Asuka Inn (1F), where
 # the Guardromon save officer stands on the left. Talking to it plays two movies and opens the SAVE screen: slot 1,
 # create new data, execute. A [[reboot]] then power-cycles the machine with the same card image; the title
 # screen's Continue leads to the LOAD screen, slot 1, execute, and the game resumes in the Inn.

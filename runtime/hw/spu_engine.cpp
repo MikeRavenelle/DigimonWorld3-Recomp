@@ -221,17 +221,65 @@ void Spu::run_to(int64_t now) {
     }
 }
 
-void Spu::schedule_batch(int64_t at) {
-    sched_->schedule(at, [this](int64_t due) {
+Scheduler::Callback Spu::batch_callback() {
+    return [this](int64_t due) {
         run_to(due);
         schedule_batch(due + kBatchSamples * kCyclesPerSample);
-    });
+    };
 }
+
+void Spu::schedule_batch(int64_t at) { batch_event_ = sched_->schedule(at, batch_callback()); }
 
 void Spu::start(Scheduler& sched) {
     sched_ = &sched;
     next_cycle_ = sched.now();
     schedule_batch(sched.now() + kBatchSamples * kCyclesPerSample);
+}
+
+void Spu::io(StateIo& s) {
+    StateIo::Section sec(s, "SPU0");
+    s.io(ram_);
+    s.io(regs_);
+    s.io(transfer_addr_);
+    s.io(key_on_);
+    s.io(endx_);
+    for (Voice& v : voices_) {
+        s.io(v.addr);
+        s.io(v.repeat);
+        s.io(v.counter);
+        s.io(v.buf);
+        s.io(v.s1);
+        s.io(v.s2);
+        s.io(v.flags);
+        s.io(v.phase);
+        s.io(v.level);
+        s.io(v.adsr_counter);
+        s.io(v.out);
+        for (Sweep& w : v.vol) {
+            s.io(w.reg);
+            s.io(w.level);
+            s.io(w.counter);
+        }
+    }
+    for (Sweep& w : main_vol_) {
+        s.io(w.reg);
+        s.io(w.level);
+        s.io(w.counter);
+    }
+    noise_.io(s);
+    reverb_.io(s);
+    s.io(capture_pos_);
+    s.io(next_cycle_);
+    s.io(frames_);
+
+    bool batching = !s.loading() && sched_ && sched_->is_pending(batch_event_);
+    s.io(batching);
+    if (s.loading()) {
+        audio_.clear();
+        if (batching && !sched_) throw StateError("SPU state has timed generation but start() was not called");
+        if (!batching) batch_event_ = kNoEvent;
+    }
+    if (batching && sched_) sched_->io_event(s, batch_event_, [this] { return batch_callback(); });
 }
 
 }  // namespace dw3

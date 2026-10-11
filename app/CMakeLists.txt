@@ -1,5 +1,6 @@
 add_executable(dw3recomp main.cpp
     present/presenter.cpp
+    present/osd.cpp
     present/software_presenter.cpp
     present/hw_presenter.cpp
     present/native_window.cpp)

@@ -63,11 +63,21 @@ bool wildcard(std::string_view pat, std::string_view str) {
 
 }  // namespace
 
-void Bios::card_async(uint32_t spec, bool software) {
-    m_.scheduler().schedule_in(kCardLatency, [this, spec, software](int64_t) {
+Scheduler::Callback Bios::card_completion(PendingCard* p) {
+    return [this, p](int64_t) {
+        uint32_t spec = p->spec;
+        bool software = p->software;
+        pending_cards_.remove_if([p](const PendingCard& e) { return &e == p; });
         if (software) deliver_event(kClassSwCard, spec);
         deliver_event(kClassHwCard, spec);
-    });
+    };
+}
+
+void Bios::card_async(uint32_t spec, bool software) {
+    PendingCard& p = pending_cards_.emplace_back();
+    p.spec = spec;
+    p.software = software;
+    p.ev = m_.scheduler().schedule_in(kCardLatency, card_completion(&p));
 }
 
 void Bios::card_modified(int slot) {

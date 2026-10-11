@@ -524,4 +524,95 @@ void Gpu::snapshot_vram(std::vector<uint32_t>& rgba) {
     for (std::size_t i = 0; i < vram_.size(); ++i) rgba[i] = rgb15_to_rgba(vram_[i]);
 }
 
+namespace {
+
+void io_draw_state(StateIo& s, DrawState& d) {
+    s.io(d.tex_base_x);
+    s.io(d.tex_base_y);
+    s.io(d.semi_mode);
+    s.io(d.depth);
+    s.io(d.dither);
+    s.io(d.draw_to_display);
+    s.io(d.texture_disable);
+    s.io(d.rect_flip_x);
+    s.io(d.rect_flip_y);
+    s.io(d.win_mask_x);
+    s.io(d.win_mask_y);
+    s.io(d.win_off_x);
+    s.io(d.win_off_y);
+    s.io(d.area_x1);
+    s.io(d.area_y1);
+    s.io(d.area_x2);
+    s.io(d.area_y2);
+    s.io(d.off_x);
+    s.io(d.off_y);
+    s.io(d.set_mask);
+    s.io(d.check_mask);
+}
+
+void io_display_state(StateIo& s, DisplayState& d) {
+    s.io(d.enabled);
+    s.io(d.color24);
+    s.io(d.interlaced);
+    s.io(d.pal);
+    s.io(d.vram_x);
+    s.io(d.vram_y);
+    s.io(d.h_start);
+    s.io(d.h_end);
+    s.io(d.v_start);
+    s.io(d.v_end);
+    s.io(d.width);
+    s.io(d.height);
+}
+
+void io_vertex(StateIo& s, GpuVertex& v) {
+    s.io(v.x);
+    s.io(v.y);
+    s.io(v.r);
+    s.io(v.g);
+    s.io(v.b);
+    s.io(v.u);
+    s.io(v.v);
+    s.io(v.fx);
+    s.io(v.fy);
+    s.io(v.w);
+    s.io(v.precise);
+}
+
+}  // namespace
+
+void Gpu::io(StateIo& s) {
+    StateIo::Section sec(s, "GPU0");
+    if (!s.loading() && raster_) raster_->vram_read_begin(vram_, VramRect{});
+    s.io(vram_);
+    if (vram_.size() != static_cast<std::size_t>(kVramWidth) * kVramHeight) throw StateError("GPU state: bad VRAM size");
+    io_draw_state(s, draw_);
+    io_display_state(s, display_);
+    s.io(state_);
+    s.io(fifo_);
+    s.io(needed_);
+    s.io(xfer_x);
+    s.io(xfer_y);
+    s.io(xfer_w);
+    s.io(xfer_h);
+    s.io(xfer_cx);
+    s.io(xfer_cy);
+    s.io(store_active_);
+    s.io(line_flags_.textured);
+    s.io(line_flags_.raw_texture);
+    s.io(line_flags_.semi_transparent);
+    s.io(line_flags_.gouraud);
+    s.io(line_flags_.clut);
+    io_vertex(s, line_last_);
+    s.io(line_color_);
+    s.io(line_expect_color_);
+    s.io(gpuread_);
+    s.io(stat_);
+    s.io(dma_dir_);
+    s.io(tex_disable_allowed_);
+    s.io(commands_);
+    s.io(primitives_);
+    if (s.loading() && raster_) raster_->vram_written(vram_, VramRect{});
+}
+
 }  // namespace dw3

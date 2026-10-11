@@ -16,7 +16,7 @@ if(DW3_HAVE_PLUME)
     set(SHADER_HEADERS)
     # name|source|extra glslang options. The display layer variant of the draw shader writes a second target.
     foreach(entry psx_draw.vert|psx_draw.vert psx_draw.frag|psx_draw.frag psx_draw_layer.frag|psx_draw.frag|-DDISPLAY_LAYER
-                  present.vert|present.vert present.frag|present.frag vram_copy.vert|vram_copy.vert vram_copy.frag|vram_copy.frag)
+                  present.vert|present.vert present.frag|present.frag osd.vert|osd.vert osd.frag|osd.frag vram_copy.vert|vram_copy.vert vram_copy.frag|vram_copy.frag)
         string(REPLACE "|" ";" parts "${entry}")
         list(GET parts 0 shader)
         list(GET parts 1 source)

@@ -90,6 +90,12 @@ public:
     const spu_dsp::Noise& noise() const { return noise_; }
     const spu_dsp::Reverb& reverb() const { return reverb_; }
 
+    // Save state (see state.h). Covers SPU RAM, registers, voices, mixer, noise, reverb, capture position, the
+    // sample clock and the pending batch event. Samples already queued in audio() are not state: loading clears
+    // them. When the state was saved from a started SPU, load into one on which start() has already been called
+    // (with the Scheduler whose own state is loaded first); a state without timed generation loads either way.
+    void io(StateIo& s);
+
 private:
     // Volume with direct or sweep mode (voice L/R and main L/R).
     struct Sweep {
@@ -127,6 +133,7 @@ private:
     void next_block(Voice& v, int index);
     void envelope(Voice& v, uint16_t adsr1, uint16_t adsr2);
     void schedule_batch(int64_t at);
+    Scheduler::Callback batch_callback();
     uint16_t vreg(int v, unsigned r) const { return regs_[static_cast<std::size_t>(v) * 8 + r]; }
 
     IrqController& irq_;
@@ -143,6 +150,7 @@ private:
     spu_dsp::Reverb reverb_;
     unsigned capture_pos_ = 0;
     int64_t next_cycle_ = 0;
+    EventId batch_event_ = kNoEvent;
     uint64_t frames_ = 0;
     AudioRing audio_;
 };

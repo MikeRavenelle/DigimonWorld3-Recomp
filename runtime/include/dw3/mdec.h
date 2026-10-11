@@ -17,6 +17,7 @@
 #include "dw3/bus.h"
 #include "dw3/dma.h"
 #include "dw3/scheduler.h"
+#include "dw3/state.h"
 
 namespace dw3 {
 
@@ -50,6 +51,10 @@ public:
     const std::array<uint8_t, 64>& chroma_table() const { return qt_chroma_; }
     const std::array<int32_t, 64>& scale_table() const { return scale_; }  // stored already >> 3
     uint64_t macroblocks_decoded() const { return mb_count_; }
+
+    // Save state: control/command state, tables, the block decoder, queued output with its ready times and the
+    // pending wake-up event.
+    void io(StateIo& s);
 
     // Standard IDCT matrix (what libpress uploads): 0x5A82 for row 0, 32768*cos((2x+1)*u*pi/16) otherwise.
     static std::array<int16_t, 64> default_scale_table();

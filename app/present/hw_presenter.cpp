@@ -14,6 +14,7 @@ std::unique_ptr<HwPresenter> HwPresenter::create(SDL_Window* window, const Prese
 #if DW3_HW_RENDERER
     const dw3::NativeWindow native = describe_window(window);
     std::unique_ptr<HwPresenter> p(new HwPresenter());
+    p->window_ = window;
     p->options_ = options;
     dw3::HwOptions hw;
     hw.true_color = options.true_color;
@@ -41,7 +42,19 @@ void HwPresenter::attach(dw3::Gpu& gpu) { gpu.set_rasterizer(renderer_.get()); }
 
 bool HwPresenter::present(dw3::Gpu& gpu, Capture* capture) {
     int w = 0, h = 0;
-    const bool ok = renderer_->present(gpu.display(), options_.scale, options_.linear, capture ? &capture->rgba : nullptr, &w, &h);
+    int ww = 0, wh = 0;
+    SDL_GetWindowSizeInPixels(window_, &ww, &wh);
+    dw3::HwOverlay overlay;
+    const OsdImage* img = osd_.frame(ww, wh, SDL_GetTicks(), overlay.opacity);
+    if (img) {
+        overlay.rgba = img->rgba.data();
+        overlay.w = img->w;
+        overlay.h = img->h;
+        overlay.x = overlay.y = osd_.margin();
+        overlay.serial = osd_.serial();
+    }
+    const bool ok = renderer_->present(gpu.display(), options_.scale, options_.linear, capture ? &capture->rgba : nullptr, &w, &h,
+                                       img ? &overlay : nullptr);
     if (capture) {
         capture->w = w;
         capture->h = h;

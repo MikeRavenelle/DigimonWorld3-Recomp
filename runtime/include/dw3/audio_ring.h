@@ -9,6 +9,8 @@
 #include <span>
 #include <vector>
 
+#include "dw3/state.h"
+
 namespace dw3 {
 
 class AudioRing {
@@ -47,6 +49,33 @@ public:
     }
 
     void clear() { head_ = count_ = 0; }
+
+    // Save state. Only the queued frames are stored, oldest first. The capacity is configuration, not state: a
+    // ring smaller than the stored queue keeps its newest frames, as if it had overrun.
+    void io(StateIo& s) {
+        StateIo::Section sec(s, "ARNG");
+        uint64_t cap = capacity(), n = count_;
+        s.io(cap);
+        s.io(n);
+        if (n > cap) throw StateError("audio ring holds more frames than its capacity");
+        if (s.loading()) {
+            clear();
+            for (uint64_t i = 0; i < n; ++i) {
+                int16_t f[2] = {};
+                s.io(f[0]);
+                s.io(f[1]);
+                push(f[0], f[1]);
+            }
+        } else {
+            for (std::size_t i = 0; i < n; ++i) {
+                std::size_t at = (head_ + i) % capacity();
+                s.io(buf_[at * 2]);
+                s.io(buf_[at * 2 + 1]);
+            }
+        }
+        s.io(overruns_);
+        s.io(underruns_);
+    }
 
 private:
     std::vector<int16_t> buf_;

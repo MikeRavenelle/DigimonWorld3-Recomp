@@ -106,6 +106,7 @@ int Bios::event_index(uint32_t h) const {
 }
 
 void Bios::deliver_event(uint32_t cls, uint32_t spec) {
+    DepthGuard depth(*this);
     for (auto& e : events_) {
         if (e.status != kEvStActive || e.cls != cls || e.spec != spec) continue;
         if (e.mode == kEvMdNoIntr) {
@@ -121,6 +122,7 @@ void Bios::deliver_event(uint32_t cls, uint32_t spec) {
 }
 
 void Bios::wait_until(RecompContext& c, const std::function<bool()>& done) {
+    DepthGuard depth(*this);
     // Kernel busy-waits: advance emulated time event by event so interrupts keep flowing.
     while (!done()) {
         if (c.next_event == INT64_MAX) fatal("WaitEvent would wait forever (no pending hardware events)");
@@ -152,6 +154,7 @@ void Bios::poll_pads() {
 }
 
 void Bios::run_int_chains(RecompContext& c) {
+    DepthGuard depth(*this);
     // Each SysEnqIntRP node: +0 next, +4 func2, +8 func1. func2(v0) runs when func1 returns nonzero.
     for (uint32_t head : int_chain_) {
         for (uint32_t node = head, guard = 0; node && guard < 64; ++guard) {
@@ -173,6 +176,7 @@ void Bios::run_int_chains(RecompContext& c) {
 
 void Bios::interrupt(RecompContext& c) {
     if (in_exception_) return;
+    DepthGuard depth(*this);
     in_exception_ = true;
     ++interrupts_;
     SavedRegs saved(c);
