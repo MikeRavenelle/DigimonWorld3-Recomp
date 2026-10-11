@@ -2,6 +2,7 @@
 
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <cstring>
 #include <functional>
 #include <stdexcept>
@@ -1555,15 +1556,15 @@ TEST_F(BiosTest, FileWriteToOtherDescriptorsFails) {
     EXPECT_FALSE(called);
 }
 
-TEST_F(BiosTest, FileOpenSeekReadFail) {
+TEST_F(BiosTest, FileFunctionsFailOnNonCardPathsAndDescriptors) {
     for (uint32_t fn : {0x32u, 0x33u, 0x34u}) EXPECT_EQ(b0(fn, 1, 2, 3), 0xFFFFFFFFu) << fn;
 }
 
-TEST_F(BiosTest, FileCloseEchoesDescriptor) {
-    EXPECT_EQ(b0(0x36, 5), 5u);
+TEST_F(BiosTest, FileCloseOfUnopenedDescriptorFails) {
+    EXPECT_EQ(b0(0x36, 5), 0xFFFFFFFFu);
 }
 
-TEST_F(BiosTest, FirstAndNextFileReturnNone) {
+TEST_F(BiosTest, FirstAndNextFileWithoutCardReturnNone) {
     ctx().r[2] = 0x123;
     EXPECT_EQ(b0(0x42, kData, kData), 0u);
     ctx().r[2] = 0x123;
@@ -1724,3 +1725,937 @@ TEST_F(BiosTest, GetC0AndB0TableReturnKernelAddresses) {
     call(0xB0, 0x57);
     EXPECT_EQ(m.ctx().r[2], 0x00000874u);
 }
+
+// ---- Memory cards -----------------------------------------------------------------------------
+
+#include <array>
+
+#include "dw3/memcard.h"
+#include "hw_test_util.h"
+
+namespace {
+
+namespace mc = dw3::memcard;
+
+constexpr uint32_t kSpecIoe = 0x0004, kSpecTimeout = 0x0100, kSpecNew = 0x2000, kSpecError = 0x8000;
+constexpr uint32_t kFread = 1, kFwrite = 2, kFcreat = 0x200, kFasync = 0x8000;
+constexpr uint32_t kPath = 0x80101000, kPath2 = 0x80101100, kBuf = 0x80102000, kEntry = 0x80103000;
+constexpr uint32_t kFail = 0xFFFFFFFFu;
+
+uint32_t creat(uint32_t blocks, uint32_t flags = kFwrite) { return (blocks << 16) | kFcreat | flags; }
+
+std::vector<uint8_t> pat(std::size_t n, uint8_t seed = 1) {
+    std::vector<uint8_t> v(n);
+    for (std::size_t i = 0; i < n; ++i) v[i] = static_cast<uint8_t>(seed + i * 13 + (i >> 7));
+    return v;
+}
+
+class CardBiosTest : public BiosTest {
+protected:
+    CardBiosTest() {
+        for (auto& c : cards) c.assign(mc::kCardSize, 0);
+        bios.on_card_write = [this](int slot) { writes.push_back(slot); };
+        for (int i = 0; i < 4; ++i) {
+            sw[i] = open_enabled(kClassSw, specs[i], Bios::kEvMdNoIntr);
+            hw[i] = open_enabled(kClassHw, specs[i], Bios::kEvMdNoIntr);
+        }
+    }
+    void insert(int slot, bool format = true) {
+        auto& c = cards[static_cast<std::size_t>(slot)];
+        if (format) mc::format_memory_card(std::span<uint8_t, mc::kCardSize>(c.data(), c.size()));
+        ASSERT_TRUE(m.sio().attach_card(slot, c));
+    }
+    void str(uint32_t addr, const std::string& s) {
+        for (std::size_t i = 0; i <= s.size(); ++i) dw3_write8(&ctx(), addr + static_cast<uint32_t>(i), i < s.size() ? s[i] : 0);
+    }
+    void put(uint32_t addr, const std::vector<uint8_t>& d) {
+        for (std::size_t i = 0; i < d.size(); ++i) dw3_write8(&ctx(), addr + static_cast<uint32_t>(i), d[i]);
+    }
+    std::vector<uint8_t> get(uint32_t addr, std::size_t n) {
+        std::vector<uint8_t> v(n);
+        for (std::size_t i = 0; i < n; ++i) v[i] = static_cast<uint8_t>(dw3_read8(&ctx(), addr + static_cast<uint32_t>(i)));
+        return v;
+    }
+    // Lets the card latency elapse and reports which (class, spec) events fired, e.g. "SW:IOE HW:IOE".
+    std::string settle() {
+        ctx().cycles += 20000;
+        m.service_events();
+        std::string r;
+        static const char* names[4] = {"IOE", "ERR", "TMO", "NEW"};
+        for (int i = 0; i < 4; ++i)
+            if (b0(0x0B, sw[i])) r += std::string(r.empty() ? "" : " ") + "SW:" + names[i];
+        for (int i = 0; i < 4; ++i)
+            if (b0(0x0B, hw[i])) r += std::string(r.empty() ? "" : " ") + "HW:" + names[i];
+        return r;
+    }
+    uint32_t open(const std::string& path, uint32_t mode) {
+        str(kPath, path);
+        return b0(0x32, kPath, mode);
+    }
+    uint32_t err() { return b0(0x54); }
+    mc::CardFs fs(int slot = 0) { return mc::CardFs(cards[static_cast<std::size_t>(slot)]); }
+    // Creates "bu00:NAME" with `blocks` blocks and returns its fd.
+    uint32_t make(const std::string& name, uint32_t blocks, uint32_t flags = kFwrite | kFread) {
+        return open("bu00:" + name, creat(blocks, flags));
+    }
+
+    std::array<std::vector<uint8_t>, 2> cards;
+    std::vector<int> writes;
+    static constexpr uint32_t specs[4] = {kSpecIoe, kSpecError, kSpecTimeout, kSpecNew};
+    uint32_t sw[4]{}, hw[4]{};
+};
+
+// ---- _card_info / _card_load ----
+
+TEST_F(CardBiosTest, CardInfoNoCardTimesOut) {
+    EXPECT_EQ(call(0xA0, 0xAB, 0x00), 1u);
+    EXPECT_EQ(settle(), "SW:TMO HW:TMO");
+}
+
+TEST_F(CardBiosTest, CardInfoNewCardReportsNew) {
+    insert(0);
+    EXPECT_EQ(call(0xA0, 0xAB, 0x00), 1u);
+    EXPECT_EQ(settle(), "SW:NEW HW:NEW");
+}
+
+TEST_F(CardBiosTest, CardInfoUsedCardReportsIoe) {
+    insert(0);
+    m.sio().clear_card_new(0);
+    call(0xA0, 0xAB, 0x00);
+    EXPECT_EQ(settle(), "SW:IOE HW:IOE");
+}
+
+TEST_F(CardBiosTest, CardInfoIsNotSignalledBeforeLatency) {
+    insert(0);
+    call(0xA0, 0xAB, 0x00);
+    ctx().cycles += 19999;
+    m.service_events();
+    EXPECT_EQ(b0(0x0B, sw[3]), 0u);
+    ctx().cycles += 1;
+    m.service_events();
+    EXPECT_EQ(b0(0x0B, sw[3]), 1u);
+}
+
+TEST_F(CardBiosTest, CardInfoSlotTwoPort) {
+    insert(1);
+    m.sio().clear_card_new(1);
+    call(0xA0, 0xAB, 0x10);
+    EXPECT_EQ(settle(), "SW:IOE HW:IOE");
+    call(0xA0, 0xAB, 0x00);  // slot 1 empty
+    EXPECT_EQ(settle(), "SW:TMO HW:TMO");
+}
+
+TEST_F(CardBiosTest, CardInfoUnknownPortTimesOut) {
+    insert(0);
+    call(0xA0, 0xAB, 0x20);
+    EXPECT_EQ(settle(), "SW:TMO HW:TMO");
+    call(0xA0, 0xAB, 0x01);  // multitap sub-port
+    EXPECT_EQ(settle(), "SW:TMO HW:TMO");
+}
+
+TEST_F(CardBiosTest, SwCardEventIsDeliveredBeforeHwCard) {
+    insert(0);
+    std::string order;
+    impl(1, [&](RecompContext*) { order += "S"; });
+    impl(2, [&](RecompContext*) { order += "H"; });
+    open_enabled(kClassSw, kSpecNew, Bios::kEvMdIntr, fn_addr(1));
+    open_enabled(kClassHw, kSpecNew, Bios::kEvMdIntr, fn_addr(2));
+    call(0xA0, 0xAB, 0x00);
+    settle();
+    EXPECT_EQ(order, "SH");
+}
+
+TEST_F(CardBiosTest, CardLoadNoCardTimesOut) {
+    EXPECT_EQ(call(0xA0, 0xAC, 0x00), 1u);
+    EXPECT_EQ(settle(), "SW:TMO HW:TMO");
+}
+
+TEST_F(CardBiosTest, CardLoadFormattedCardIsIoe) {
+    insert(0);
+    EXPECT_EQ(call(0xA0, 0xAC, 0x00), 1u);
+    EXPECT_EQ(settle(), "SW:IOE HW:IOE");
+}
+
+TEST_F(CardBiosTest, CardLoadUnformattedCardIsError) {
+    insert(0, false);
+    call(0xA0, 0xAC, 0x00);
+    EXPECT_EQ(settle(), "SW:ERR HW:ERR");
+}
+
+TEST_F(CardBiosTest, CardInfoDoesNotModifyTheCard) {
+    insert(0);
+    auto before = cards[0];
+    call(0xA0, 0xAB, 0x00);
+    call(0xA0, 0xAC, 0x00);
+    EXPECT_EQ(cards[0], before);
+    EXPECT_TRUE(writes.empty());
+}
+
+// ---- read/write sector ----
+
+TEST_F(CardBiosTest, ReadSectorCopiesFrameToRam) {
+    insert(0);
+    auto d = pat(128, 9);
+    std::copy(d.begin(), d.end(), cards[0].begin() + 77 * 128);
+    EXPECT_EQ(b0(0x4F, 0x00, 77, kBuf), 1u);
+    EXPECT_EQ(get(kBuf, 128), d);  // immediate, before the event
+    EXPECT_EQ(settle(), "SW:IOE HW:IOE");
+}
+
+TEST_F(CardBiosTest, ReadSectorDoesNotTouchNeighbouringRam) {
+    insert(0);
+    put(kBuf - 4, std::vector<uint8_t>(136, 0xEE));
+    b0(0x4F, 0x00, 5, kBuf);
+    EXPECT_EQ(get(kBuf - 4, 4), std::vector<uint8_t>(4, 0xEE));
+    EXPECT_EQ(get(kBuf + 128, 4), std::vector<uint8_t>(4, 0xEE));
+}
+
+TEST_F(CardBiosTest, ReadHeaderSectorShowsMc) {
+    insert(0);
+    b0(0x4F, 0x00, 0, kBuf);
+    EXPECT_EQ(get(kBuf, 2), (std::vector<uint8_t>{'M', 'C'}));
+}
+
+TEST_F(CardBiosTest, ReadLastSectorIsValid) {
+    insert(0);
+    cards[0][1023 * 128 + 5] = 0x42;
+    b0(0x4F, 0x00, 1023, kBuf);
+    EXPECT_EQ(get(kBuf + 5, 1)[0], 0x42);
+    EXPECT_EQ(settle(), "SW:IOE HW:IOE");
+}
+
+TEST_F(CardBiosTest, ReadSectorOutOfRangeIsError) {
+    insert(0);
+    put(kBuf, std::vector<uint8_t>(128, 0x11));
+    EXPECT_EQ(b0(0x4F, 0x00, 1024, kBuf), 1u);
+    EXPECT_EQ(get(kBuf, 128), std::vector<uint8_t>(128, 0x11));
+    EXPECT_EQ(settle(), "SW:ERR HW:ERR");
+}
+
+TEST_F(CardBiosTest, ReadSectorNoCardTimesOut) {
+    EXPECT_EQ(b0(0x4F, 0x00, 0, kBuf), 1u);
+    EXPECT_EQ(settle(), "SW:TMO HW:TMO");
+}
+
+TEST_F(CardBiosTest, ReadSectorSlotTwo) {
+    insert(1);
+    cards[1][3 * 128] = 0x99;
+    b0(0x4F, 0x10, 3, kBuf);
+    EXPECT_EQ(get(kBuf, 1)[0], 0x99);
+}
+
+TEST_F(CardBiosTest, WriteSectorStoresRamData) {
+    insert(0);
+    auto d = pat(128, 3);
+    put(kBuf, d);
+    EXPECT_EQ(b0(0x4E, 0x00, 200, kBuf), 1u);
+    EXPECT_TRUE(std::equal(d.begin(), d.end(), cards[0].begin() + 200 * 128));  // immediate
+    EXPECT_EQ(settle(), "SW:IOE HW:IOE");
+}
+
+TEST_F(CardBiosTest, WriteSectorNeighboursUntouched) {
+    insert(0);
+    auto before = cards[0];
+    put(kBuf, pat(128));
+    b0(0x4E, 0x00, 200, kBuf);
+    for (std::size_t i = 0; i < before.size(); ++i)
+        if (i / 128 != 200) ASSERT_EQ(cards[0][i], before[i]) << i;
+}
+
+TEST_F(CardBiosTest, WriteSectorNotifiesAndClearsNewFlag) {
+    insert(0);
+    EXPECT_TRUE(m.sio().card_flag(0) & 0x08);
+    b0(0x4E, 0x00, 0x3F, kBuf);
+    EXPECT_EQ(writes, std::vector<int>{0});
+    EXPECT_FALSE(m.sio().card_flag(0) & 0x08);
+    settle();
+    call(0xA0, 0xAB, 0x00);
+    EXPECT_EQ(settle(), "SW:IOE HW:IOE");
+}
+
+TEST_F(CardBiosTest, WriteSectorSlotTwoNotifiesSlotTwo) {
+    insert(1);
+    b0(0x4E, 0x10, 1, kBuf);
+    EXPECT_EQ(writes, std::vector<int>{1});
+}
+
+TEST_F(CardBiosTest, WriteSectorOutOfRangeIsErrorAndNoNotification) {
+    insert(0);
+    auto before = cards[0];
+    b0(0x4E, 0x00, 1024, kBuf);
+    EXPECT_EQ(settle(), "SW:ERR HW:ERR");
+    EXPECT_EQ(cards[0], before);
+    EXPECT_TRUE(writes.empty());
+}
+
+TEST_F(CardBiosTest, WriteSectorNoCardTimesOutWithoutNotification) {
+    b0(0x4E, 0x00, 0, kBuf);
+    EXPECT_EQ(settle(), "SW:TMO HW:TMO");
+    EXPECT_TRUE(writes.empty());
+}
+
+TEST_F(CardBiosTest, WriteThenReadRoundTrip) {
+    insert(0);
+    auto d = pat(128, 21);
+    put(kBuf, d);
+    b0(0x4E, 0x00, 500, kBuf);
+    b0(0x4F, 0x00, 500, kBuf + 0x400);
+    EXPECT_EQ(get(kBuf + 0x400, 128), d);
+}
+
+TEST_F(CardBiosTest, EventsOnlyReachEnabledHandles) {
+    insert(0);
+    uint32_t extra = open_event(kClassSw, kSpecNew, Bios::kEvMdNoIntr);  // never enabled
+    call(0xA0, 0xAB, 0x00);
+    settle();
+    EXPECT_EQ(b0(0x0B, extra), 0u);
+}
+
+TEST_F(CardBiosTest, NoOpCardInitFunctionsDoNotFail) {
+    for (uint32_t fn : {0x4Au, 0x4Bu, 0x4Cu, 0x50u}) EXPECT_NO_THROW(b0(fn)) << fn;
+    EXPECT_NO_THROW(call(0xA0, 0x70));
+}
+
+// ---- FileOpen / errno ----
+
+TEST_F(CardBiosTest, OpenOnMissingCardFails) {
+    EXPECT_EQ(open("bu00:FILE", kFread), kFail);
+    EXPECT_EQ(err(), 0x13u);
+}
+
+TEST_F(CardBiosTest, OpenOnUnformattedCardFails) {
+    insert(0, false);
+    EXPECT_EQ(open("bu00:FILE", kFread), kFail);
+    EXPECT_EQ(open("bu00:FILE", creat(1)), kFail);
+}
+
+TEST_F(CardBiosTest, OpenMissingFileSetsErrno2) {
+    insert(0);
+    EXPECT_EQ(open("bu00:NOPE", kFread), kFail);
+    EXPECT_EQ(err(), 2u);
+}
+
+TEST_F(CardBiosTest, OpenNonCardDevicesFail) {
+    insert(0);
+    for (const char* p : {"cdrom:FILE", "bu01:FILE", "bu20:X", "bu00", "", "tty:"})
+        EXPECT_EQ(open(p, kFread), kFail) << p;
+}
+
+TEST_F(CardBiosTest, CreateReturnsFirstFreeDescriptorAboveConsole) {
+    insert(0);
+    EXPECT_EQ(make("A", 1), 2u);
+    EXPECT_EQ(make("B", 1), 3u);
+}
+
+TEST_F(CardBiosTest, CreateAllocatesBlocksFromBits16To31) {
+    insert(0);
+    ASSERT_EQ(make("BIG", 4), 2u);
+    auto f = fs().find("BIG");
+    ASSERT_TRUE(f);
+    EXPECT_EQ(f->blocks.size(), 4u);
+    EXPECT_EQ(f->size, 4u * 8192);
+}
+
+TEST_F(CardBiosTest, CreateNotifiesAndFileAppearsInImage) {
+    insert(0);
+    make("SAVE", 1);
+    EXPECT_FALSE(writes.empty());
+    EXPECT_EQ(writes.front(), 0);
+    EXPECT_EQ(cards[0][1 * 128], 0x51);
+}
+
+TEST_F(CardBiosTest, CreateExistingFileFails) {
+    insert(0);
+    make("A", 1);
+    EXPECT_EQ(make("A", 1), kFail);
+    EXPECT_EQ(err(), 0x11u);
+}
+
+TEST_F(CardBiosTest, CreateWithoutSpaceFails) {
+    insert(0);
+    make("A", 10);
+    EXPECT_EQ(make("B", 6), kFail);
+    EXPECT_EQ(err(), 0x1Cu);
+}
+
+TEST_F(CardBiosTest, CreateWithZeroBlocksFails) {
+    insert(0);
+    EXPECT_EQ(open("bu00:Z", kFcreat | kFwrite), kFail);
+}
+
+TEST_F(CardBiosTest, OpenExistingFile) {
+    insert(0);
+    uint32_t fd = make("A", 1);
+    b0(0x36, fd);
+    EXPECT_EQ(open("bu00:A", kFread), 2u);
+}
+
+TEST_F(CardBiosTest, OpenSlotTwo) {
+    insert(1);
+    EXPECT_EQ(open("bu10:S2", creat(1)), 2u);
+    EXPECT_TRUE(fs(1).find("S2"));
+    EXPECT_EQ(writes.front(), 1);
+}
+
+TEST_F(CardBiosTest, DescriptorTableExhausts) {
+    insert(0);
+    make("A", 1);
+    for (int i = 0; i < 13; ++i) EXPECT_NE(open("bu00:A", kFread), kFail) << i;
+    EXPECT_EQ(open("bu00:A", kFread), kFail);
+}
+
+TEST_F(CardBiosTest, CloseFreesDescriptorForReuse) {
+    insert(0);
+    uint32_t a = make("A", 1), b = make("B", 1);
+    EXPECT_EQ(b0(0x36, a), a);
+    EXPECT_EQ(open("bu00:B", kFread), a);
+    (void)b;
+}
+
+TEST_F(CardBiosTest, CloseTwiceFails) {
+    insert(0);
+    uint32_t a = make("A", 1);
+    b0(0x36, a);
+    EXPECT_EQ(b0(0x36, a), kFail);
+    EXPECT_EQ(err(), 9u);
+}
+
+TEST_F(CardBiosTest, AsyncOpenSignalsIoe) {
+    insert(0);
+    open("bu00:A", creat(1, kFasync | kFwrite));
+    EXPECT_EQ(settle(), "SW:IOE HW:IOE");
+}
+
+TEST_F(CardBiosTest, SyncOpenSignalsNothing) {
+    insert(0);
+    make("A", 1);
+    EXPECT_EQ(settle(), "");
+}
+
+TEST_F(CardBiosTest, FailedAsyncOpenSignalsNothing) {
+    insert(0);
+    open("bu00:NOPE", kFasync | kFread);
+    EXPECT_EQ(settle(), "");
+}
+
+// ---- Read / write / seek ----
+
+TEST_F(CardBiosTest, WriteThenReadBack) {
+    insert(0);
+    uint32_t fd = make("A", 1);
+    auto d = pat(512, 4);
+    put(kBuf, d);
+    EXPECT_EQ(b0(0x35, fd, kBuf, 512), 512u);
+    EXPECT_EQ(b0(0x33, fd, 0, 0), 0u);
+    EXPECT_EQ(b0(0x34, fd, kBuf + 0x1000, 512), 512u);
+    EXPECT_EQ(get(kBuf + 0x1000, 512), d);
+}
+
+TEST_F(CardBiosTest, WrittenDataLandsInFileBlock) {
+    insert(0);
+    make("X", 1);
+    uint32_t fd = make("A", 1);
+    auto d = pat(128, 8);
+    put(kBuf, d);
+    b0(0x35, fd, kBuf, 128);
+    EXPECT_TRUE(std::equal(d.begin(), d.end(), cards[0].begin() + 2 * 8192));
+}
+
+TEST_F(CardBiosTest, PositionAdvancesAcrossCalls) {
+    insert(0);
+    uint32_t fd = make("A", 1);
+    auto d = pat(256, 2);
+    put(kBuf, d);
+    b0(0x35, fd, kBuf, 128);
+    b0(0x35, fd, kBuf + 128, 128);
+    b0(0x33, fd, 0, 0);
+    b0(0x34, fd, kBuf + 0x800, 256);
+    EXPECT_EQ(get(kBuf + 0x800, 256), d);
+}
+
+TEST_F(CardBiosTest, ReadRequiresMultipleOf128) {
+    insert(0);
+    uint32_t fd = make("A", 1);
+    EXPECT_EQ(b0(0x34, fd, kBuf, 100), kFail);
+    EXPECT_EQ(b0(0x35, fd, kBuf, 129), kFail);
+}
+
+TEST_F(CardBiosTest, ReadOnlyDescriptorCannotWrite) {
+    insert(0);
+    make("A", 1);
+    uint32_t fd = open("bu00:A", kFread);
+    EXPECT_EQ(b0(0x35, fd, kBuf, 128), kFail);
+    EXPECT_TRUE(std::all_of(cards[0].begin() + 8192, cards[0].begin() + 8192 + 128, [](uint8_t b) { return b == 0; }));
+}
+
+TEST_F(CardBiosTest, WriteOnlyDescriptorCannotRead) {
+    insert(0);
+    uint32_t fd = make("A", 1, kFwrite);
+    EXPECT_EQ(b0(0x34, fd, kBuf, 128), kFail);
+}
+
+TEST_F(CardBiosTest, ReadAtEndOfFileReturnsZero) {
+    insert(0);
+    uint32_t fd = make("A", 1);
+    b0(0x33, fd, 8192, 0);
+    EXPECT_EQ(b0(0x34, fd, kBuf, 128), 0u);
+}
+
+TEST_F(CardBiosTest, ReadClampsAtEndOfFile) {
+    insert(0);
+    uint32_t fd = make("A", 1);
+    b0(0x33, fd, 8192 - 128, 0);
+    EXPECT_EQ(b0(0x34, fd, kBuf, 512), 128u);
+}
+
+TEST_F(CardBiosTest, ReadWriteOnInvalidDescriptors) {
+    insert(0);
+    for (uint32_t fd : {0u, 2u, 15u, 16u, 99u}) {
+        EXPECT_EQ(b0(0x34, fd, kBuf, 128), kFail) << fd;
+        EXPECT_EQ(b0(0x35, fd, kBuf, 128), kFail) << fd;
+    }
+}
+
+TEST_F(CardBiosTest, WriteNotifiesAfterEachWrite) {
+    insert(0);
+    uint32_t fd = make("A", 1);
+    writes.clear();
+    b0(0x35, fd, kBuf, 128);
+    b0(0x35, fd, kBuf, 128);
+    EXPECT_EQ(writes, (std::vector<int>{0, 0}));
+}
+
+TEST_F(CardBiosTest, ReadDoesNotNotify) {
+    insert(0);
+    uint32_t fd = make("A", 1);
+    writes.clear();
+    b0(0x34, fd, kBuf, 128);
+    EXPECT_TRUE(writes.empty());
+}
+
+TEST_F(CardBiosTest, MultiBlockFileWriteAcrossBlocks) {
+    insert(0);
+    uint32_t fd = make("A", 2);
+    auto d = pat(16384, 6);
+    for (std::size_t off = 0; off < d.size(); off += 4096) {
+        put(kBuf, std::vector<uint8_t>(d.begin() + static_cast<std::ptrdiff_t>(off), d.begin() + static_cast<std::ptrdiff_t>(off + 4096)));
+        ASSERT_EQ(b0(0x35, fd, kBuf, 4096), 4096u);
+    }
+    EXPECT_EQ(b0(0x33, fd, 0, 0), 0u);
+    std::vector<uint8_t> all;
+    for (int i = 0; i < 4; ++i) {
+        ASSERT_EQ(b0(0x34, fd, kBuf, 4096), 4096u);
+        auto part = get(kBuf, 4096);
+        all.insert(all.end(), part.begin(), part.end());
+    }
+    EXPECT_EQ(all, d);
+}
+
+TEST_F(CardBiosTest, SeekModes) {
+    insert(0);
+    uint32_t fd = make("A", 1);
+    EXPECT_EQ(b0(0x33, fd, 256, 0), 256u);
+    EXPECT_EQ(b0(0x33, fd, 128, 1), 384u);
+    EXPECT_EQ(b0(0x33, fd, static_cast<uint32_t>(-128), 2), 8192u - 128);
+    EXPECT_EQ(b0(0x33, fd, 0, 2), 8192u);
+    EXPECT_EQ(b0(0x33, fd, static_cast<uint32_t>(-128), 1), 8192u - 128);
+}
+
+TEST_F(CardBiosTest, SeekOutOfRangeFailsAndKeepsPosition) {
+    insert(0);
+    uint32_t fd = make("A", 1);
+    b0(0x33, fd, 256, 0);
+    EXPECT_EQ(b0(0x33, fd, 8193, 0), kFail);
+    EXPECT_EQ(b0(0x33, fd, static_cast<uint32_t>(-1), 0), kFail);
+    EXPECT_EQ(b0(0x33, fd, 0, 7), kFail);
+    EXPECT_EQ(b0(0x33, fd, 0, 1), 256u);
+}
+
+TEST_F(CardBiosTest, SeekInvalidDescriptor) {
+    insert(0);
+    EXPECT_EQ(b0(0x33, 5, 0, 0), kFail);
+    EXPECT_EQ(b0(0x33, 1, 0, 0), kFail);
+}
+
+TEST_F(CardBiosTest, AsyncReadAndWriteSignalIoe) {
+    insert(0);
+    uint32_t fd = make("A", 1, kFwrite | kFread | kFasync);
+    settle();
+    EXPECT_EQ(b0(0x35, fd, kBuf, 128), 128u);
+    EXPECT_EQ(settle(), "SW:IOE HW:IOE");
+    b0(0x33, fd, 0, 0);
+    EXPECT_EQ(b0(0x34, fd, kBuf, 128), 128u);
+    EXPECT_EQ(settle(), "SW:IOE HW:IOE");
+}
+
+TEST_F(CardBiosTest, SyncReadAndWriteSignalNothing) {
+    insert(0);
+    uint32_t fd = make("A", 1);
+    b0(0x35, fd, kBuf, 128);
+    b0(0x34, fd, kBuf, 128);
+    EXPECT_EQ(settle(), "");
+}
+
+TEST_F(CardBiosTest, ConsoleWritesStillGoToTty) {
+    insert(0);
+    std::string line;
+    bios.on_tty = [&](const std::string& s) { line = s; };
+    put(kBuf, {'h', 'i', '\n'});
+    EXPECT_EQ(b0(0x35, 1, kBuf, 3), 3u);
+    EXPECT_EQ(line, "hi");
+}
+
+// ---- firstfile / nextfile ----
+
+TEST_F(CardBiosTest, FirstFileFillsDirentry) {
+    insert(0);
+    make("SAVE1", 2);
+    str(kPath, "bu00:*");
+    for (uint32_t i = 0; i < 0x28; i += 4) dw3_write32(&ctx(), kEntry + i, 0xDDDDDDDD);
+    EXPECT_EQ(b0(0x42, kPath, kEntry), kEntry);
+    EXPECT_EQ(get(kEntry, 6), (std::vector<uint8_t>{'S', 'A', 'V', 'E', '1', 0}));
+    EXPECT_EQ(get(kEntry + 6, 14), std::vector<uint8_t>(14, 0));
+    EXPECT_EQ(peek(kEntry + 0x14), 0x50u);
+    EXPECT_EQ(peek(kEntry + 0x18), 16384u);
+    EXPECT_EQ(peek(kEntry + 0x1C), 0u);
+    EXPECT_EQ(peek(kEntry + 0x20), 64u);
+    EXPECT_EQ(peek(kEntry + 0x24), 0u);
+}
+
+TEST_F(CardBiosTest, FirstFileOnEmptyCardReturnsZero) {
+    insert(0);
+    str(kPath, "bu00:*");
+    EXPECT_EQ(b0(0x42, kPath, kEntry), 0u);
+}
+
+TEST_F(CardBiosTest, FirstFileWithoutNameMatchesEverything) {
+    insert(0);
+    make("A", 1);
+    str(kPath, "bu00:");
+    EXPECT_EQ(b0(0x42, kPath, kEntry), kEntry);
+}
+
+TEST_F(CardBiosTest, NextFileIteratesInDirectoryOrder) {
+    insert(0);
+    make("ONE", 1);
+    make("TWO", 2);
+    make("THREE", 1);
+    str(kPath, "bu00:*");
+    std::vector<std::string> names;
+    uint32_t r = b0(0x42, kPath, kEntry);
+    while (r) {
+        names.push_back(std::string(reinterpret_cast<const char*>(get(kEntry, 21).data())));
+        r = b0(0x43, kEntry);
+    }
+    EXPECT_EQ(names, (std::vector<std::string>{"ONE", "TWO", "THREE"}));
+}
+
+TEST_F(CardBiosTest, NextFileAfterLastKeepsReturningZero) {
+    insert(0);
+    make("A", 1);
+    str(kPath, "bu00:*");
+    b0(0x42, kPath, kEntry);
+    EXPECT_EQ(b0(0x43, kEntry), 0u);
+    EXPECT_EQ(b0(0x43, kEntry), 0u);
+}
+
+TEST_F(CardBiosTest, NextFileWithoutFirstFileReturnsZero) {
+    insert(0);
+    make("A", 1);
+    EXPECT_EQ(b0(0x43, kEntry), 0u);
+}
+
+TEST_F(CardBiosTest, ChainedFileListedOnce) {
+    insert(0);
+    make("CH", 3);
+    make("Z", 1);
+    str(kPath, "bu00:*");
+    int n = 0;
+    for (uint32_t r = b0(0x42, kPath, kEntry); r; r = b0(0x43, kEntry)) ++n;
+    EXPECT_EQ(n, 2);
+}
+
+struct WildCase {
+    const char* pattern;
+    std::vector<std::string> expect;
+};
+
+class WildcardTest : public CardBiosTest, public ::testing::WithParamInterface<WildCase> {};
+
+TEST_P(WildcardTest, MatchesExpectedNames) {
+    insert(0);
+    for (const char* n : {"BASLUS-01436DW3", "BASLUS-01436DW4", "BESLES-00001X", "NOTES"}) make(n, 1);
+    str(kPath, std::string("bu00:") + GetParam().pattern);
+    std::vector<std::string> got;
+    for (uint32_t r = b0(0x42, kPath, kEntry); r; r = b0(0x43, kEntry))
+        got.push_back(std::string(reinterpret_cast<const char*>(get(kEntry, 21).data())));
+    EXPECT_EQ(got, GetParam().expect);
+}
+
+INSTANTIATE_TEST_SUITE_P(
+    Patterns, WildcardTest,
+    ::testing::Values(WildCase{"*", {"BASLUS-01436DW3", "BASLUS-01436DW4", "BESLES-00001X", "NOTES"}},
+                      WildCase{"BASLUS*", {"BASLUS-01436DW3", "BASLUS-01436DW4"}},
+                      WildCase{"BASLUS-01436DW?", {"BASLUS-01436DW3", "BASLUS-01436DW4"}},
+                      WildCase{"BASLUS-01436DW3", {"BASLUS-01436DW3"}},
+                      WildCase{"B?SLES*", {"BESLES-00001X"}},
+                      WildCase{"*X", {"BESLES-00001X"}},
+                      WildCase{"N?TES", {"NOTES"}},
+                      WildCase{"NOTE", {}},
+                      WildCase{"NOTES?", {}},
+                      WildCase{"??????", {}},
+                      WildCase{"?????", {"NOTES"}},
+                      WildCase{"*-*", {"BASLUS-01436DW3", "BASLUS-01436DW4", "BESLES-00001X"}},
+                      WildCase{"nothing", {}}));
+
+TEST_F(CardBiosTest, FirstFileOnSlotTwo) {
+    insert(1);
+    open("bu10:TWO", creat(1));
+    str(kPath, "bu10:*");
+    EXPECT_EQ(b0(0x42, kPath, kEntry), kEntry);
+    str(kPath, "bu00:*");
+    EXPECT_EQ(b0(0x42, kPath, kEntry), 0u);
+}
+
+TEST_F(CardBiosTest, DeletedFilesAreNotListed) {
+    insert(0);
+    make("A", 1);
+    make("B", 1);
+    str(kPath, "bu00:A");
+    EXPECT_EQ(b0(0x45, kPath), 1u);
+    str(kPath, "bu00:*");
+    EXPECT_EQ(b0(0x42, kPath, kEntry), kEntry);
+    EXPECT_EQ(get(kEntry, 2)[0], 'B');
+    EXPECT_EQ(b0(0x43, kEntry), 0u);
+}
+
+// ---- erase / rename / format ----
+
+TEST_F(CardBiosTest, EraseRemovesFileAndNotifies) {
+    insert(0);
+    make("A", 2);
+    writes.clear();
+    str(kPath, "bu00:A");
+    EXPECT_EQ(b0(0x45, kPath), 1u);
+    EXPECT_FALSE(fs().find("A"));
+    EXPECT_EQ(fs().free_blocks(), 15);
+    EXPECT_EQ(writes, std::vector<int>{0});
+}
+
+TEST_F(CardBiosTest, EraseMissingFileFails) {
+    insert(0);
+    str(kPath, "bu00:A");
+    writes.clear();
+    EXPECT_EQ(b0(0x45, kPath), 0u);
+    EXPECT_EQ(err(), 2u);
+    EXPECT_TRUE(writes.empty());
+}
+
+TEST_F(CardBiosTest, EraseWithoutCardFails) {
+    str(kPath, "bu00:A");
+    EXPECT_EQ(b0(0x45, kPath), 0u);
+}
+
+TEST_F(CardBiosTest, ErasedSpaceCanBeReallocated) {
+    insert(0);
+    make("A", 15);
+    EXPECT_EQ(make("B", 1), kFail);
+    str(kPath, "bu00:A");
+    b0(0x45, kPath);
+    EXPECT_NE(make("B", 15), kFail);
+}
+
+TEST_F(CardBiosTest, RenameChangesName) {
+    insert(0);
+    make("OLD", 1);
+    writes.clear();
+    str(kPath, "bu00:OLD");
+    str(kPath2, "bu00:NEW");
+    EXPECT_EQ(b0(0x44, kPath, kPath2), 1u);
+    EXPECT_FALSE(fs().find("OLD"));
+    EXPECT_TRUE(fs().find("NEW"));
+    EXPECT_EQ(writes, std::vector<int>{0});
+}
+
+TEST_F(CardBiosTest, RenameFailures) {
+    insert(0);
+    make("A", 1);
+    make("B", 1);
+    str(kPath, "bu00:A");
+    str(kPath2, "bu00:B");
+    EXPECT_EQ(b0(0x44, kPath, kPath2), 0u);
+    EXPECT_EQ(err(), 0x11u);
+    str(kPath, "bu00:MISSING");
+    EXPECT_EQ(b0(0x44, kPath, kPath2), 0u);
+    str(kPath, "bu00:A");
+    str(kPath2, "bu10:C");
+    EXPECT_EQ(b0(0x44, kPath, kPath2), 0u);
+    EXPECT_TRUE(fs().find("A"));
+}
+
+TEST_F(CardBiosTest, RenameKeepsOpenDescriptorValid) {
+    insert(0);
+    uint32_t fd = make("OLD", 1);
+    str(kPath, "bu00:OLD");
+    str(kPath2, "bu00:NEW");
+    b0(0x44, kPath, kPath2);
+    EXPECT_EQ(b0(0x35, fd, kBuf, 128), 128u);
+}
+
+TEST_F(CardBiosTest, RenamePreservesData) {
+    insert(0);
+    uint32_t fd = make("OLD", 1);
+    auto d = pat(128, 5);
+    put(kBuf, d);
+    b0(0x35, fd, kBuf, 128);
+    b0(0x36, fd);
+    str(kPath, "bu00:OLD");
+    str(kPath2, "bu00:NEW");
+    b0(0x44, kPath, kPath2);
+    uint32_t nfd = open("bu00:NEW", kFread);
+    b0(0x34, nfd, kBuf + 0x400, 128);
+    EXPECT_EQ(get(kBuf + 0x400, 128), d);
+}
+
+TEST_F(CardBiosTest, FormatErasesEverything) {
+    insert(0);
+    make("A", 3);
+    make("B", 1);
+    writes.clear();
+    str(kPath, "bu00:");
+    EXPECT_EQ(b0(0x41, kPath), 1u);
+    EXPECT_TRUE(fs().list().empty());
+    EXPECT_EQ(fs().free_blocks(), 15);
+    EXPECT_EQ(writes, std::vector<int>{0});
+}
+
+TEST_F(CardBiosTest, FormatInitializesBlankCard) {
+    insert(0, false);
+    str(kPath, "bu00:");
+    EXPECT_EQ(b0(0x41, kPath), 1u);
+    EXPECT_TRUE(mc::is_formatted(cards[0]));
+    EXPECT_EQ(make("A", 1), 2u);
+}
+
+TEST_F(CardBiosTest, FormatInvalidatesOpenDescriptors) {
+    insert(0);
+    uint32_t fd = make("A", 1);
+    str(kPath, "bu00:");
+    b0(0x41, kPath);
+    EXPECT_EQ(b0(0x35, fd, kBuf, 128), kFail);
+}
+
+TEST_F(CardBiosTest, FormatOnlyAffectsNamedSlot) {
+    insert(0);
+    insert(1);
+    open("bu10:KEEP", creat(1));
+    str(kPath, "bu00:");
+    b0(0x41, kPath);
+    EXPECT_TRUE(fs(1).find("KEEP"));
+}
+
+TEST_F(CardBiosTest, FormatWithoutCardFails) {
+    str(kPath, "bu00:");
+    EXPECT_EQ(b0(0x41, kPath), 0u);
+    str(kPath, "cdrom:");
+    EXPECT_EQ(b0(0x41, kPath), 0u);
+}
+
+TEST_F(CardBiosTest, GetErrnoDefaultsToZeroAndClearsOnSuccess) {
+    insert(0);
+    EXPECT_EQ(err(), 0u);
+    open("bu00:NOPE", kFread);
+    EXPECT_NE(err(), 0u);
+    make("A", 1);
+    EXPECT_EQ(err(), 0u);
+}
+
+// ---- Cross-check against the SIO0 memory card protocol ----
+
+struct SioRig : dw3test::Clock {
+    dw3::IrqController irq{bus};
+    dw3::Sio sio{bus, sched, irq};
+    SioRig() {
+        w16(0x1F80104E, 0x88);
+        w16(0x1F801048, 0x000D);
+    }
+    uint8_t xfer(uint8_t tx) {
+        w8(0x1F801040, tx);
+        run_to(ctx().cycles + 8 * 0x88 + dw3::Sio::kAckDelay + dw3::Sio::kAckWidth + 1);
+        uint8_t rx = static_cast<uint8_t>(bus.read(0x1F801040, 1));
+        w16(0x1F80104A, r16(0x1F80104A) | 0x10);
+        w32(0x1F801070, ~0x80u);
+        return rx;
+    }
+    std::vector<uint8_t> read_sector(uint32_t s, int port = 0) {
+        w16(0x1F80104A, 0x1003 | (port ? 0x2000u : 0u));
+        std::vector<uint8_t> tx = {0x81, 0x52, 0, 0, uint8_t(s >> 8), uint8_t(s)};
+        tx.resize(10 + 128 + 2, 0);
+        std::vector<uint8_t> rx;
+        for (auto b : tx) rx.push_back(xfer(b));
+        w16(0x1F80104A, 0x1000 | (port ? 0x2000u : 0u));
+        return std::vector<uint8_t>(rx.begin() + 10, rx.begin() + 138);
+    }
+};
+
+TEST_F(CardBiosTest, FileWrittenViaBiosIsReadableOverSio) {
+    insert(0);
+    uint32_t fd = make("XCHECK", 2);
+    auto d = pat(1024, 17);
+    put(kBuf, d);
+    ASSERT_EQ(b0(0x35, fd, kBuf, 1024), 1024u);
+    SioRig rig;
+    ASSERT_TRUE(rig.sio.attach_card(0, cards[0]));
+    auto f = *fs().find("XCHECK");
+    uint32_t base = f.blocks.front() * 64u;
+    for (uint32_t i = 0; i < 8; ++i) {
+        auto sec = rig.read_sector(base + i);
+        EXPECT_EQ(sec, std::vector<uint8_t>(d.begin() + i * 128, d.begin() + (i + 1) * 128)) << i;
+    }
+}
+
+TEST_F(CardBiosTest, DirectoryFrameWrittenViaBiosIsReadableOverSio) {
+    insert(0);
+    make("DIRCHECK", 1);
+    SioRig rig;
+    ASSERT_TRUE(rig.sio.attach_card(0, cards[0]));
+    auto e = rig.read_sector(1);
+    EXPECT_EQ(e[0], 0x51);
+    EXPECT_EQ(std::string(reinterpret_cast<const char*>(&e[10])), "DIRCHECK");
+    EXPECT_TRUE(mc::frame_checksum_ok(e));
+}
+
+TEST_F(CardBiosTest, SectorWrittenViaBiosIsReadableOverSio) {
+    insert(0);
+    auto d = pat(128, 40);
+    put(kBuf, d);
+    b0(0x4E, 0x00, 700, kBuf);
+    SioRig rig;
+    ASSERT_TRUE(rig.sio.attach_card(0, cards[0]));
+    EXPECT_EQ(rig.read_sector(700), d);
+}
+
+TEST_F(CardBiosTest, SectorWrittenOverSioIsReadableViaBios) {
+    insert(0);
+    SioRig rig;
+    ASSERT_TRUE(rig.sio.attach_card(0, cards[0]));
+    EXPECT_EQ(rig.sio.card_data(0).data(), cards[0].data());
+    cards[0][900 * 128 + 3] = 0x5A;  // same storage: visible to both views
+    b0(0x4F, 0x00, 900, kBuf);
+    EXPECT_EQ(get(kBuf + 3, 1)[0], 0x5A);
+    EXPECT_EQ(rig.read_sector(900)[3], 0x5A);
+}
+
+TEST_F(CardBiosTest, BiosFileLayerSeesCardPreparedByOtherCode) {
+    insert(0);
+    mc::CardFs prep(cards[0]);
+    prep.create("PREPARED", 1);
+    auto d = pat(256, 33);
+    prep.write(*prep.find("PREPARED"), 0, d);
+    uint32_t fd = open("bu00:PREPARED", kFread);
+    ASSERT_EQ(fd, 2u);
+    EXPECT_EQ(b0(0x34, fd, kBuf, 256), 256u);
+    EXPECT_EQ(get(kBuf, 256), d);
+}
+
+}  // namespace

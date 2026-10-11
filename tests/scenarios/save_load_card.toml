@@ -1,0 +1,53 @@
+name = "save_load_card"
+description = "Title -> Continue with a blank formatted memory card inserted -> LOAD screen detects the card (no 'Memory Card is not inserted' message)."
+frames = 2100
+
+# Selecting Slot 1 with a blank formatted card shows "Checking Memory Card. Do not touch Memory Card." and the
+# game stays there (progress bar never completes, verified out to frame 4000); with no card it shows
+# "Memory Card is not inserted." (continue_no_card). The hashes below pin the current "card detected, check
+# pending" state; update them with --record once the card check completes.
+memcard = "blank"
+
+[[press]]
+button = "START"
+at = 900
+
+[[press]]
+button = "CROSS"
+at = 1020
+
+[[press]]
+button = "CROSS"
+at = 1500
+
+[[check]]
+at = 960
+label = "Start/Continue menu"
+display_enabled = true
+display_width = 320
+min_primitives = 1000
+screen_hash = "1ffe3ffe000000007ffe1fce1ffe3ffe0008000270007ffe007003f00cb00182"
+screenshot = true
+
+[[check]]
+at = 1440
+label = "LOAD screen slot chooser"
+display_enabled = true
+display_width = 320
+display_height = 240
+screen_hash = "00060006000600068001ffffcf6700068001800180018005ffff80018cdf8201"
+screenshot = true
+
+[[check]]
+at = 1560
+label = "slot 1 selected: card read"
+display_enabled = true
+screen_hash = "00060006000600068011ffff0816080680018001807f807fffff800184018001"
+screenshot = true
+
+[[check]]
+at = 1800
+label = "slot 1 result (blank card)"
+display_enabled = true
+screen_hash = "00060006000600068011ffff0816080680018001807f807fffff800184018001"
+screenshot = true

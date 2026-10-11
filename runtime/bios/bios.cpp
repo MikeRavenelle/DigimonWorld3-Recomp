@@ -14,10 +14,7 @@ constexpr uint32_t kGameReturnSentinel = 0x00000000;  // $ra for kernel-initiate
 
 // Event classes/specs (psx-spx).
 constexpr uint32_t kClassRCnt = 0xF2000000;
-constexpr uint32_t kClassHwCard = 0xF0000011;
-constexpr uint32_t kClassSwCard = 0xF4000001;
 constexpr uint32_t kSpecInt = 0x0002;
-constexpr uint32_t kSpecTimeout = 0x0100;
 
 constexpr uint32_t kIStat = 0x1F801070;
 constexpr uint32_t kIMask = 0x1F801074;
@@ -227,14 +224,6 @@ void Bios::syscall(RecompContext& c, uint32_t pc) {
     }
 }
 
-void Bios::card_async(uint32_t spec_sw, uint32_t spec_hw) {
-    // No memory card yet: completion is reported asynchronously, as the real card driver does.
-    m_.scheduler().schedule_in(20000, [this, spec_sw, spec_hw](int64_t) {
-        deliver_event(kClassSwCard, spec_sw);
-        deliver_event(kClassHwCard, spec_hw);
-    });
-}
-
 void Bios::unknown(uint32_t table, uint32_t fn) {
     char b[64];
     std::snprintf(b, sizeof(b), "unimplemented BIOS function %02X:%02X", table, fn);
@@ -253,6 +242,7 @@ void Bios::call(RecompContext& c, uint32_t table, uint32_t fn) {
         std::snprintf(b, sizeof(b), "BIOS %02X:%02X(%08X, %08X, %08X, %08X)", table, fn, a0, a1, a2, a3);
         log(b);
     }
+    if (card_dispatch(c, table, fn)) return;
     if (table == 0xA0) {
         switch (fn) {
             case 0x39: return;                                  // InitHeap: malloc is never used
@@ -260,8 +250,6 @@ void Bios::call(RecompContext& c, uint32_t table, uint32_t fn) {
             case 0x49: m_.bus().write(kGp0, a0, 4); return;     // GPU_cw
             case 0x70: return;                                  // _bu_init
             case 0x72: return;                                  // CdRemove: no kernel CD handlers
-            case 0xAB: v0 = 1; card_async(kSpecTimeout, kSpecTimeout); return;  // _card_info
-            case 0xAC: v0 = 1; card_async(kSpecTimeout, kSpecTimeout); return;  // _card_load
         }
     } else if (table == 0xB0) {
         switch (fn) {
@@ -322,10 +310,7 @@ void Bios::call(RecompContext& c, uint32_t table, uint32_t fn) {
             case 0x17: throw ReturnFromException{};          // ReturnFromException
             case 0x18: hook_ = 0; return;                    // ResetEntryInt
             case 0x19: hook_ = a0; return;                   // HookEntryInt
-            case 0x32: v0 = 0xFFFFFFFFu; return;             // FileOpen: no files/cards yet
-            case 0x33: v0 = 0xFFFFFFFFu; return;             // FileSeek
-            case 0x34: v0 = 0xFFFFFFFFu; return;             // FileRead
-            case 0x35:  // FileWrite: fd 1 is the debug console (printf)
+            case 0x35:  // FileWrite: fd 1 is the debug console (printf); card files are handled above
                 if (a0 == 1) {
                     std::string text;
                     for (uint32_t k = 0; k < a2 && k < 4096; ++k) text += static_cast<char>(dw3_read8(&c, a1 + k));
@@ -339,15 +324,9 @@ void Bios::call(RecompContext& c, uint32_t table, uint32_t fn) {
                 }
                 v0 = 0xFFFFFFFFu;
                 return;
-            case 0x36: v0 = a0; return;                      // FileClose
-            case 0x42: v0 = 0; return;                       // firstfile: none
-            case 0x43: v0 = 0; return;                       // nextfile
             case 0x4A: return;                               // InitCard
             case 0x4B: return;                               // StartCard
             case 0x4C: return;                               // StopCard
-            case 0x4E: v0 = 1; card_async(kSpecTimeout, kSpecTimeout); return;  // write_card_sector
-            case 0x4F: v0 = 1; card_async(kSpecTimeout, kSpecTimeout); return;  // read_card_sector
-            case 0x50: return;                               // allow_new_card
             // GetC0Table / GetB0Table: libapi/libcard read kernel tables to patch the kernel's exception
             // handler in RAM. There is no kernel code here: the (zeroed) tables make the guarded patch
             // find no match, and libcard's unconditional copy lands in unused kernel RAM.

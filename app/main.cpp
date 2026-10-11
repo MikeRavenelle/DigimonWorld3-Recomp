@@ -5,19 +5,29 @@
 //   --frames N         exit after N emulated frames (audit runs)
 //   --screenshot PATH  save a BMP of the last frame before exiting
 //   --trace-bios       log every kernel call
+//   --memcard1 PATH    memory card for slot 1 (.mcd/.gme, created formatted if missing);
+//                      default <user data dir>/memcards/slot1.mcd
+//   --memcard2 PATH    memory card for slot 2; default <user data dir>/memcards/slot2.mcd, inserted only if it exists
+//   --no-memcard       no memory cards inserted (games see "no card")
+//   --press B@F[+N]    hold button B (UP DOWN LEFT RIGHT CROSS CIRCLE SQUARE TRIANGLE START SELECT L1 R1 L2 R2)
+//                      from frame F for N frames (default 6)
+//   --intro            with --frames, do not press START at frame 300 (by default audit runs skip the intro)
+//   --uncapped         do not pace to real time (always on with --frames)
+//   --screenshot-every N DIR   save the window image every N frames
+//   --vram-dump PATH   save the whole VRAM as a BMP on exit
+//   --trace-io LO:HI   log bus accesses to the hex physical range LO..HI
 
 #include <SDL3/SDL.h>
 
 #include <cstdio>
+#include <array>
 #include <cstdlib>
+#include <filesystem>
 #include <map>
 #include <string>
 
-#include "dw3/bios.h"
-#include "dw3/machine.h"
+#include "dw3/host.h"
 #include "dw3/platform.h"
-#include "psxdisc/disc.h"
-#include "psxdisc/iso9660.h"
 
 namespace {
 
@@ -26,9 +36,12 @@ struct Options {
     int max_frames = -1;
     std::string screenshot;
     bool trace_bios = false;
+    std::string memcard[2];
+    bool no_memcard = false;
     std::string vram_dump;
     uint32_t trace_lo = 0, trace_hi = 0;
     bool uncapped = false;
+    bool intro = false;
     int shot_every = 0;
     std::string shot_dir;
     struct Press {
@@ -113,7 +126,11 @@ Options parse(int argc, char** argv) {
         else if (a == "--frames" && i + 1 < argc) o.max_frames = std::atoi(argv[++i]);
         else if (a == "--screenshot" && i + 1 < argc) o.screenshot = argv[++i];
         else if (a == "--trace-bios") o.trace_bios = true;
+        else if (a == "--memcard1" && i + 1 < argc) o.memcard[0] = argv[++i];
+        else if (a == "--memcard2" && i + 1 < argc) o.memcard[1] = argv[++i];
+        else if (a == "--no-memcard") o.no_memcard = true;
         else if (a == "--uncapped") o.uncapped = true;
+        else if (a == "--intro") o.intro = true;
         else if (a == "--screenshot-every" && i + 2 < argc) {
             o.shot_every = std::atoi(argv[++i]);
             o.shot_dir = argv[++i];
@@ -141,27 +158,6 @@ Options parse(int argc, char** argv) {
     return o;
 }
 
-// Feeds raw disc sectors to the emulated CD-ROM drive.
-class DiscSource final : public dw3::SectorSource {
-public:
-    explicit DiscSource(psxdisc::Disc& d) : disc_(d) {}
-    uint32_t sector_count() const override { return disc_.sector_count(); }
-    bool read_raw(uint32_t lba, uint8_t out[2352]) override {
-        return disc_.read_raw(lba, std::span<uint8_t, psxdisc::kRawSectorSize>(out, psxdisc::kRawSectorSize));
-    }
-
-private:
-    psxdisc::Disc& disc_;
-};
-
-std::vector<uint8_t> read_boot_exe(psxdisc::Disc& disc) {
-    auto root = psxdisc::read_root(disc);
-    if (!root) return {};
-    for (const auto& f : psxdisc::walk(disc, root->lba, root->size))
-        if (f.path == "SLUS_014.36") return disc.read_file(f.lba, f.size);
-    return {};
-}
-
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -173,16 +169,24 @@ int main(int argc, char** argv) {
     SDL_Log("no recompiled code linked: run `cmake --build <dir> --target recompile` and reconfigure");
     return 1;
 #else
-    auto disc = psxdisc::Disc::open(opt.disc);
-    if (!disc) {
-        SDL_Log("cannot open disc image %s", opt.disc.c_str());
+    dw3::host::Config cfg;
+    cfg.disc_path = opt.disc;
+    cfg.card_mode = opt.no_memcard ? dw3::host::CardMode::None : dw3::host::CardMode::Files;
+    cfg.card_path = {opt.memcard[0], opt.memcard[1]};
+    cfg.trace_bios = opt.trace_bios;
+    cfg.trace_lo = opt.trace_lo;
+    cfg.trace_hi = opt.trace_hi;
+    cfg.log = [](const std::string& s) { SDL_Log("%s", s.c_str()); };
+    std::string error;
+    auto host = dw3::host::Host::create(cfg, error);
+    if (!host) {
+        SDL_Log("%s", error.c_str());
         return 1;
     }
-    auto exe = read_boot_exe(*disc);
-    if (exe.empty()) {
-        SDL_Log("SLUS_014.36 not found on disc");
-        return 1;
-    }
+    dw3::Machine& machine = host->machine();
+    dw3::Bios& bios = host->bios();
+    // Audit runs skip the intro FMV with START at frame 300 unless --intro is given.
+    if (opt.max_frames >= 0 && !opt.intro) opt.presses.push_back({dw3::kPadStart, 300, 306});
 
     if (!SDL_Init(SDL_INIT_VIDEO | SDL_INIT_EVENTS | SDL_INIT_GAMEPAD)) {
         SDL_Log("SDL_Init failed: %s", SDL_GetError());
@@ -196,10 +200,6 @@ int main(int argc, char** argv) {
         return 1;
     }
 
-    static dw3::Machine machine({dw3_segments, dw3_segment_count});
-    static dw3::Bios bios(machine);
-    static DiscSource disc_source(*disc);
-    machine.cdrom().set_disc(&disc_source);
     static HostPad host_pad;
     host_pad.script = &opt.presses;
     {
@@ -212,24 +212,9 @@ int main(int argc, char** argv) {
     std::size_t funcs = 0;
     for (uint32_t i = 0; i < dw3_segment_count; ++i) funcs += dw3_segments[i].func_count;
     SDL_Log("recompiled code: %u segments, %zu functions", dw3_segment_count, funcs);
-    if (opt.trace_bios) bios.log = [](const std::string& s) { SDL_Log("%s", s.c_str()); };
-    bios.on_tty = [](const std::string& s) { SDL_Log("[game] %s", s.c_str()); };
-    if (opt.trace_hi) {
-        machine.bus().trace_lo = opt.trace_lo;
-        machine.bus().trace_hi = opt.trace_hi;
-        machine.bus().on_trace = [](uint32_t a, int size, bool write, uint32_t v) {
-            SDL_Log("io %s%d %08X %s %08X @%lld", write ? "W" : "R", size * 8, a, write ? "<-" : "->", v,
-                    static_cast<long long>(machine.ctx().cycles));
-        };
-    }
-    static std::map<uint32_t, uint64_t> unmapped;  // physical address -> access count
-    machine.bus().on_unmapped = [](uint32_t addr, int size, bool write, uint32_t value) {
-        if (unmapped[addr]++ == 0)
-            SDL_Log("unmapped %s%d %08X%s", write ? "W" : "R", size * 8, addr,
-                    write ? (" = " + std::to_string(value)).c_str() : "");
-    };
+    host->on_tty = [](const std::string& s) { SDL_Log("[game] %s", s.c_str()); };
 
-    auto shutdown = [&](int code) {
+    auto shutdown = [&](int code) -> int {
         if (!opt.vram_dump.empty()) {
             std::vector<uint32_t> v;
             machine.gpu().snapshot_vram(v);
@@ -252,22 +237,17 @@ int main(int argc, char** argv) {
         SDL_DestroyRenderer(renderer);
         SDL_DestroyWindow(window);
         SDL_Quit();
-        std::exit(code);
+        return code;
     };
-    dw3::set_fatal_handler([&](const std::string& msg) {
-        SDL_Log("FATAL: %s", msg.c_str());
-        shutdown(2);
-    });
-
     // The game owns the main thread; each emulated VBLANK pumps the window and presents.
     SDL_Texture* screen = nullptr;
     int screen_w = 0, screen_h = 0;
     std::vector<uint32_t> pixels;
-    machine.video().on_frame = [&](uint64_t frame) {
+    auto on_frame = [&](uint64_t frame) {
         host_pad.frame = static_cast<int64_t>(frame);
         SDL_Event e;
         while (SDL_PollEvent(&e)) {
-            if (e.type == SDL_EVENT_QUIT) shutdown(0);
+            if (e.type == SDL_EVENT_QUIT) dw3::host::Host::stop();
             if (e.type == SDL_EVENT_GAMEPAD_ADDED && !host_pad.gamepad) host_pad.gamepad = SDL_OpenGamepad(e.gdevice.which);
         }
         SDL_SetRenderDrawColor(renderer, 0, 0, 0, 255);
@@ -301,7 +281,7 @@ int main(int argc, char** argv) {
                     SDL_Log("saved screenshot %s", opt.screenshot.c_str());
                 }
             }
-            shutdown(0);
+            dw3::host::Host::stop();
         }
         SDL_RenderPresent(renderer);
         // Real-time pacing against emulated time (exact NTSC/PAL frame period from the video clock).
@@ -315,10 +295,13 @@ int main(int argc, char** argv) {
         }
     };
 
-    uint32_t entry = bios.load_exe(exe);
-    SDL_Log("booting SLUS_014.36 at %08X", entry);
-    bios.run(entry);
-    SDL_Log("game entry returned");
-    shutdown(0);
+    SDL_Log("booting SLUS_014.36");
+    auto result = host->run(on_frame);
+    if (result.end == dw3::host::RunResult::End::Fatal) {
+        SDL_Log("FATAL: %s", result.fatal_message.c_str());
+        return shutdown(2);
+    }
+    if (result.end == dw3::host::RunResult::End::Returned) SDL_Log("game entry returned");
+    return shutdown(0);
 #endif
 }

@@ -1,0 +1,22 @@
+name = "title_menu"
+description = "Skip the intro, reach the title screen and open the Start/Continue menu (pad input via DualShock protocol)."
+frames = 1000
+
+[[check]]
+at = 840
+label = "title screen (Press Start Button)"
+display_enabled = true
+display_width = 320
+screen_hash = "1ffc3dfe000000007ffe1fce1ffe1ffe07e8000070007ffe001003f00cb00002"
+screenshot = true
+
+[[press]]
+button = "START"
+at = 900
+
+[[check]]
+at = 990
+label = "Start/Continue menu"
+min_primitives = 1000
+screen_hash = "1ffe3ffe000000007ffe1fce1ffe3ffe0008000270007ffe007003f00cb00182"
+screenshot = true

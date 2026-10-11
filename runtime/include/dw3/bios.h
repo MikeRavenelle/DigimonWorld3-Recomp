@@ -7,12 +7,19 @@
 // kernel's own work runs (pad polling, root-counter events), then the game's SysEnqIntRP chains,
 // then the HookEntryInt "custom exit" (libetc's trapIntr) if one is set. That exit ends with
 // ReturnFromException, which unwinds back here (C++ exception) and the saved registers are restored.
+//
+// Memory cards: the card functions (A0:AB/AC, B0:4E/4F) and the "bu00:"/"bu10:" file functions operate
+// directly on the images attached to Sio (see Sio::card_data), using dw3/memcard.h for the filesystem.
+// Operations complete immediately; their completion events (SwCARD then HwCARD) are delivered later.
+// Event/DIRENTRY details follow psx-spx "BIOS Memory Card Functions"/"BIOS File Functions", cross-checked
+// against PCSX-Redux's HLE BIOS and OpenBIOS (GPL-2+/MIT); no code was copied.
 
 #include <array>
 #include <cstdint>
 #include <functional>
 #include <span>
 #include <string>
+#include <vector>
 
 #include "dw3/machine.h"
 
@@ -57,6 +64,7 @@ public:
     std::array<PadState, 2> pads;
     std::function<void(const std::string&)> log;     // optional trace of kernel calls
     std::function<void(const std::string&)> on_tty;  // game debug output (printf), one line per call
+    std::function<void(int slot)> on_card_write;     // a BIOS call modified the card image in `slot` (0/1)
 
     // Introspection for tests and diagnostics.
     const KernelEvent& event(int i) const { return events_[static_cast<std::size_t>(i)]; }
@@ -71,7 +79,28 @@ private:
     void wait_until(RecompContext& ctx, const std::function<bool()>& done);
     void poll_pads();
     void run_int_chains(RecompContext& ctx);
-    void card_async(uint32_t spec_sw, uint32_t spec_hw);
+    // Memory card support (runtime/bios/bios_card.cpp).
+    struct OpenFile {
+        bool used = false;
+        int slot = 0;
+        std::string name;
+        uint32_t pos = 0, mode = 0;
+    };
+    struct Search {
+        bool active = false;
+        int slot = 0, last_block = 0;
+        std::string pattern;
+    };
+    void card_async(uint32_t spec);
+    void card_modified(int slot);
+    std::string read_cstr(RecompContext& c, uint32_t addr) const;
+    bool card_dispatch(RecompContext& c, uint32_t table, uint32_t fn);  // false = not a card/file function
+    uint32_t file_open(RecompContext& c, uint32_t path, uint32_t mode);
+    uint32_t file_transfer(RecompContext& c, uint32_t fd, uint32_t buf, uint32_t len, bool write);
+    uint32_t file_seek(uint32_t fd, int32_t off, uint32_t whence);
+    uint32_t file_first(RecompContext& c, uint32_t pattern, uint32_t entry);
+    uint32_t file_next(RecompContext& c, uint32_t entry);
+    uint32_t file_misc(RecompContext& c, uint32_t fn, uint32_t a0, uint32_t a1);  // format / rename / erase
     [[noreturn]] void unknown(uint32_t table, uint32_t fn);
 
     Machine& m_;
@@ -84,6 +113,9 @@ private:
     bool clear_pad_ = true;
     std::array<bool, 4> clear_rcnt_{true, true, true, true};
     bool in_exception_ = false;
+    std::array<OpenFile, 16> files_{};  // fds 0/1 are reserved for the console
+    Search search_;
+    uint32_t errno_ = 0;
     std::string tty_;
     uint64_t interrupts_ = 0, calls_ = 0;
 };

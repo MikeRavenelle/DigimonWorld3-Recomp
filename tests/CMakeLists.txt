@@ -23,7 +23,7 @@ dw3_add_test(test_runtime
             runtime/test_scheduler.cpp runtime/test_irq.cpp runtime/test_video_timing.cpp
             runtime/test_timers.cpp runtime/test_dma.cpp runtime/test_cdrom.cpp runtime/test_machine.cpp runtime/test_spu.cpp
             runtime/test_bios.cpp runtime/test_soft_rasterizer.cpp runtime/test_sio.cpp
-            runtime/test_mdec.cpp
+            runtime/test_mdec.cpp runtime/test_memcard.cpp
     LIBS dw3runtime)
 
 # Differential emitter tests: emit_testgen recompiles the programs of psxrecomp/test_programs.h at build
@@ -50,3 +50,22 @@ dw3_add_test(test_emitter
     LIBS dw3runtime)
 target_include_directories(test_emitter PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/psxrecomp ${EMITTED_TESTS_DIR}
     ${PROJECT_SOURCE_DIR}/tools/psxrecomp/include)  # header-only use of CodeSegment via mips_asm.h
+
+dw3_add_test(test_scenario_format
+    SOURCES scenario/test_scenario_format.cpp
+    LIBS dw3scenario_core)
+
+# In-game scenarios: one ctest test per tests/scenarios/*.toml, run headless by dw3scenario (needs the recompiled
+# code and the disc image; exits 77 = SKIP without the disc). Scenarios run ~6x faster than real time in the
+# release build, so the fast path is:  ctest --preset linux-x64-release -L scenario
+# (Debug works but is far slower.) Screenshots land in game/audit/scenarios/<name>/ (git-ignored).
+if(TARGET dw3scenario)
+    file(GLOB DW3_SCENARIO_FILES CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/scenarios/*.toml")
+    foreach(scenario_file ${DW3_SCENARIO_FILES})
+        get_filename_component(scenario_name "${scenario_file}" NAME_WE)
+        add_test(NAME scenario.${scenario_name}
+            COMMAND dw3scenario "${scenario_file}" --disc "${DW3_GAME_DIR}/Digimon World 3 (USA).cue")
+        set_tests_properties(scenario.${scenario_name} PROPERTIES
+            LABELS scenario SKIP_RETURN_CODE 77 TIMEOUT 600)
+    endforeach()
+endif()

@@ -1,0 +1,19 @@
+name = "boot_loading"
+description = "Boot to the DMW3 loading screen: crt0, native BIOS, libgpu ResetGraph, libcd init."
+frames = 120
+skip_intro = false
+
+[[check]]
+at = 60
+label = "loading screen displayed"
+display_enabled = true
+display_width = 320
+display_height = 480
+tty_contains = "ResetGraph"
+screen_hash = "bcb0ffb0fff8000007f81d90fdf0fff81fff3fff0dbe13f801900fff7ff20efa"
+screenshot = true
+
+[[check]]
+at = 120
+label = "CD subsystem initialised"
+tty_contains = "CD_init"

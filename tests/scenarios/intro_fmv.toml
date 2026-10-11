@@ -1,0 +1,19 @@
+name = "intro_fmv"
+description = "Intro FMV decodes and plays (MDEC + CD streaming). The only scenario that keeps the intro."
+frames = 2400
+skip_intro = false
+
+[[check]]
+at = 1200
+label = "FMV frame mid-intro"
+display_enabled = true
+min_commands = 9000
+screen_hash = "fe7efe72fe700000003f18ff1dffdefe000200640024003e0000607c807c806e"
+screenshot = true
+
+[[check]]
+at = 2400
+label = "FMV still playing"
+min_commands = 20000
+screen_hash = "f8ffffff3f3f0000003f0067b00ff01f00c7004300400027000018030c8500cf"
+screenshot = true

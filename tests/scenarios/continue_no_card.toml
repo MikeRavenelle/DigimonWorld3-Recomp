@@ -1,0 +1,37 @@
+name = "continue_no_card"
+description = "Title -> Continue with no memory card inserted -> LOAD screen reports the card is missing."
+frames = 2100
+memcard = "none"
+
+[[press]]
+button = "START"
+at = 900
+
+[[press]]
+button = "CROSS"
+at = 1020
+
+[[press]]
+button = "CROSS"
+at = 1500
+
+[[check]]
+at = 1440
+label = "LOAD screen"
+display_enabled = true
+screen_hash = "00060006000600068001ffffcf6700068001800180018005ffff80018cdf8201"
+screenshot = true
+
+[[check]]
+at = 1560
+label = "slot 1 selected: card read"
+display_enabled = true
+screen_hash = "00060006000600068011ffff5af6000680018001800381ffffff800180018001"
+screenshot = true
+
+[[check]]
+at = 1800
+label = "slot 1 result (no card)"
+display_enabled = true
+screen_hash = "0006210e000600068011ffffce77000680018001800381ffffff800180018001"
+screenshot = true

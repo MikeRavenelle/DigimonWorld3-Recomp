@@ -36,11 +36,14 @@ if(EXISTS "${DW3_GENERATED_DIR}/sources.txt")
         $<$<C_COMPILER_ID:Clang,GNU>:-fexceptions> $<$<C_COMPILER_ID:MSVC>:/O1> $<$<C_COMPILER_ID:MSVC>:/w>
         $<$<C_COMPILER_ID:MSVC>:/EHsc>)
     set(DW3_HAVE_GENERATED ON)
+    add_subdirectory(host)
     message(STATUS "DW3: using recompiled code from ${DW3_GENERATED_DIR}")
 else()
     set(DW3_HAVE_GENERATED OFF)
     message(STATUS "DW3: no recompiled code found; run psxrecomp emit to generate it")
 endif()
+
+add_subdirectory(tools/scenario)  # after the generated-code check: the runner needs dw3host
 
 # Regenerate recompiled code: cmake --build <dir> --target recompile
 add_custom_target(recompile

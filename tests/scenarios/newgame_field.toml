@@ -1,0 +1,38 @@
+name = "newgame_field"
+description = "Title -> Start (new game) -> Kusanagi City opening field scene with dialogue (field + stage overlays)."
+frames = 2400
+
+[[press]]
+button = "START"
+at = 900
+
+[[press]]
+button = "UP"
+at = 960
+
+[[press]]
+button = "CROSS"
+at = 1020
+
+[[repeat]]
+button = "CROSS"
+from = 1100
+to = 2400
+every = 45
+hold = 3
+
+[[check]]
+at = 1320
+label = "location card: Kusanagi City / Street Corner"
+display_enabled = true
+screen_hash = "0002ffc20fc200020002ffffffff083f00020002000200020002000200020002"
+screenshot = true
+
+[[check]]
+at = 1800
+label = "field scene rendered"
+display_width = 320
+display_height = 240
+min_primitives = 100000
+screen_hash = "30001800040300270f13020104006400f9ffbfff3f7f7fd7ff83fb1fff0ff197"
+screenshot = true

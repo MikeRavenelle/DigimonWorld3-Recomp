@@ -1,7 +1,9 @@
 add_library(dw3runtime STATIC
     bios/bios.cpp
+    bios/bios_card.cpp
     core/bus.cpp
     core/machine.cpp
+    core/memcard.cpp
     hw/gpu.cpp
     render/soft_rasterizer.cpp
     hw/gte.cpp

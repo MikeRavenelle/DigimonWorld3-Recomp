@@ -82,6 +82,10 @@ public:
     void detach_card(int slot);
     bool has_card(int slot) const { return !cards_[slot & 1].data.empty(); }
     uint8_t card_flag(int slot) const { return cards_[slot & 1].flag; }
+    // The attached storage (empty span = no card); lets the native BIOS operate on the same image.
+    std::span<uint8_t> card_data(int slot) const { return cards_[slot & 1].data; }
+    // Clears the "new card" FLAG bit, as any successful write does.
+    void clear_card_new(int slot) { cards_[slot & 1].flag &= static_cast<uint8_t>(~0x08); }
     // Called after each committed sector write (e.g. to mark the .mcd dirty).
     std::function<void(int slot, uint32_t sector)> on_card_write;
 
