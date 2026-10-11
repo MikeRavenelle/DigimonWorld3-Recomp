@@ -12,6 +12,7 @@
 #include <functional>
 #include <memory>
 #include <optional>
+#include <span>
 #include <string>
 #include <vector>
 
@@ -32,6 +33,9 @@ struct Config {
     CardMode card_mode = CardMode::Files;
     std::array<std::string, 2> card_path;  // Files mode overrides; empty = <user data dir>/memcards/slotN.mcd
     std::vector<uint8_t> blank_card;  // Blank mode: start from this image (e.g. the previous boot's) instead of a fresh one
+    // Index of the disc's content that save states use to refer to data read from it; built on the first save and
+    // cached. Empty = <user data dir>/cache/disc.index.
+    std::string disc_index_cache;
     bool trace_bios = false;
     uint32_t trace_lo = 0, trace_hi = 0;  // bus I/O trace range (physical addresses), 0/0 = off
     std::function<void(const std::string&)> log;  // diagnostics (optional)
@@ -62,6 +66,19 @@ public:
     std::function<void(const std::string&)> on_tty;
     const std::string& tty() const { return tty_; }
 
+    // Save states (file format and safe points: see state.h and machine.h). A state belongs to the game, not to a
+    // build of the recompiler. It does not contain the memory card images, only a hash of each; loading with other
+    // card contents logs a warning. Loading never writes the card files.
+    //
+    // save_state queues a capture for the next safe point while the game runs; `done` then receives the state file
+    // (header included) or an error message.
+    void save_state(std::function<void(std::vector<uint8_t> file, const std::string& error)> done);
+    // Loads a state file. Before run() it is applied at once and the game then continues from it; while the game is
+    // running it is applied at the next safe point, abandoning the current game position. `done` receives an empty
+    // string on success. A file that fails the header checks is rejected immediately; one that turns out to be
+    // inconsistent while it is being applied ends the run with a fatal error.
+    void load_state(std::vector<uint8_t> file, std::function<void(const std::string& error)> done = nullptr);
+
     // Boots the game; `frame_hook` runs at every emulated VBLANK. Returns once stopped, fatal or returned.
     // Flushes dirty memory cards before returning.
     RunResult run(std::function<void(uint64_t frame)> frame_hook);
@@ -74,6 +91,11 @@ private:
     std::optional<psxdisc::Disc> disc_;
     std::unique_ptr<Machine> machine_;
     std::unique_ptr<Bios> bios_;
+    bool running_ = false;
+    uint64_t identity() const;
+    std::vector<uint8_t> capture();
+    void apply(std::span<const uint8_t> payload);
+    std::vector<uint8_t> unpack(std::span<const uint8_t> file);
     std::vector<uint8_t> exe_;
     std::string tty_;
 };

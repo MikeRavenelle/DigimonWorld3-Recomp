@@ -27,11 +27,17 @@
 //   --screenshot-every N DIR   save the window image every N frames
 //   --vram-dump PATH   save the whole VRAM as a BMP on exit
 //   --trace-io LO:HI   log bus accesses to the hex physical range LO..HI
+//   --load-state PATH  start from a save state file instead of booting (it must come from the same game; a load
+//                      warns when an inserted memory card differs from the one the state was taken with)
+//
+// Save states (keyboard): F5 saves and F7 loads the current slot, F6 / F8 select the previous / next slot (1 to 9).
+// Slots are <user data dir>/states/slotN.state. A state is written or restored within a frame or two of the key
+// press, at the next point where the recompiled game can be interrupted safely.
 
 #include <SDL3/SDL.h>
 
-#include <cstdio>
 #include <array>
+#include <cstdio>
 #include <cstdlib>
 #include <filesystem>
 #include <map>
@@ -64,6 +70,7 @@ struct Options {
     dw3app::RendererChoice renderer = dw3app::RendererChoice::Auto;
     dw3app::PresentOptions present;
     bool no_vsync = false;
+    std::string load_state;
     struct Press {
         uint16_t button;
         int64_t from, to;
@@ -212,6 +219,7 @@ Options parse(int argc, char** argv) {
             int64_t len = plus == std::string::npos ? 6 : std::stoll(spec.substr(plus + 1));
             o.presses.push_back({bit, from, from + len});
         }
+        else if (a == "--load-state" && i + 1 < argc) o.load_state = argv[++i];
         else if (a == "--vram-dump" && i + 1 < argc) o.vram_dump = argv[++i];
         else if (a == "--trace-io" && i + 1 < argc) {
             std::string r = argv[++i];
@@ -278,6 +286,25 @@ int main(int argc, char** argv) {
     dw3app::AudioOutput audio;
     audio.open(opt.mute || opt.uncapped || opt.max_frames >= 0);
 
+    auto read_state_file = [](const std::string& path, std::vector<uint8_t>& data) {
+        std::string err;
+        if (dw3::savestate::read_file(path, data, err)) return true;
+        SDL_Log("%s", err.c_str());
+        return false;
+    };
+    bool pacing_reset = false;  // a state was loaded: emulated time jumped, so restart the real-time pacing
+    if (!opt.load_state.empty()) {
+        std::vector<uint8_t> data;
+        if (!read_state_file(opt.load_state, data)) return 1;
+        std::string load_error;
+        host->load_state(std::move(data), [&](const std::string& e) { load_error = e; });
+        if (!load_error.empty()) {
+            SDL_Log("cannot load %s: %s", opt.load_state.c_str(), load_error.c_str());
+            return 1;
+        }
+        SDL_Log("loaded state %s", opt.load_state.c_str());
+    }
+
     static HostPad host_pad;
     host_pad.script = &opt.presses;
     {
@@ -330,12 +357,46 @@ int main(int argc, char** argv) {
         SDL_DestroySurface(s);
         return ok;
     };
+    int state_slot = 1;
+    const std::filesystem::path state_dir = dw3::platform::user_data_dir() / "states";
+    auto slot_path = [&] { return (state_dir / ("slot" + std::to_string(state_slot) + ".state")).string(); };
+    auto save_slot = [&] {
+        const std::string path = slot_path();
+        host->save_state([path](std::vector<uint8_t> file, const std::string& err) {
+            std::string werr;
+            if (!err.empty()) SDL_Log("cannot save state: %s", err.c_str());
+            else if (!dw3::savestate::write_file(path, file, werr)) SDL_Log("cannot save state: %s", werr.c_str());
+            else SDL_Log("saved state %s", path.c_str());
+        });
+    };
+    auto load_slot = [&] {
+        const std::string path = slot_path();
+        std::vector<uint8_t> data;
+        if (!read_state_file(path, data)) return;
+        host->load_state(std::move(data), [&, path](const std::string& e) {
+            if (e.empty()) {
+                pacing_reset = true;
+                SDL_Log("loaded state %s", path.c_str());
+            } else {
+                SDL_Log("cannot load %s: %s", path.c_str(), e.c_str());
+            }
+        });
+    };
     auto on_frame = [&](uint64_t frame) {
         host_pad.frame = static_cast<int64_t>(frame);
         audio.pump(machine.spu());
         SDL_Event e;
         while (SDL_PollEvent(&e)) {
             if (e.type == SDL_EVENT_QUIT) dw3::host::Host::stop();
+            if (e.type == SDL_EVENT_KEY_DOWN && !e.key.repeat) {
+                switch (e.key.scancode) {
+                    case SDL_SCANCODE_F5: save_slot(); break;
+                    case SDL_SCANCODE_F7: load_slot(); break;
+                    case SDL_SCANCODE_F6: state_slot = state_slot > 1 ? state_slot - 1 : 9; SDL_Log("state slot %d", state_slot); break;
+                    case SDL_SCANCODE_F8: state_slot = state_slot < 9 ? state_slot + 1 : 1; SDL_Log("state slot %d", state_slot); break;
+                    default: break;
+                }
+            }
             if (e.type == SDL_EVENT_GAMEPAD_ADDED && !host_pad.gamepad) host_pad.gamepad = SDL_OpenGamepad(e.gdevice.which);
         }
         const bool last = opt.max_frames >= 0 && static_cast<int64_t>(frame) >= opt.max_frames;
@@ -353,8 +414,13 @@ int main(int argc, char** argv) {
         }
         // Real-time pacing against emulated time (exact NTSC/PAL frame period from the video clock).
         if (!opt.uncapped && opt.max_frames < 0) {
-            static const uint64_t start_ns = SDL_GetTicksNS();
-            static const int64_t start_cycles = machine.ctx().cycles;
+            static uint64_t start_ns = SDL_GetTicksNS();
+            static int64_t start_cycles = machine.ctx().cycles;
+            if (pacing_reset) {
+                start_ns = SDL_GetTicksNS();
+                start_cycles = machine.ctx().cycles;
+                pacing_reset = false;
+            }
             uint64_t target = start_ns + static_cast<uint64_t>(
                 static_cast<double>(machine.ctx().cycles - start_cycles) * 1e9 / 33868800.0);
             uint64_t now = SDL_GetTicksNS();
