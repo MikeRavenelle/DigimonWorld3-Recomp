@@ -215,6 +215,8 @@ void FuncEmitter::collect_labels() {
     }
     for (const auto& jt : f_.jump_tables)
         for (uint32_t t : jt.targets) add(t);
+    for (const auto& pj : f_.pointer_jumps)
+        if (!pj.via_slot) add(pj.addr);
     // A labelled delay slot is emitted standalone after its branch, so the branch's fallthrough
     // must jump over it to pc+8.
     for (uint32_t pc : f_.insns) {
@@ -329,6 +331,15 @@ std::string FuncEmitter::run() {
                     const JumpTable* jt = nullptr;
                     for (const auto& t : f_.jump_tables)
                         if (t.jr_addr == pc) jt = &t;
+                    const PointerJump* cj = nullptr;  // jump to a fixed address: no run-time lookup needed
+                    for (const auto& pj : f_.pointer_jumps)
+                        if (pj.jr_addr == pc && !pj.via_slot) cj = &pj;
+                    if (cj) {
+                        if (!dss.empty()) line(dss);
+                        line(jump_to(pc, cj->addr));
+                        terminal = true;
+                        break;
+                    }
                     line("{ uint32_t t = " + R(i.rs) + ";");
                     if (!dss.empty()) line("  " + dss);
                     if (jt) {
@@ -481,10 +492,9 @@ uint32_t code_hash(const CodeSegment& seg, const std::vector<CodeRange>& ranges)
 }
 
 // Code words that tell `segs[idx]` apart from every other overlay sharing its address range, chosen greedily
-// so that the fewest words separate the most rivals. Rivals whose code is identical over the common range
-// cannot be told apart and are counted in `unresolved`.
+// so that the fewest words separate the most rivals.
 std::vector<std::pair<uint32_t, uint32_t>> discriminators(const std::vector<TableSegment>& segs, std::size_t idx,
-                                                          std::size_t max_words, std::size_t& unresolved) {
+                                                          std::size_t max_words) {
     const TableSegment& me = segs[idx];
     std::vector<std::size_t> rivals;
     for (std::size_t j = 1; j < segs.size(); ++j) {
@@ -514,18 +524,61 @@ std::vector<std::pair<uint32_t, uint32_t>> discriminators(const std::vector<Tabl
         for (std::size_t k : separates[best]) done[k] = true;
         out.emplace_back(best, me.seg->word(best));
     }
-    for (std::size_t k = 0; k < rivals.size(); ++k) {
-        bool coverable = false;
-        for (const auto& [a, ks] : separates) coverable = coverable || std::find(ks.begin(), ks.end(), k) != ks.end();
-        if (!coverable || !done[k]) ++unresolved;
-    }
     return out;
 }
 
 }  // namespace
 
+SlotRelations analyze_slots(const std::vector<TableSegment>& segs) {
+    SlotRelations rel;
+    rel.stale_if.resize(segs.size());
+    std::vector<std::vector<CodeRange>> ranges(segs.size());
+    for (std::size_t k = 1; k < segs.size(); ++k) ranges[k] = code_ranges(segs[k]);
+    auto overlap = [&](std::size_t a, std::size_t b) {
+        return segs[a].seg->base < segs[b].seg->end() && segs[b].seg->base < segs[a].seg->end();
+    };
+    // True if a code word of `a` that lies inside `b`'s image differs from `b`'s word there. While `a` is
+    // resident, RAM at that word holds `a`'s code, so `b`'s image is not what the slot contains.
+    auto code_differs = [&](std::size_t a, std::size_t b) {
+        const CodeSegment &sa = *segs[a].seg, &sb = *segs[b].seg;
+        for (const auto& r : ranges[a])
+            for (uint32_t w = r.start; w + 4 <= r.end; w += 4)
+                if (w + 4 <= sb.end() && sb.contains(w) && sa.word(w) != sb.word(w)) return true;
+        return false;
+    };
+    auto entries_in = [&](std::size_t sub, std::size_t super) {
+        for (const auto& [a, f] : *segs[sub].funcs)
+            if (!segs[super].funcs->count(a)) return false;
+        return true;
+    };
+    for (std::size_t i = 1; i < segs.size(); ++i) {
+        if (ranges[i].empty()) continue;  // no code: never has to be recognised
+        for (std::size_t j = 1; j < segs.size(); ++j) {
+            if (i == j || ranges[j].empty() || !overlap(i, j) || code_differs(i, j)) continue;
+            // No code word of i tells it from j. Either j's code tells j from i, so j in RAM proves that i is
+            // only the leftover tail of an earlier, larger load, or the two share their code where they overlap.
+            if (code_differs(j, i)) {
+                rel.stale_if[i].push_back(static_cast<uint32_t>(j));
+                continue;
+            }
+            // Shared code: the runtime picks the larger image, so the smaller one must not have functions the
+            // larger lacks. Each pair is judged once, from the side that loses.
+            std::size_t si = segs[i].seg->bytes.size(), sj = segs[j].seg->bytes.size();
+            bool i_wins = si > sj || (si == sj && i < j);
+            if (!i_wins && !entries_in(i, j))
+                rel.ambiguous.push_back(fmt("%s and %s share their code but %s has functions the larger image lacks",
+                                            segs[i].seg->name.c_str(), segs[j].seg->name.c_str(),
+                                            segs[i].seg->name.c_str()));
+        }
+    }
+    return rel;
+}
+
 EmittedFile emit_tables(const std::vector<TableSegment>& segs, std::vector<std::string>* warnings) {
     std::string protos, arrays, table;
+    SlotRelations rel = analyze_slots(segs);
+    if (warnings)
+        for (const auto& a : rel.ambiguous) warnings->push_back(a);
     for (std::size_t si = 0; si < segs.size(); ++si) {
         const auto& ts = segs[si];
         const std::string& n = ts.seg->name;
@@ -538,14 +591,10 @@ EmittedFile emit_tables(const std::vector<TableSegment>& segs, std::vector<std::
         arrays += "};\n";
         auto probes = select_probes(*ts.seg, *ts.funcs);
         if (si > 0) {  // overlays: add words that separate this overlay from the others in its slot
-            std::size_t unresolved = 0;
-            for (const auto& p : discriminators(segs, si, 48, unresolved))
+            for (const auto& p : discriminators(segs, si, 48))
                 if (std::none_of(probes.begin(), probes.end(), [&](const auto& q) { return q.first == p.first; }))
                     probes.push_back(p);
             std::sort(probes.begin(), probes.end());
-            if (unresolved && warnings)
-                warnings->push_back(fmt("%s: %zu overlay(s) sharing its slot have no code word that separates them", n.c_str(),
-                                        unresolved));
         }
         arrays += "static const RecompProbe probes_" + n + "[] = {\n";
         for (const auto& [a, w] : probes) arrays += fmt("    {0x%08Xu, 0x%08Xu},\n", a, w);
@@ -556,10 +605,15 @@ EmittedFile emit_tables(const std::vector<TableSegment>& segs, std::vector<std::
         for (const auto& r : ranges) arrays += fmt("    {0x%08Xu, 0x%08Xu},\n", r.start, r.end);
         if (ranges.empty()) arrays += "    {0, 0},\n";
         arrays += "};\n";
-        table += fmt("    {\"%s\", 0x%08Xu, %zuu, 0x%08Xu, funcs_%s, %zuu, probes_%s, %zuu, ranges_%s, %zuu, 0x%08Xu},\n",
+        arrays += "static const uint16_t stale_" + n + "[] = {";
+        for (uint32_t j : rel.stale_if[si]) arrays += fmt("%uu, ", j);
+        if (rel.stale_if[si].empty()) arrays += "0";
+        arrays += "};\n";
+        table += fmt("    {\"%s\", 0x%08Xu, %zuu, 0x%08Xu, funcs_%s, %zuu, probes_%s, %zuu, ranges_%s, %zuu, 0x%08Xu, "
+                     "stale_%s, %zuu},\n",
                      n.c_str(), ts.seg->base, ts.extent ? static_cast<std::size_t>(ts.extent) : ts.seg->bytes.size(),
                      segment_checksum(*ts.seg), n.c_str(), ts.funcs->size(), n.c_str(), probes.size(), n.c_str(),
-                     ranges.size(), code_hash(*ts.seg, ranges));
+                     ranges.size(), code_hash(*ts.seg, ranges), n.c_str(), rel.stale_if[si].size());
     }
     std::string text = "/* Generated by psxrecomp. Do not edit. */\n#include \"dw3/recomp.h\"\n\n" + protos + "\n" +
                        arrays + "\nconst RecompSegment dw3_segments[] = {\n" + table + "};\n" +

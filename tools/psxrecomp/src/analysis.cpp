@@ -47,6 +47,9 @@ public:
 private:
     Function trace(uint32_t start) const;
     std::optional<uint32_t> const_base(uint32_t reg, uint32_t before, int depth) const;
+    std::optional<uint32_t> exact_const(uint32_t reg, uint32_t before, uint32_t floor, int depth) const;
+    std::optional<uint32_t> spilled_base(const Function& f, uint32_t lw_pc, uint32_t reg) const;
+    std::optional<PointerJump> recover_pointer_jump(const Function& f, uint32_t jr_pc, uint8_t reg) const;
     std::optional<JumpTable> recover_jump_table(const Function& f, uint32_t jr_pc, uint8_t reg) const;
     bool add_start(uint32_t addr, uint32_t source);
     // Addresses at/after code_end belong to other segments at runtime (e.g. overlay slots inside the exe image).
@@ -97,6 +100,66 @@ std::optional<uint32_t> Analyzer::const_base(uint32_t reg, uint32_t before, int 
     return std::nullopt;
 }
 
+// Exact value of `reg` when it is built only from lui/addiu/ori within the function (not just a table base).
+std::optional<uint32_t> Analyzer::exact_const(uint32_t reg, uint32_t before, uint32_t floor, int depth) const {
+    if (reg == 0) return 0u;
+    if (depth > 4) return std::nullopt;
+    for (uint32_t pc = before - 4, n = 0; n < 16 && pc >= floor; pc -= 4, ++n) {
+        Instruction i = decode(seg_.word(pc), pc);
+        if (i.dest_gpr() != reg) continue;
+        switch (i.op) {
+            case Op::LUI: return i.uimm << 16;
+            case Op::ADDIU:
+                if (auto b = exact_const(i.rs, pc, floor, depth + 1)) return *b + static_cast<uint32_t>(i.simm);
+                return std::nullopt;
+            case Op::ORI:
+                if (auto b = exact_const(i.rs, pc, floor, depth + 1)) return *b | i.uimm;
+                return std::nullopt;
+            default: return std::nullopt;
+        }
+    }
+    return std::nullopt;
+}
+
+// Compilers spill a computed table address to the stack and reload it before the load of the entry. Follows
+// `lw reg, N(sp)` back to the nearest `sw rX, N(sp)` and resolves rX as a table base.
+std::optional<uint32_t> Analyzer::spilled_base(const Function& f, uint32_t lw_pc, uint32_t reg) const {
+    for (uint32_t pc = lw_pc - 4, n = 0; n < 16 && pc >= f.start; pc -= 4, ++n) {
+        Instruction i = decode(seg_.word(pc), pc);
+        if (i.dest_gpr() != reg) continue;
+        if (i.op != Op::LW || i.rs != 29) return std::nullopt;
+        for (uint32_t sp = pc - 4, m = 0; m < 512 && sp >= f.start; sp -= 4, ++m) {
+            Instruction st = decode(seg_.word(sp), sp);
+            if (st.op == Op::SW && st.rs == 29 && st.simm == i.simm) return const_base(st.rt, sp, 0);
+        }
+        return std::nullopt;
+    }
+    return std::nullopt;
+}
+
+// A JR that is not a jump table: its register is a fixed address or is loaded from a fixed memory cell.
+std::optional<PointerJump> Analyzer::recover_pointer_jump(const Function& f, uint32_t jr_pc, uint8_t reg) const {
+    PointerJump pj;
+    pj.jr_addr = jr_pc;
+    for (uint32_t pc = jr_pc - 4, n = 0; n < 16 && pc >= f.start; pc -= 4, ++n) {
+        Instruction i = decode(seg_.word(pc), pc);
+        if (i.dest_gpr() != reg) continue;
+        if (i.op == Op::LW) {
+            auto base = exact_const(i.rs, pc, f.start, 0);
+            if (!base) return std::nullopt;
+            pj.addr = *base + static_cast<uint32_t>(i.simm);
+            pj.via_slot = true;
+            return pj;
+        }
+        if (auto c = exact_const(reg, jr_pc, f.start, 0)) {
+            pj.addr = *c;
+            return pj;
+        }
+        return std::nullopt;
+    }
+    return std::nullopt;
+}
+
 std::optional<JumpTable> Analyzer::recover_jump_table(const Function& f, uint32_t jr_pc, uint8_t reg) const {
     // Find the load that produced the jump register.
     uint32_t lw_pc = 0;
@@ -112,6 +175,7 @@ std::optional<JumpTable> Analyzer::recover_jump_table(const Function& f, uint32_
     }
     if (!lw_pc) return std::nullopt;
     auto base = const_base(lw.rs, lw_pc, 0);
+    if (!base) base = spilled_base(f, lw_pc, lw.rs);
     if (!base) return std::nullopt;
     JumpTable jt;
     jt.jr_addr = jr_pc;
@@ -189,6 +253,11 @@ Function Analyzer::trace(uint32_t start) const {
                 f.errors.push_back("invalid instruction at " + hex(pc));
                 break;
             }
+            // jr/jalr with stray bits in the unused fields is data that happens to decode.
+            if ((i.op == Op::JR && (i.raw & 0x001FFFC0u)) || (i.op == Op::JALR && (i.raw & 0x001F07C0u))) {
+                f.errors.push_back("malformed jump at " + hex(pc));
+                break;
+            }
             visit(pc);
             flowed.insert(pc);
             if (i.has_delay_slot()) {
@@ -233,6 +302,9 @@ Function Analyzer::trace(uint32_t start) const {
                             if (auto jt = recover_jump_table(f, pc, i.rs)) {
                                 for (uint32_t t : jt->targets) add_target(t);
                                 f.jump_tables.push_back(std::move(*jt));
+                            } else if (auto pj = recover_pointer_jump(f, pc, i.rs)) {
+                                if (!pj->via_slot) add_target(pj->addr);
+                                f.pointer_jumps.push_back(*pj);
                             } else {
                                 f.indirect_jumps.push_back(pc);
                             }

@@ -203,7 +203,7 @@ TEST(EmitterText, TablesSeparateOverlaysThatShareTheirFirstWords) {
     EXPECT_TRUE(contains(text, "{0x80010008u, 0x24030006u}"));
 }
 
-TEST(EmitterText, TablesReportOverlaysWithIdenticalCode) {
+TEST(EmitterText, OverlaysWithIdenticalCodeShareIt) {
     Analysed main = analyse_overlay("MAIN", {jr(ra), nop()});
     Analysed a = analyse_overlay("OVA", {li(v0, 1), jr(ra), nop()});
     Analysed b = analyse_overlay("OVB", {li(v0, 1), jr(ra), nop()});
@@ -212,5 +212,84 @@ TEST(EmitterText, TablesReportOverlaysWithIdenticalCode) {
                                     {&b.seg, &b.res.functions}};
     std::vector<std::string> warnings;
     emit_tables(ts, &warnings);
-    EXPECT_EQ(warnings.size(), 2u);
+    EXPECT_TRUE(warnings.empty());
+    SlotRelations rel = analyze_slots(ts);
+    EXPECT_TRUE(rel.ambiguous.empty());
+    EXPECT_TRUE(rel.stale_if[1].empty() && rel.stale_if[2].empty());
+}
+
+TEST(EmitterText, SharedCodeWithMissingFunctionsIsAmbiguous) {
+    // OVB is the larger image and has the same words as OVA, but OVA's second function is unknown to OVB's
+    // analysis: picking OVB for an OVA load would lose it.
+    Program pa(kBase);
+    pa.emit({jal(kBase + 16), nop(), jr(ra), nop(), li(v0, 1), jr(ra), nop()});
+    Program pb(kBase);
+    pb.emit({jal(kBase + 16), nop(), jr(ra), nop(), li(v0, 1), jr(ra), nop(), nop(), nop()});
+    CodeSegment main = Program(kBase - 0x1000).segment("MAIN"), sa = pa.segment("OVA"), sb = pb.segment("OVB");
+    AnalysisConfig ca, cb;
+    ca.entries = cb.entries = {kBase};
+    ca.scan_data_pointers = cb.scan_data_pointers = ca.scan_jal_words = cb.scan_jal_words = false;
+    ca.gap_fill = cb.gap_fill = false;
+    cb.not_functions = {kBase + 16};
+    AnalysisResult ra = analyze(sa, ca), rb = analyze(sb, cb);
+    ASSERT_TRUE(ra.functions.count(kBase + 16));
+    ASSERT_FALSE(rb.functions.count(kBase + 16));
+    AnalysisResult rm;
+    std::vector<TableSegment> ts = {{&main, &rm.functions}, {&sa, &ra.functions}, {&sb, &rb.functions}};
+    SlotRelations rel = analyze_slots(ts);
+    EXPECT_EQ(rel.ambiguous.size(), 1u);
+}
+
+TEST(EmitterText, SmallOverlayRefutesLeftoverTailOfLargerOne) {
+    // OVB keeps its code beyond OVA's end; OVA's code sits where OVB has other words, so OVA being in RAM means
+    // OVB is only what is left of an earlier load.
+    Analysed main = analyse_overlay("MAIN", {jr(ra), nop()});
+    Analysed a = analyse_overlay("OVA", {li(v0, 1), jr(ra), nop()});
+    Program pb(kBase);
+    pb.emit({0x11111111u, 0x22222222u, 0x33333333u, 0x44444444u, li(v0, 2), jr(ra), nop()});
+    CodeSegment sb = pb.segment("OVB");
+    AnalysisConfig cb;
+    cb.entries = {kBase + 16};
+    cb.scan_data_pointers = cb.scan_jal_words = cb.gap_fill = false;
+    AnalysisResult rb = analyze(sb, cb);
+    main.seg.base = kBase - 0x1000;
+    std::vector<TableSegment> ts = {{&main.seg, &main.res.functions}, {&a.seg, &a.res.functions}, {&sb, &rb.functions}};
+    SlotRelations rel = analyze_slots(ts);
+    EXPECT_TRUE(rel.ambiguous.empty());
+    EXPECT_TRUE(rel.stale_if[1].empty());
+    EXPECT_EQ(rel.stale_if[2], std::vector<uint32_t>{1});
+    std::string text = emit_tables(ts).text;
+    EXPECT_TRUE(contains(text, "static const uint16_t stale_OVB[] = {1u, };"));
+}
+
+TEST(EmitterText, OverlayWithoutCodeNeverNeedsRecognising) {
+    Analysed main = analyse_overlay("MAIN", {jr(ra), nop()});
+    Analysed a = analyse_overlay("OVA", {li(v0, 1), jr(ra), nop()});
+    Program pd(kBase);
+    pd.emit({0x11111111u, 0x22222222u});
+    CodeSegment sd = pd.segment("OVD");
+    AnalysisResult rd;
+    main.seg.base = kBase - 0x1000;
+    std::vector<TableSegment> ts = {{&main.seg, &main.res.functions}, {&a.seg, &a.res.functions}, {&sd, &rd.functions}};
+    SlotRelations rel = analyze_slots(ts);
+    EXPECT_TRUE(rel.ambiguous.empty());
+    EXPECT_TRUE(rel.stale_if[2].empty());
+}
+
+TEST(EmitterText, JrToConstantAddressIsAJumpNotALookup) {
+    Program p(kBase);
+    uint32_t target = kBase + 0x20;
+    p.emit({lui(v0, target >> 16), ori(v0, v0, target & 0xFFFF), jr(v0), nop()});
+    while (p.pc() < target) p.emit(nop());
+    p.emit({li(v0, 3), jr(ra), nop()});
+    std::string c = emit_entry(p, nullptr, false);
+    EXPECT_TRUE(contains(c, "goto L_80010020;"));
+    EXPECT_FALSE(contains(c, "dw3_call"));
+}
+
+TEST(EmitterText, JrThroughMemoryCellKeepsTheDynamicLookup) {
+    Program p(kBase);
+    p.emit({lui(t1, 0x8008), lw(t1, 0x2000, t1), nop(), jr(t1), nop()});
+    std::string c = emit_entry(p, nullptr, false);
+    EXPECT_TRUE(contains(c, "dw3_call(ctx, t); return; }"));
 }

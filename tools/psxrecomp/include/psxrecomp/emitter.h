@@ -45,6 +45,16 @@ struct TableSegment {
     uint32_t extent = 0;
 };
 
+// How the overlays that share an address range relate to each other, for identifying the resident one.
+struct SlotRelations {
+    // Per segment: overlays whose presence in RAM shows that this one is only a leftover (a larger overlay's tail
+    // that a smaller load did not overwrite). Indices into the segment list.
+    std::vector<std::vector<uint32_t>> stale_if;
+    // Overlay pairs that no code word can tell apart and whose functions differ.
+    std::vector<std::string> ambiguous;
+};
+SlotRelations analyze_slots(const std::vector<TableSegment>& segs);
+
 // Lookup tables: one RecompFuncEntry array per segment plus `dw3_segments[]` / `dw3_segment_count`.
 // `warnings` receives notes about overlays whose code cannot be told apart from another overlay in the same slot.
 EmittedFile emit_tables(const std::vector<TableSegment>& segs, std::vector<std::string>* warnings = nullptr);

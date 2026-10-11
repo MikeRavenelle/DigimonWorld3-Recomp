@@ -128,12 +128,26 @@ int Machine::resident_segment(uint32_t addr) {
         if (k == 0 || segments_[k].probe_count == 0 || probes_match(segments_[k])) return static_cast<int>(k);
         resident_[k] = verified_[k] = false;
     }
-    // Identify which candidate overlay is actually in RAM now. When one overlay's code is a prefix of another's
-    // both verify; the larger one wins.
+    // Identify which candidate overlay is actually in RAM now. A load that is smaller than the overlay before it
+    // leaves that overlay's tail in place, so its code still verifies; the table names the overlays whose code
+    // being present proves a candidate is such a leftover. Of the rest, the larger image wins (overlays whose
+    // code is identical where they overlap).
+    std::vector<std::size_t> cands;
+    for (std::size_t k = 1; k < segments_.size(); ++k)
+        if (covers(segments_[k], addr) && probes_match(segments_[k]) && code_matches(segments_[k])) cands.push_back(k);
+    auto is_stale = [&](std::size_t k) {
+        for (uint32_t n = 0; n < segments_[k].stale_count; ++n) {
+            const auto& other = segments_[segments_[k].stale_if[n]];
+            if (probes_match(other) && code_matches(other)) return true;
+        }
+        return false;
+    };
     int best = -1;
-    for (std::size_t k = 1; k < segments_.size(); ++k) {
-        if (!covers(segments_[k], addr) || !probes_match(segments_[k]) || !code_matches(segments_[k])) continue;
-        if (best < 0 || segments_[k].size > segments_[static_cast<std::size_t>(best)].size) best = static_cast<int>(k);
+    for (int pass = 0; pass < 2 && best < 0; ++pass) {  // pass 1 ignores staleness (mutual refutation)
+        for (std::size_t k : cands) {
+            if (pass == 0 && is_stale(k)) continue;
+            if (best < 0 || segments_[k].size > segments_[static_cast<std::size_t>(best)].size) best = static_cast<int>(k);
+        }
     }
     if (best < 0) return -1;
     auto k = static_cast<std::size_t>(best);
