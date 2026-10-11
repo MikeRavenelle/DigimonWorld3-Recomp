@@ -29,6 +29,32 @@
 //   hold = ["UP", "RIGHT"]     # optional: buttons held for the whole wait
 //   press = "CROSS"            # optional: button tapped every `every` frames (default 40) for `press_hold` (default 4)
 //
+//   [[walk]]                   # steering wait: holds d-pad directions toward a target position, see below
+//   at = 20000
+//   label = "to the gate"
+//   x = { via = 0x8004ADC0, addr = 0x58, size = 4 }   # position words (signed); `via` = pointer to an object
+//   z = { via = 0x8004ADC0, addr = 0x5C, size = 4 }   # and `addr` the offset into it (see [[check]] ram)
+//   target = [1000, 480]       # x and z to reach
+//   tolerance = 12             # |dx| and |dz| must both end up within this
+//   axes = "xz"                # default; "x" or "z" steers and tests one axis only (corridors, where the player
+//                              # must not press the other direction)
+//   timeout = 900              # real frames
+//   guard = [{ addr = 0x800554D4, size = 4, value = 0x1C3 }]   # must hold during the walk, else the run fails
+//   ram = [...]                # optional extra conditions that must also hold at the end
+//   press = "CROSS"            # optional tap, like [[wait]]
+//   While a walk is pending, LEFT/RIGHT are held while x is more than `tolerance` away from the target in that
+//   direction (RIGHT when x is too small) and UP/DOWN likewise for z (DOWN when z is too small). Wall collisions are
+//   not modelled: a route around obstacles is a sequence of walks to waypoints.
+//
+//   include = ["common/new_game.toml"]   # entries ([[press]], [[repeat]], [[wait]], [[walk]], [[check]], [[reboot]])
+//                              # of the listed files (paths relative to this file) are merged in before this file's own;
+//                              # their other keys are ignored. Frames in all files share one script clock.
+//
+//   RAM addresses found so far (details in tests/scenarios/common/new_game.toml):
+//     0x800554D4 map id, 0x800554D0 game mode (2 field, 6 battle, 0x14 results, 0xC save/load screen),
+//     0x8004ADC0 pointer to the player object (+0x58 x, +0x5C z, +0x60 facing 0..7), 0x80099114 event busy flag,
+//     0x800A3260 enemy HP (half-word).
+//
 //   Script time versus real frames: `at`/`from`/`to`/`frames` of presses, repeats, checks and reboots are in
 //   script frames. The script clock normally equals the real frame count, but it stands still while a [[wait]]
 //   is pending and resumes when its condition holds (or fails the run on timeout). Buttons held at the wait's
@@ -46,7 +72,8 @@
 //   screen_hash = "0123..."    # 256-bit perceptual hash of the displayed image (64 hex chars)
 //   max_hash_distance = 24     # allowed Hamming distance (default 24)
 //   ram = [{ addr = 0x800A0000, size = 4, value = 1 }]   # optional `mask` (AND before comparing, default all
-//                              # bits) and `cmp` = "eq" (default) | "ne" | "lt" | "le" | "gt" | "ge"
+//                              # bits) and `cmp` = "eq" (default) | "ne" | "lt" | "le" | "gt" | "ge"; with `via` = P
+//                              # the address is the word at P plus `addr` (false while P is not a RAM pointer)
 //   screenshot = true          # save BMP of the display (for review; never committed)
 //   audio_min_rms = 100.0      # RMS (int16 units, both channels) of the mixed output over the last `audio_frames` video frames
 //   audio_max_rms = 20000.0
@@ -71,6 +98,7 @@ struct Press {
 enum class Compare { Eq, Ne, Lt, Le, Gt, Ge };
 
 struct RamCheck {
+    uint32_t via = 0;  // non-zero: address of a pointer word; `addr` is then an offset from that pointer
     uint32_t addr = 0;
     int size = 4;
     uint32_t value = 0;
@@ -81,11 +109,32 @@ struct RamCheck {
 // True when `(actual & mask) <cmp> (value & mask)`.
 bool ram_matches(const RamCheck& r, uint32_t actual);
 
+using RamReader = std::function<uint32_t(uint32_t addr, int size)>;
+
+// Reads the location a RamCheck names (following `via`). False when the pointer does not point into RAM.
+bool read_ram(const RamReader& read, const RamCheck& r, uint32_t& out);
+// Sign-extends the low `size` bytes of `v`.
+int32_t sign_extend(uint32_t v, int size);
+
+// Target position of a [[walk]]: x/z are read through RamCheck (only the address fields matter).
+struct Steer {
+    RamCheck x, z;
+    int32_t target_x = 0, target_z = 0, tolerance = 8;
+    bool use_x = true, use_z = true;  // axes that take part (a corridor leg steers one axis only)
+};
+
+// d-pad buttons that move (x, z) toward the target: LEFT/RIGHT for x, UP/DOWN for z, none for an axis within
+// tolerance or left out of the walk.
+uint16_t steer_buttons(const Steer& s, int32_t x, int32_t z);
+bool steer_reached(const Steer& s, int32_t x, int32_t z);
+
 // Pauses the script clock at script frame `at` until every `ram` condition holds.
 struct Wait {
     int64_t at = 0;
     std::string label;
     std::vector<RamCheck> ram;
+    std::optional<Steer> steer;  // set for [[walk]]
+    std::vector<RamCheck> guard;  // must hold while the wait is pending (walks)
     int64_t timeout = 0;  // real frames
     uint16_t hold = 0;  // buttons held during the wait
     uint16_t tap = 0;  // button tapped during the wait (0 = none)
@@ -122,7 +171,7 @@ struct Scenario {
 
 constexpr int64_t kIntroSkipFrame = 300;
 
-// Parses a scenario file. Throws std::runtime_error with a readable message on errors.
+// Parses a scenario file, merging its `include` files. Throws std::runtime_error with a readable message on errors.
 Scenario load(const std::string& path);
 Scenario parse(const std::string& toml_text, const std::string& source_name = "<string>");
 
@@ -166,7 +215,7 @@ uint16_t buttons_at(const Scenario& s, int64_t frame);
 // next frame. Without waits the script frame equals the real frame.
 class Timeline {
 public:
-    using RamReader = std::function<uint32_t(uint32_t addr, int size)>;
+    using RamReader = dw3::scenario::RamReader;
     explicit Timeline(const Scenario& s) : s_(s) {}
 
     void advance(int64_t real_frame, const RamReader& read);
@@ -175,7 +224,10 @@ public:
     bool waiting() const { return waiting_; }
     // Set once a wait ran out of time; `failed_wait()` is that wait.
     bool timed_out() const { return timed_out_; }
-    const Wait* failed_wait() const { return timed_out_ ? &s_.waits[next_] : nullptr; }
+    // Set once a pending wait's `guard` stopped holding (the walk left its map); `failed_wait()` is that wait.
+    bool guard_failed() const { return guard_failed_; }
+    bool failed() const { return timed_out_ || guard_failed_; }
+    const Wait* failed_wait() const { return failed() ? &s_.waits[next_] : nullptr; }
     // Real frames the most recently finished wait took (0 before the first).
     int64_t last_wait_frames() const { return last_wait_frames_; }
     std::size_t completed_waits() const { return next_; }
@@ -184,7 +236,8 @@ private:
     bool satisfied(const Wait& w, const RamReader& read) const;
     const Scenario& s_;
     std::size_t next_ = 0;  // index of the pending or active wait
-    bool waiting_ = false, timed_out_ = false;
+    bool waiting_ = false, timed_out_ = false, guard_failed_ = false;
+    uint16_t steer_ = 0;  // d-pad buttons chosen for the current frame
     int64_t offset_ = 0, script_ = 0, real_ = 0, wait_start_ = 0, last_wait_frames_ = 0;
 };
 

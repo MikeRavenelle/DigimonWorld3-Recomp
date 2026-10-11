@@ -1,0 +1,240 @@
+# Shared prefix: title screen, New Game, the opening scenes and the story battle, up to the first free movement
+# in Asuka City Central Sector. Every step ends on RAM conditions; the script frames below only order the steps.
+#
+# RAM used here and in the scenarios that include this file (all words; 0x80xxxxxx addresses):
+#   map id      0x800554D4  0x1DA..0x1DC opening scenes, 0x1C7 Login Room, 0x1C5 first free field, 0x221 tutorial
+#                           scene, 0x1C3 Asuka City Central Sector, 0x1C6 Asuka City side street, 0x1CD Lamb Chop
+#                           interior, 0x1C9 Asuka Inn 1F, 0x1C4 Asuka Bridge, 0x1D2 Central Park, 0x1FA battle arena;
+#                           0xFFFFFFFF while a scene change is loading
+#   game mode   0x800554D0  2 field and scenes, 5/0xE scene transition, 6 battle, 0x14 battle results,
+#                           0xC save/load screen
+#   field object 0x8004ADC0 pointer to the current map's player object (0 while a map loads). Behind it:
+#                           +0x58 player x, +0x5C player z (signed words, 3 to 5 units per frame of walking;
+#                           LEFT lowers x, UP lowers z), +0x60 facing (0 down, 1 down-left, 2 left, 3 up-left,
+#                           4 up, 5 up-right, 6 right, 7 down-right). The player stands at a fixed spawn point
+#                           until the first d-pad input after a scene, so a position that moves away from the
+#                           spawn means the scene is over and the player has control.
+#   busy flag   0x80099114  1 while a scripted event runs: a screen fade before a map change, a movie, an NPC
+#                           dialogue (it falls back to 0 when the dialogue is closed)
+#
+# Title: START, then UP and CROSS pick New Game (the memory card is blank).
+
+press = [
+    { button = "START", at = 900 },
+    { button = "UP", at = 960 },
+    { button = "CROSS", at = 1020 },
+]
+
+# Opening scenes and movies up to the Login Room: CROSS clicks through the dialogue.
+[[wait]]
+at = 1002
+label = "Login Room"
+ram = [{ addr = 0x800554D4, size = 4, value = 0x1C7 }, { addr = 0x800554D0, size = 4, value = 2 }]
+timeout = 26000
+press = "CROSS"
+every = 10
+press_hold = 3
+
+[[check]]
+at = 1438
+label = "Login Room"
+display_enabled = true
+screen_hash = "08011803080018011802000038037e077ff13ff33fe73c073ff83ff8fff87ff0"
+screenshot = true
+
+# First field map (0x1C5). The dialogue ends by itself; the first walk taps CROSS until the player has control and
+# then follows the street to the NPC at its end. Collisions are not modelled: the street is a corridor, so most
+# legs steer a single axis and let the walls guide the other one.
+[[wait]]
+at = 1444
+label = "first field"
+ram = [{ addr = 0x800554D4, size = 4, value = 0x1C5 }, { addr = 0x800554D0, size = 4, value = 2 }]
+timeout = 6000
+press = "CROSS"
+every = 10
+press_hold = 3
+
+[[walk]]
+at = 1446
+label = "street 1"
+x = { via = 0x8004ADC0, addr = 0x58, size = 4 }
+z = { via = 0x8004ADC0, addr = 0x5C, size = 4 }
+target = [664, 377]
+tolerance = 10
+axes = "x"
+timeout = 6000
+guard = [{ addr = 0x800554D4, size = 4, value = 0x1C5 }]
+press = "CROSS"
+every = 10
+press_hold = 3
+
+[[walk]]
+at = 1447
+label = "street 2"
+x = { via = 0x8004ADC0, addr = 0x58, size = 4 }
+z = { via = 0x8004ADC0, addr = 0x5C, size = 4 }
+target = [578, 541]
+tolerance = 10
+axes = "z"
+timeout = 6000
+guard = [{ addr = 0x800554D4, size = 4, value = 0x1C5 }]
+
+[[walk]]
+at = 1448
+label = "street 3"
+x = { via = 0x8004ADC0, addr = 0x58, size = 4 }
+z = { via = 0x8004ADC0, addr = 0x5C, size = 4 }
+target = [516, 512]
+tolerance = 10
+axes = "x"
+timeout = 6000
+guard = [{ addr = 0x800554D4, size = 4, value = 0x1C5 }]
+
+[[walk]]
+at = 1449
+label = "street 4"
+x = { via = 0x8004ADC0, addr = 0x58, size = 4 }
+z = { via = 0x8004ADC0, addr = 0x5C, size = 4 }
+target = [594, 492]
+tolerance = 10
+timeout = 6000
+guard = [{ addr = 0x800554D4, size = 4, value = 0x1C5 }]
+
+[[walk]]
+at = 1450
+label = "street 5"
+x = { via = 0x8004ADC0, addr = 0x58, size = 4 }
+z = { via = 0x8004ADC0, addr = 0x5C, size = 4 }
+target = [594, 258]
+tolerance = 10
+axes = "z"
+timeout = 6000
+guard = [{ addr = 0x800554D4, size = 4, value = 0x1C5 }]
+
+[[walk]]
+at = 1451
+label = "street 6"
+x = { via = 0x8004ADC0, addr = 0x58, size = 4 }
+z = { via = 0x8004ADC0, addr = 0x5C, size = 4 }
+target = [421, 258]
+tolerance = 10
+axes = "x"
+timeout = 6000
+guard = [{ addr = 0x800554D4, size = 4, value = 0x1C5 }]
+
+[[walk]]
+at = 1452
+label = "street 7"
+x = { via = 0x8004ADC0, addr = 0x58, size = 4 }
+z = { via = 0x8004ADC0, addr = 0x5C, size = 4 }
+target = [370, 284]
+tolerance = 3
+timeout = 6000
+guard = [{ addr = 0x800554D4, size = 4, value = 0x1C5 }]
+
+# The NPC (up-left of the last waypoint) starts the tutorial scene, which leads to Central Sector and the story battle.
+[[wait]]
+at = 1454
+label = "face the NPC"
+ram = [{ via = 0x8004ADC0, addr = 0x60, size = 4, value = 3 }]
+timeout = 300
+hold = ["UP", "LEFT"]
+
+[[wait]]
+at = 1456
+label = "tutorial scene"
+ram = [{ addr = 0x800554D4, size = 4, value = 0x221 }]
+timeout = 3000
+press = "CROSS"
+every = 10
+press_hold = 3
+
+[[wait]]
+at = 1458
+label = "Central Sector, story scene"
+ram = [{ addr = 0x800554D4, size = 4, value = 0x1C3 }, { addr = 0x800554D0, size = 4, value = 2 }]
+timeout = 9000
+press = "CROSS"
+every = 10
+press_hold = 3
+
+[[wait]]
+at = 1460
+label = "story battle"
+ram = [{ addr = 0x800554D0, size = 4, value = 6 }]
+timeout = 3000
+press = "CROSS"
+every = 10
+press_hold = 3
+
+[[wait]]
+at = 1462
+label = "story battle results"
+ram = [{ addr = 0x800554D0, size = 4, value = 20 }]
+timeout = 3000
+press = "CROSS"
+every = 10
+press_hold = 3
+
+[[wait]]
+at = 1464
+label = "after the battle"
+ram = [{ addr = 0x800554D4, size = 4, value = 0x1C3 }, { addr = 0x800554D0, size = 4, value = 2 }]
+timeout = 2000
+press = "CROSS"
+every = 10
+press_hold = 3
+
+# Side street (0x1C6): the scene ends by itself; walk to the exit arrow and take it with CROSS.
+[[wait]]
+at = 1466
+label = "side street"
+ram = [{ addr = 0x800554D4, size = 4, value = 0x1C6 }, { addr = 0x800554D0, size = 4, value = 2 }]
+timeout = 4000
+press = "CROSS"
+every = 10
+press_hold = 3
+
+[[walk]]
+at = 1468
+label = "side street 1"
+x = { via = 0x8004ADC0, addr = 0x58, size = 4 }
+z = { via = 0x8004ADC0, addr = 0x5C, size = 4 }
+target = [284, 368]
+tolerance = 10
+timeout = 6000
+guard = [{ addr = 0x800554D4, size = 4, value = 0x1C6 }]
+press = "CROSS"
+every = 10
+press_hold = 3
+
+[[walk]]
+at = 1469
+label = "side street 2"
+x = { via = 0x8004ADC0, addr = 0x58, size = 4 }
+z = { via = 0x8004ADC0, addr = 0x5C, size = 4 }
+target = [257, 397]
+tolerance = 10
+axes = "z"
+timeout = 6000
+guard = [{ addr = 0x800554D4, size = 4, value = 0x1C6 }]
+
+[[walk]]
+at = 1470
+label = "side street 3"
+x = { via = 0x8004ADC0, addr = 0x58, size = 4 }
+z = { via = 0x8004ADC0, addr = 0x5C, size = 4 }
+target = [195, 383]
+tolerance = 10
+axes = "x"
+timeout = 6000
+guard = [{ addr = 0x800554D4, size = 4, value = 0x1C6 }]
+
+[[wait]]
+at = 1472
+label = "Central Sector"
+ram = [{ addr = 0x800554D4, size = 4, value = 0x1C3 }, { addr = 0x800554D0, size = 4, value = 2 }]
+timeout = 1500
+press = "CROSS"
+every = 10
+press_hold = 3

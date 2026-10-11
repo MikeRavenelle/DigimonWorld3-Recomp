@@ -8,7 +8,8 @@
 // ready-to-paste `screen_hash = "..."` line and does not fail on hash mismatches. The SPU runs normally (no audio
 // device); its output is metered per frame for `audio_*` checks. --wav PATH saves the whole mixed run as a WAV.
 // --watch ADDR[:SIZE] (SIZE 1, 2 or 4, default 4; repeatable) prints every change of that RAM location with the
-// real and script frame, for finding the addresses that [[wait]] and [[check]] conditions use. --dump FRAME:PATH
+// real and script frame, for finding the addresses that [[wait]] and [[check]] conditions use. --watch
+// *PTR+OFFSET[:SIZE] follows the pointer word at PTR first (like `via` in a ram condition). --dump FRAME:PATH
 // writes the 2 MiB of main RAM to PATH once the script reaches FRAME (repeatable), for diffing game states.
 //
 // Exit codes: 0 all checks pass, 1 failure, 2 usage/scenario error, 77 disc missing (ctest SKIP).
@@ -38,7 +39,7 @@ struct Options {
     std::string out = std::string(DW3_SOURCE_DIR) + "/game/audit/scenarios";
     bool record = false;
     std::string wav;  // --wav: whole-run audio dump
-    std::vector<std::pair<uint32_t, int>> watches;  // --watch
+    std::vector<sc::RamCheck> watches;  // --watch (value/mask unused)
     std::vector<std::pair<int64_t, std::string>> dumps;  // --dump, sorted by frame
     bool no_xa = false;  // --no-xa: drop XA-ADPCM sectors (isolates SPU voice output when auditing)
 };
@@ -137,16 +138,16 @@ int evaluate(const Options& opt, const sc::Scenario& s, const sc::Check& c, dw3:
         bool ok = host.tty().find(*c.tty_contains) != std::string::npos;
         report(r, ok, "tty_contains", std::string(ok ? "found" : "not found") + " \"" + *c.tty_contains + "\"");
     }
+    auto read = [&](uint32_t addr, int size) -> uint32_t {
+        RecompContext* ctx = &m.ctx();
+        return size == 1 ? dw3_read8(ctx, addr) : size == 2 ? dw3_read16(ctx, addr) : dw3_read32(ctx, addr);
+    };
     for (const auto& ram : c.ram) {
         uint32_t v = 0;
-        RecompContext* ctx = &m.ctx();
-        switch (ram.size) {
-            case 1: v = dw3_read8(ctx, ram.addr); break;
-            case 2: v = dw3_read16(ctx, ram.addr); break;
-            default: v = dw3_read32(ctx, ram.addr); break;
-        }
-        report(r, sc::ram_matches(ram, v), "ram[" + hex32(ram.addr) + "/" + num(ram.size) + "]",
-               "actual " + hex32(v) + ", expected " + hex32(ram.value));
+        const bool ok = sc::read_ram(read, ram, v);
+        const std::string name = (ram.via ? hex32(ram.via) + "->" : std::string()) + hex32(ram.addr) + "/" + num(ram.size);
+        report(r, ok && sc::ram_matches(ram, v), "ram[" + name + "]",
+               ok ? "actual " + hex32(v) + ", expected " + hex32(ram.value) : "pointer " + hex32(ram.via) + " is not a RAM address");
     }
 
     if (c.audio_min_rms || c.audio_max_rms) {
@@ -222,14 +223,26 @@ int main(int argc, char** argv) {
             std::sort(opt.dumps.begin(), opt.dumps.end());
         } else if (a == "--watch" && i + 1 < argc) {
             std::string v = argv[++i];
+            sc::RamCheck w;
             auto colon = v.find(':');
-            uint32_t addr = static_cast<uint32_t>(std::stoul(v.substr(0, colon), nullptr, 0));
-            int size = colon == std::string::npos ? 4 : std::stoi(v.substr(colon + 1));
-            if (size != 1 && size != 2 && size != 4) {
+            w.size = colon == std::string::npos ? 4 : std::stoi(v.substr(colon + 1));
+            std::string loc = v.substr(0, colon);
+            if (!loc.empty() && loc[0] == '*') {
+                auto plus = loc.find('+');
+                if (plus == std::string::npos) {
+                    std::fprintf(stderr, "--watch *PTR+OFFSET[:SIZE]\n");
+                    return 2;
+                }
+                w.via = static_cast<uint32_t>(std::stoul(loc.substr(1, plus - 1), nullptr, 0));
+                w.addr = static_cast<uint32_t>(std::stoul(loc.substr(plus + 1), nullptr, 0));
+            } else {
+                w.addr = static_cast<uint32_t>(std::stoul(loc, nullptr, 0));
+            }
+            if (w.size != 1 && w.size != 2 && w.size != 4) {
                 std::fprintf(stderr, "--watch size must be 1, 2 or 4\n");
                 return 2;
             }
-            opt.watches.emplace_back(addr, size);
+            opt.watches.push_back(w);
         }
         else if (!a.empty() && a[0] != '-' && opt.file.empty()) opt.file = a;
         else {
@@ -312,12 +325,15 @@ int main(int argc, char** argv) {
                 std::printf("  dump @%lld -> %s\n", static_cast<long long>(script), d.second.c_str());
             }
             for (std::size_t i = 0; i < opt.watches.size(); ++i) {
-                uint32_t v = read_ram(opt.watches[i].first, opt.watches[i].second);
-                if (watch_seen[i] && v == watch_last[i]) continue;
-                std::printf("  watch %s/%d = %s  (real %lld, script %lld)\n", hex32(opt.watches[i].first).c_str(),
-                            opt.watches[i].second, hex32(v).c_str(), static_cast<long long>(last_frame),
-                            static_cast<long long>(script));
-                watch_last[i] = v;
+                const auto& w = opt.watches[i];
+                uint32_t v = 0;
+                const bool valid = sc::read_ram(read_ram, w, v);
+                const uint32_t shown = valid ? v : 0xDEADDEADu;  // unreadable pointer
+                if (watch_seen[i] && shown == watch_last[i]) continue;
+                std::printf("  watch %s%s/%d = %s  (real %lld, script %lld)\n", w.via ? (hex32(w.via) + "->").c_str() : "",
+                            hex32(w.addr).c_str(), w.size, valid ? hex32(v).c_str() : "(no pointer)",
+                            static_cast<long long>(last_frame), static_cast<long long>(script));
+                watch_last[i] = shown;
                 watch_seen[i] = true;
             }
             while (waits_seen < timeline.completed_waits()) {
@@ -325,7 +341,7 @@ int main(int argc, char** argv) {
                 std::printf("  wait @%lld \"%s\": satisfied after %lld frames (timeout %lld)\n", static_cast<long long>(w.at),
                             w.label.c_str(), static_cast<long long>(timeline.last_wait_frames()), static_cast<long long>(w.timeout));
             }
-            if (timeline.timed_out()) {
+            if (timeline.failed()) {
                 wait_timeout = true;
                 dw3::host::Host::stop();
                 return;
@@ -364,11 +380,25 @@ int main(int argc, char** argv) {
     }
     if (wait_timeout) {
         const auto* w = timeline.failed_wait();
-        std::printf("  FAIL wait @%lld \"%s\" timed out after %lld frames (real frame %lld)\n", static_cast<long long>(w->at),
-                    w->label.c_str(), static_cast<long long>(w->timeout), static_cast<long long>(last_frame));
+        if (timeline.guard_failed())
+            std::printf("  FAIL wait @%lld \"%s\": guard condition broke (real frame %lld)\n",
+                        static_cast<long long>(w->at), w->label.c_str(), static_cast<long long>(last_frame));
+        else
+            std::printf("  FAIL wait @%lld \"%s\" timed out after %lld frames (real frame %lld)\n", static_cast<long long>(w->at),
+                        w->label.c_str(), static_cast<long long>(w->timeout), static_cast<long long>(last_frame));
         for (const auto& r : w->ram) {
-            uint32_t v = read_ram(r.addr, r.size);
-            std::printf("    ram[%s/%d] actual %s\n", hex32(r.addr).c_str(), r.size, hex32(v).c_str());
+            uint32_t v = 0;
+            if (sc::read_ram(read_ram, r, v)) std::printf("    ram[%s/%d] actual %s\n", hex32(r.addr).c_str(), r.size, hex32(v).c_str());
+        }
+        for (const auto& r : w->guard) {
+            uint32_t v = 0;
+            if (sc::read_ram(read_ram, r, v)) std::printf("    guard[%s/%d] actual %s\n", hex32(r.addr).c_str(), r.size, hex32(v).c_str());
+        }
+        if (w->steer) {
+            uint32_t x = 0, z = 0;
+            if (sc::read_ram(read_ram, w->steer->x, x) && sc::read_ram(read_ram, w->steer->z, z))
+                std::printf("    position (%d, %d), target (%d, %d), tolerance %d\n", sc::sign_extend(x, w->steer->x.size),
+                            sc::sign_extend(z, w->steer->z.size), w->steer->target_x, w->steer->target_z, w->steer->tolerance);
         }
         std::vector<uint32_t> px;
         int pw = 0, ph = 0;

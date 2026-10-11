@@ -5,6 +5,7 @@
 #include <bit>
 #include <cmath>
 #include <filesystem>
+#include <fstream>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -554,4 +555,375 @@ TEST(ScenarioWait, ConsecutiveWaitsRunInOrder) {
     t.advance(f++, ram.reader());
     EXPECT_FALSE(t.waiting());
     EXPECT_EQ(t.completed_waits(), 2u);
+}
+
+namespace {
+constexpr uint16_t kRight = 1u << 5, kDown = 1u << 6;
+
+// RAM image with a pointer at 0x80000100 to an object holding x/z at +0x58/+0x5C and a map id at 0x80000200.
+struct FakeField {
+    uint32_t ptr = 0x80001000u, x = 0, z = 0, map = 1;
+    Timeline::RamReader reader() {
+        return [this](uint32_t addr, int) -> uint32_t {
+            if (addr == 0x80000100u) return ptr;
+            if (addr == 0x80000200u) return map;
+            if (addr == ptr + 0x58) return x;
+            if (addr == ptr + 0x5C) return z;
+            return 0u;
+        };
+    }
+};
+
+const char* kWalkFile =
+    "name = \"w\"\nframes = 1000\nskip_intro = false\n"
+    "[[walk]]\nat = 100\nlabel = \"gate\"\ntimeout = 50\ntarget = [100, -50]\ntolerance = 5\n"
+    "x = { via = 0x80000100, addr = 0x58 }\nz = { via = 0x80000100, addr = 0x5C }\n"
+    "guard = [{ addr = 0x80000200, value = 1 }]\npress = \"CROSS\"\nevery = 6\npress_hold = 2\n";
+}  // namespace
+
+TEST(ScenarioRam, ViaFollowsThePointer) {
+    FakeField f;
+    f.x = 1234;
+    RamCheck r;
+    r.via = 0x80000100u;
+    r.addr = 0x58;
+    uint32_t v = 0;
+    ASSERT_TRUE(read_ram(f.reader(), r, v));
+    EXPECT_EQ(v, 1234u);
+    r.via = 0;
+    r.addr = 0x80000200u;
+    ASSERT_TRUE(read_ram(f.reader(), r, v));  // plain address
+    EXPECT_EQ(v, 1u);
+}
+
+TEST(ScenarioRam, ViaRejectsNonRamPointers) {
+    FakeField f;
+    RamCheck r;
+    r.via = 0x80000100u;
+    r.addr = 0x58;
+    uint32_t v = 0;
+    for (uint32_t bad : {0u, 0xFFFFFFFFu, 0x80200000u, 0x12345678u}) {
+        f.ptr = bad;
+        EXPECT_FALSE(read_ram(f.reader(), r, v)) << bad;
+    }
+    f.ptr = 0x00001000u;  // KUSEG alias of RAM
+    EXPECT_TRUE(read_ram(f.reader(), r, v));
+}
+
+TEST(ScenarioRam, SignExtend) {
+    EXPECT_EQ(sign_extend(0xFFu, 1), -1);
+    EXPECT_EQ(sign_extend(0x7Fu, 1), 127);
+    EXPECT_EQ(sign_extend(0xFFFEu, 2), -2);
+    EXPECT_EQ(sign_extend(0x8000u, 2), -32768);
+    EXPECT_EQ(sign_extend(0xFFFFFFF0u, 4), -16);
+}
+
+TEST(ScenarioRam, ViaParsedInChecksAndWaits) {
+    Scenario s = parse("name = \"x\"\nframes = 100\n[[check]]\nat = 5\nram = [{ via = 0x8004ADC0, addr = 0x58, size = 4, value = 7 }]\n");
+    ASSERT_EQ(s.checks[0].ram.size(), 1u);
+    EXPECT_EQ(s.checks[0].ram[0].via, 0x8004ADC0u);
+    EXPECT_EQ(s.checks[0].ram[0].addr, 0x58u);
+}
+
+TEST(ScenarioSteer, ButtonsFollowTheErrorPerAxis) {
+    Steer s;
+    s.target_x = 100;
+    s.target_z = 50;
+    s.tolerance = 5;
+    EXPECT_EQ(steer_buttons(s, 0, 0), kRight | kDown);
+    EXPECT_EQ(steer_buttons(s, 200, 0), kLeft | kDown);
+    EXPECT_EQ(steer_buttons(s, 0, 200), kRight | kUp);
+    EXPECT_EQ(steer_buttons(s, 200, 200), kLeft | kUp);
+    EXPECT_EQ(steer_buttons(s, 100, 0), kDown);  // x within tolerance
+    EXPECT_EQ(steer_buttons(s, 105, 55), 0);  // both at the tolerance edge
+    EXPECT_EQ(steer_buttons(s, 106, 49), kLeft);
+    EXPECT_EQ(steer_buttons(s, 94, 56), kRight | kUp);
+}
+
+TEST(ScenarioSteer, NegativeCoordinates) {
+    Steer s;
+    s.target_x = -40;
+    s.target_z = -10;
+    s.tolerance = 2;
+    EXPECT_EQ(steer_buttons(s, 0, 0), kLeft | kUp);
+    EXPECT_EQ(steer_buttons(s, -100, -100), kRight | kDown);
+    EXPECT_TRUE(steer_reached(s, -41, -9));
+    EXPECT_FALSE(steer_reached(s, -43, -9));
+}
+
+TEST(ScenarioSteer, SingleAxisIgnoresTheOther) {
+    Steer s;
+    s.target_x = 100;
+    s.target_z = 50;
+    s.tolerance = 5;
+    s.use_z = false;
+    EXPECT_EQ(steer_buttons(s, 0, 0), kRight);
+    EXPECT_TRUE(steer_reached(s, 100, 9999));
+    s.use_z = true;
+    s.use_x = false;
+    EXPECT_EQ(steer_buttons(s, 0, 0), kDown);
+    EXPECT_TRUE(steer_reached(s, -9999, 52));
+}
+
+TEST(ScenarioWalk, ParsedFields) {
+    Scenario s = parse(kWalkFile);
+    ASSERT_EQ(s.waits.size(), 1u);
+    const Wait& w = s.waits[0];
+    ASSERT_TRUE(w.steer.has_value());
+    EXPECT_EQ(w.label, "gate");
+    EXPECT_EQ(w.timeout, 50);
+    EXPECT_EQ(w.steer->target_x, 100);
+    EXPECT_EQ(w.steer->target_z, -50);
+    EXPECT_EQ(w.steer->tolerance, 5);
+    EXPECT_EQ(w.steer->x.via, 0x80000100u);
+    EXPECT_EQ(w.steer->z.addr, 0x5Cu);
+    EXPECT_TRUE(w.steer->use_x);
+    EXPECT_TRUE(w.steer->use_z);
+    ASSERT_EQ(w.guard.size(), 1u);
+    EXPECT_EQ(w.guard[0].addr, 0x80000200u);
+    EXPECT_EQ(w.tap, kCross);
+    EXPECT_TRUE(w.ram.empty());
+}
+
+TEST(ScenarioWalk, AxesAndDefaults) {
+    const std::string head = "name = \"x\"\nframes = 100\n[[walk]]\nat = 10\ntimeout = 5\ntarget = [1, 2]\n"
+                             "x = { addr = 0x80000010 }\nz = { addr = 0x80000014 }\n";
+    Scenario s = parse(head);
+    EXPECT_EQ(s.waits[0].steer->tolerance, 8);
+    EXPECT_EQ(s.waits[0].steer->x.size, 4);
+    s = parse(head + "axes = \"z\"\n");
+    EXPECT_FALSE(s.waits[0].steer->use_x);
+    EXPECT_TRUE(s.waits[0].steer->use_z);
+}
+
+TEST(ScenarioWalk, BadWalksRejected) {
+    const std::string head = "name = \"x\"\nframes = 100\n[[walk]]\nat = 10\ntimeout = 5\n";
+    const std::string xz = "x = { addr = 0x80000010 }\nz = { addr = 0x80000014 }\n";
+    EXPECT_NO_THROW(parse(head + "target = [1, 2]\n" + xz));
+    EXPECT_THROW(parse(head + xz), std::runtime_error);                                   // no target
+    EXPECT_THROW(parse(head + "target = [1]\n" + xz), std::runtime_error);                // short target
+    EXPECT_THROW(parse(head + "target = [1, 2]\nx = { addr = 0x80000010 }\n"), std::runtime_error);  // no z
+    EXPECT_THROW(parse(head + "target = [1, 2]\ntolerance = -1\n" + xz), std::runtime_error);
+    EXPECT_THROW(parse(head + "target = [1, 2]\naxes = \"y\"\n" + xz), std::runtime_error);
+    EXPECT_THROW(parse("name = \"x\"\nframes = 100\n[[walk]]\nat = 10\ntarget = [1, 2]\n" + xz), std::runtime_error);  // no timeout
+}
+
+TEST(ScenarioWalk, WaitsAndWalksAreMergedByFrame) {
+    Scenario s = parse("name = \"x\"\nframes = 100\n"
+                       "[[walk]]\nat = 30\nlabel = \"b\"\ntimeout = 5\ntarget = [1, 2]\nx = { addr = 0x80000010 }\nz = { addr = 0x80000014 }\n"
+                       "[[wait]]\nat = 10\nlabel = \"a\"\ntimeout = 5\nram = [{ addr = 0x80000010, value = 1 }]\n"
+                       "[[wait]]\nat = 50\nlabel = \"c\"\ntimeout = 5\nram = [{ addr = 0x80000010, value = 1 }]\n");
+    ASSERT_EQ(s.waits.size(), 3u);
+    EXPECT_EQ(s.waits[0].label, "a");
+    EXPECT_EQ(s.waits[1].label, "b");
+    EXPECT_EQ(s.waits[2].label, "c");
+}
+
+TEST(ScenarioWalk, TimelineSteersUntilTheTargetIsReached) {
+    Scenario s = parse(kWalkFile);
+    Timeline t(s);
+    FakeField f;
+    f.x = 0;
+    f.z = 0;
+    int64_t real = 0;
+    for (; real < 100; ++real) t.advance(real, f.reader());
+    t.advance(real++, f.reader());
+    EXPECT_TRUE(t.waiting());
+    EXPECT_EQ(t.script_frame(), 100);
+    EXPECT_EQ(t.buttons() & (kLeft | kRight | kUp | kDown), kRight | kUp);  // x low, z high
+    f.x = 96;  // within tolerance of 100
+    t.advance(real++, f.reader());
+    EXPECT_EQ(t.buttons() & (kLeft | kRight | kUp | kDown), kUp);
+    f.z = static_cast<uint32_t>(-52);  // signed word, within tolerance of -50
+    t.advance(real++, f.reader());
+    EXPECT_FALSE(t.waiting());
+    EXPECT_FALSE(t.failed());
+    EXPECT_EQ(t.completed_waits(), 1u);
+    EXPECT_EQ(t.buttons() & (kLeft | kRight | kUp | kDown), 0);
+}
+
+TEST(ScenarioWalk, TapsWhileWalking) {
+    Scenario s = parse(kWalkFile);
+    Timeline t(s);
+    FakeField f;
+    int64_t real = 0;
+    for (; real <= 100; ++real) t.advance(real, f.reader());
+    const int64_t start = real - 1;
+    for (; real < start + 20; ++real) {
+        t.advance(real, f.reader());
+        EXPECT_EQ((t.buttons() & kCross) != 0, (real - start) % 6 < 2) << real;
+    }
+}
+
+TEST(ScenarioWalk, TimeoutAndUnreadablePosition) {
+    Scenario s = parse(kWalkFile);
+    Timeline t(s);
+    FakeField f;
+    f.ptr = 0;  // the map is still loading: no steering, but the wait keeps counting
+    int64_t real = 0;
+    for (; real <= 100; ++real) t.advance(real, f.reader());
+    EXPECT_TRUE(t.waiting());
+    EXPECT_EQ(t.buttons() & (kLeft | kRight | kUp | kDown), 0);
+    for (; real < 150; ++real) t.advance(real, f.reader());
+    EXPECT_FALSE(t.timed_out());
+    t.advance(real, f.reader());
+    EXPECT_TRUE(t.timed_out());
+    EXPECT_FALSE(t.guard_failed());
+    EXPECT_TRUE(t.failed());
+    ASSERT_NE(t.failed_wait(), nullptr);
+    EXPECT_EQ(t.failed_wait()->label, "gate");
+}
+
+TEST(ScenarioWalk, GuardBreakFailsTheWalk) {
+    Scenario s = parse(kWalkFile);
+    Timeline t(s);
+    FakeField f;
+    int64_t real = 0;
+    for (; real <= 105; ++real) t.advance(real, f.reader());
+    EXPECT_TRUE(t.waiting());
+    EXPECT_FALSE(t.failed());
+    f.map = 2;  // left the expected map
+    t.advance(real++, f.reader());
+    EXPECT_TRUE(t.guard_failed());
+    EXPECT_FALSE(t.timed_out());
+    EXPECT_TRUE(t.failed());
+    ASSERT_NE(t.failed_wait(), nullptr);
+    EXPECT_EQ(t.failed_wait()->label, "gate");
+    t.advance(real++, f.reader());  // stays failed
+    EXPECT_TRUE(t.guard_failed());
+}
+
+TEST(ScenarioWalk, ReachedTargetBeatsGuardOnTheSameFrame) {
+    Scenario s = parse(kWalkFile);
+    Timeline t(s);
+    FakeField f;
+    int64_t real = 0;
+    for (; real <= 105; ++real) t.advance(real, f.reader());
+    f.x = 100;
+    f.z = static_cast<uint32_t>(-50);
+    f.map = 2;
+    t.advance(real, f.reader());
+    EXPECT_FALSE(t.failed());
+    EXPECT_FALSE(t.waiting());
+}
+
+TEST(ScenarioWalk, AlreadyAtTheTargetDoesNotStall) {
+    Scenario s = parse(kWalkFile);
+    Timeline t(s);
+    FakeField f;
+    f.x = 100;
+    f.z = static_cast<uint32_t>(-50);
+    for (int64_t real = 0; real < 150; ++real) {
+        t.advance(real, f.reader());
+        EXPECT_EQ(t.script_frame(), real);
+        EXPECT_FALSE(t.waiting());
+    }
+    EXPECT_EQ(t.completed_waits(), 1u);
+}
+
+TEST(ScenarioWalk, ConsecutiveWaypoints) {
+    Scenario s = parse("name = \"x\"\nframes = 100\nskip_intro = false\n"
+                       "[[walk]]\nat = 10\ntimeout = 50\ntarget = [10, 0]\ntolerance = 1\naxes = \"x\"\nx = { via = 0x80000100, addr = 0x58 }\nz = { via = 0x80000100, addr = 0x5C }\n"
+                       "[[walk]]\nat = 11\ntimeout = 50\ntarget = [10, 20]\ntolerance = 1\naxes = \"z\"\nx = { via = 0x80000100, addr = 0x58 }\nz = { via = 0x80000100, addr = 0x5C }\n");
+    Timeline t(s);
+    FakeField f;
+    int64_t real = 0;
+    for (; real < 20; ++real) t.advance(real, f.reader());
+    EXPECT_EQ(t.script_frame(), 10);
+    EXPECT_EQ(t.buttons() & (kLeft | kRight | kUp | kDown), kRight);
+    f.x = 10;
+    t.advance(real++, f.reader());
+    EXPECT_TRUE(t.waiting());  // second walk now pending, steering z only
+    EXPECT_EQ(t.script_frame(), 11);
+    EXPECT_EQ(t.buttons() & (kLeft | kRight | kUp | kDown), kDown);
+    f.z = 20;
+    t.advance(real++, f.reader());
+    EXPECT_FALSE(t.waiting());
+    EXPECT_EQ(t.completed_waits(), 2u);
+}
+
+namespace {
+struct TempDir {
+    std::filesystem::path path;
+    TempDir() {
+        path = std::filesystem::temp_directory_path() / ("dw3scenario_test_" + std::to_string(reinterpret_cast<uintptr_t>(this)));
+        std::filesystem::create_directories(path / "sub");
+    }
+    ~TempDir() { std::error_code ec; std::filesystem::remove_all(path, ec); }
+    std::string write(const std::string& rel, const std::string& text) const {
+        std::ofstream(path / rel) << text;
+        return (path / rel).string();
+    }
+};
+}  // namespace
+
+TEST(ScenarioInclude, MergesEntriesIncludedFirst) {
+    TempDir d;
+    d.write("sub/prefix.toml",
+            "press = [{ button = \"START\", at = 10 }]\n"
+            "[[wait]]\nat = 20\nlabel = \"prefix wait\"\ntimeout = 5\nram = [{ addr = 0x80000010, value = 1 }]\n"
+            "[[check]]\nat = 5\nlabel = \"prefix check\"\n");
+    auto main = d.write("main.toml",
+                        "name = \"m\"\nframes = 100\ninclude = [\"sub/prefix.toml\"]\n"
+                        "press = [{ button = \"UP\", at = 50 }]\n"
+                        "[[wait]]\nat = 60\nlabel = \"own wait\"\ntimeout = 5\nram = [{ addr = 0x80000010, value = 2 }]\n"
+                        "[[check]]\nat = 70\nlabel = \"own check\"\n");
+    Scenario s = load(main);
+    EXPECT_EQ(s.name, "m");
+    EXPECT_EQ(s.frames, 100);
+    ASSERT_EQ(s.presses.size(), 2u);
+    EXPECT_EQ(s.presses[0].button, kStart);  // included entries first
+    EXPECT_EQ(s.presses[1].button, kUp);
+    ASSERT_EQ(s.waits.size(), 2u);
+    EXPECT_EQ(s.waits[0].label, "prefix wait");
+    EXPECT_EQ(s.waits[1].label, "own wait");
+    ASSERT_EQ(s.checks.size(), 2u);
+    EXPECT_EQ(s.checks[0].label, "prefix check");
+    EXPECT_EQ(s.checks[1].label, "own check");
+}
+
+TEST(ScenarioInclude, IgnoresScalarsAndWorksWithoutOwnEntries) {
+    TempDir d;
+    d.write("inc.toml", "name = \"ignored\"\nframes = 5\n[[press]]\nbutton = \"CROSS\"\nat = 3\n");
+    auto main = d.write("main.toml", "name = \"m\"\nframes = 100\ninclude = [\"inc.toml\"]\n");
+    Scenario s = load(main);
+    EXPECT_EQ(s.name, "m");
+    EXPECT_EQ(s.frames, 100);
+    ASSERT_EQ(s.presses.size(), 1u);
+    EXPECT_EQ(s.presses[0].button, kCross);
+}
+
+TEST(ScenarioInclude, NestedAndMultipleIncludes) {
+    TempDir d;
+    d.write("sub/inner.toml", "[[press]]\nbutton = \"UP\"\nat = 1\n");
+    d.write("sub/outer.toml", "include = [\"inner.toml\"]\n[[press]]\nbutton = \"DOWN\"\nat = 2\n");
+    d.write("other.toml", "[[press]]\nbutton = \"LEFT\"\nat = 3\n");
+    auto main = d.write("main.toml",
+                        "name = \"m\"\nframes = 100\ninclude = [\"sub/outer.toml\", \"other.toml\"]\n[[press]]\nbutton = \"RIGHT\"\nat = 4\n");
+    Scenario s = load(main);
+    ASSERT_EQ(s.presses.size(), 4u);
+    EXPECT_EQ(s.presses[0].button, kUp);
+    EXPECT_EQ(s.presses[1].button, kDown);
+    EXPECT_EQ(s.presses[2].button, kLeft);
+    EXPECT_EQ(s.presses[3].button, kRight);
+}
+
+TEST(ScenarioInclude, ProblemsAreReported) {
+    TempDir d;
+    auto missing = d.write("missing.toml", "name = \"m\"\nframes = 10\ninclude = [\"nope.toml\"]\n");
+    EXPECT_THROW(load(missing), std::runtime_error);
+    auto notlist = d.write("notlist.toml", "name = \"m\"\nframes = 10\ninclude = [3]\n");
+    EXPECT_THROW(load(notlist), std::runtime_error);
+    d.write("a.toml", "include = [\"b.toml\"]\n");
+    d.write("b.toml", "include = [\"a.toml\"]\n");
+    auto cycle = d.write("cycle.toml", "name = \"m\"\nframes = 10\ninclude = [\"a.toml\"]\n");
+    EXPECT_THROW(load(cycle), std::runtime_error);
+    d.write("bad.toml", "press = [\n");
+    auto broken = d.write("broken.toml", "name = \"m\"\nframes = 10\ninclude = [\"bad.toml\"]\n");
+    try {
+        load(broken);
+        FAIL();
+    } catch (const std::runtime_error& e) {
+        EXPECT_NE(std::string(e.what()).find("bad.toml"), std::string::npos);
+    }
 }

@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <bit>
 #include <cmath>
+#include <cstdlib>
 #include <cstdio>
 #include <filesystem>
 #include <fstream>
@@ -39,6 +40,7 @@ uint16_t parse_button(const std::string& src, const toml::table& t) {
 
 RamCheck parse_ram(const std::string& src, const toml::table& t) {
     RamCheck r;
+    r.via = static_cast<uint32_t>(t["via"].value_or(int64_t{0}));
     r.addr = static_cast<uint32_t>(t["addr"].value_or(int64_t{0}));
     r.size = static_cast<int>(t["size"].value_or(int64_t{4}));
     r.value = static_cast<uint32_t>(t["value"].value_or(int64_t{0}));
@@ -56,7 +58,106 @@ RamCheck parse_ram(const std::string& src, const toml::table& t) {
     return r;
 }
 
+// Wait/walk fields shared by both tables: label, timeout, hold, press.
+void parse_wait_common(const std::string& src, const toml::table& t, const char* what, Wait& w) {
+    w.label = t["label"].value_or(std::string());
+    w.timeout = t["timeout"].value_or(int64_t{0});
+    if (w.timeout <= 0) fail(src, std::string("[[") + what + "]] needs `timeout` > 0 (real frames)");
+    if (auto* hold = t["hold"].as_array()) {
+        for (auto& hn : *hold) {
+            auto name = hn.value<std::string>();
+            uint16_t b = name ? button_from_name(*name) : 0;
+            if (!b) fail(src, std::string("[[") + what + "]] `hold` has an unknown button");
+            w.hold |= b;
+        }
+    }
+    if (auto name = t["press"].value<std::string>()) {
+        w.tap = button_from_name(*name);
+        if (!w.tap) fail(src, std::string("[[") + what + "]] unknown `press` button '" + *name + "'");
+    }
+    w.tap_every = t["every"].value_or(int64_t{40});
+    w.tap_hold = t["press_hold"].value_or(int64_t{4});
+    if (w.tap && w.tap_every <= w.tap_hold) fail(src, std::string("[[") + what + "]] needs every > press_hold");
+    if (auto* ram = t["ram"].as_array())
+        for (auto& rn : *ram) w.ram.push_back(parse_ram(src, *rn.as_table()));
+    if (auto* guard = t["guard"].as_array())
+        for (auto& gn : *guard) w.guard.push_back(parse_ram(src, *gn.as_table()));
+}
+
+bool in_ram(uint32_t p) { return (p & 0x1FFFFFFFu) < 0x200000u && p != 0; }
+
+const char* const kMergedTables[] = {"press", "repeat", "reboot", "wait", "walk", "check"};
+
+// Merges the tables of the `include` files into `root`, included entries first. `seen` guards against cycles.
+void merge_includes(toml::table& root, const std::filesystem::path& file, std::vector<std::filesystem::path>& seen) {
+    auto* inc = root["include"].as_array();
+    if (!inc) return;
+    const std::string src = file.string();
+    auto canon = std::filesystem::weakly_canonical(file);
+    if (std::find(seen.begin(), seen.end(), canon) != seen.end()) fail(src, "`include` cycle");
+    seen.push_back(canon);
+    std::map<std::string, toml::array> merged;
+    for (auto& n : *inc) {
+        auto rel = n.value<std::string>();
+        if (!rel) fail(src, "`include` wants a list of file names");
+        auto path = file.parent_path() / *rel;
+        toml::table sub;
+        try {
+            sub = toml::parse_file(path.string());
+        } catch (const toml::parse_error& e) {
+            fail(path.string(), e.what());
+        }
+        merge_includes(sub, path, seen);
+        for (const char* key : kMergedTables)
+            if (auto* a = sub[key].as_array())
+                for (auto& e : *a) merged[key].push_back(e);
+    }
+    seen.pop_back();
+    for (const char* key : kMergedTables) {
+        auto it = merged.find(key);
+        if (it == merged.end()) continue;
+        if (auto* own = root[key].as_array())
+            for (auto& e : *own) it->second.push_back(e);
+        root.insert_or_assign(key, std::move(it->second));
+    }
+    root.erase("include");
+}
+
 }  // namespace
+
+bool read_ram(const RamReader& read, const RamCheck& r, uint32_t& out) {
+    uint32_t addr = r.addr;
+    if (r.via) {
+        uint32_t p = read(r.via, 4);
+        if (!in_ram(p)) return false;
+        addr += p;
+    }
+    out = read(addr, r.size);
+    return true;
+}
+
+int32_t sign_extend(uint32_t v, int size) {
+    if (size == 1) return static_cast<int8_t>(v);
+    if (size == 2) return static_cast<int16_t>(v);
+    return static_cast<int32_t>(v);
+}
+
+uint16_t steer_buttons(const Steer& s, int32_t x, int32_t z) {
+    uint16_t b = 0;
+    if (s.use_x) {
+        if (x < s.target_x - s.tolerance) b |= button_from_name("RIGHT");
+        else if (x > s.target_x + s.tolerance) b |= button_from_name("LEFT");
+    }
+    if (s.use_z) {
+        if (z < s.target_z - s.tolerance) b |= button_from_name("DOWN");
+        else if (z > s.target_z + s.tolerance) b |= button_from_name("UP");
+    }
+    return b;
+}
+
+bool steer_reached(const Steer& s, int32_t x, int32_t z) {
+    return (!s.use_x || std::abs(x - s.target_x) <= s.tolerance) && (!s.use_z || std::abs(z - s.target_z) <= s.tolerance);
+}
 
 bool ram_matches(const RamCheck& r, uint32_t actual) {
     const uint32_t a = actual & r.mask, v = r.value & r.mask;
@@ -119,37 +220,47 @@ Scenario parse(const std::string& text, const std::string& src) {
             s.reboots.push_back(at);
         }
     }
+    auto add_wait = [&](Wait w) {
+        if (w.at <= 0 || w.at > s.frames) fail(src, "[[wait]]/[[walk]] `at` must be within (0, frames]");
+        s.waits.push_back(std::move(w));
+    };
     if (auto* arr = root["wait"].as_array()) {
         for (auto& n : *arr) {
             auto& t = *n.as_table();
             Wait w;
             w.at = t["at"].value_or(int64_t{-1});
-            if (w.at <= 0 || w.at > s.frames) fail(src, "[[wait]] `at` must be within (0, frames]");
-            w.label = t["label"].value_or(std::string());
-            w.timeout = t["timeout"].value_or(int64_t{0});
-            if (w.timeout <= 0) fail(src, "[[wait]] needs `timeout` > 0 (real frames)");
-            if (auto* ram = t["ram"].as_array())
-                for (auto& rn : *ram) w.ram.push_back(parse_ram(src, *rn.as_table()));
+            parse_wait_common(src, t, "wait", w);
             if (w.ram.empty()) fail(src, "[[wait]] needs at least one `ram` condition");
-            if (auto* hold = t["hold"].as_array()) {
-                for (auto& hn : *hold) {
-                    auto name = hn.value<std::string>();
-                    uint16_t b = name ? button_from_name(*name) : 0;
-                    if (!b) fail(src, "[[wait]] `hold` has an unknown button");
-                    w.hold |= b;
-                }
-            }
-            if (auto name = t["press"].value<std::string>()) {
-                w.tap = button_from_name(*name);
-                if (!w.tap) fail(src, "[[wait]] unknown `press` button '" + *name + "'");
-            }
-            w.tap_every = t["every"].value_or(int64_t{40});
-            w.tap_hold = t["press_hold"].value_or(int64_t{4});
-            if (w.tap && w.tap_every <= w.tap_hold) fail(src, "[[wait]] needs every > press_hold");
-            if (!s.waits.empty() && w.at < s.waits.back().at) fail(src, "[[wait]] entries must be in increasing order");
-            s.waits.push_back(std::move(w));
+            add_wait(std::move(w));
         }
     }
+    if (auto* arr = root["walk"].as_array()) {
+        for (auto& n : *arr) {
+            auto& t = *n.as_table();
+            Wait w;
+            w.at = t["at"].value_or(int64_t{-1});
+            parse_wait_common(src, t, "walk", w);
+            Steer st;
+            auto* xt = t["x"].as_table();
+            auto* zt = t["z"].as_table();
+            if (!xt || !zt) fail(src, "[[walk]] needs `x` and `z` position locations");
+            st.x = parse_ram(src, *xt);
+            st.z = parse_ram(src, *zt);
+            auto* target = t["target"].as_array();
+            if (!target || target->size() != 2) fail(src, "[[walk]] needs `target = [x, z]`");
+            st.target_x = static_cast<int32_t>((*target)[0].value_or(int64_t{0}));
+            st.target_z = static_cast<int32_t>((*target)[1].value_or(int64_t{0}));
+            st.tolerance = static_cast<int32_t>(t["tolerance"].value_or(int64_t{8}));
+            if (st.tolerance < 0) fail(src, "[[walk]] `tolerance` must be >= 0");
+            std::string axes = t["axes"].value_or(std::string("xz"));
+            if (axes != "xz" && axes != "x" && axes != "z") fail(src, "[[walk]] `axes` must be \"xz\", \"x\" or \"z\"");
+            st.use_x = axes.find('x') != std::string::npos;
+            st.use_z = axes.find('z') != std::string::npos;
+            w.steer = st;
+            add_wait(std::move(w));
+        }
+    }
+    std::stable_sort(s.waits.begin(), s.waits.end(), [](const Wait& a, const Wait& b) { return a.at < b.at; });
     if (auto* arr = root["check"].as_array()) {
         for (auto& n : *arr) {
             auto& t = *n.as_table();
@@ -196,6 +307,8 @@ Scenario load(const std::string& path) {
     } catch (const toml::parse_error& e) {
         fail(path, e.what());
     }
+    std::vector<std::filesystem::path> seen;
+    merge_includes(t, path, seen);
     std::ostringstream ss;
     ss << t;
     return parse(ss.str(), path);
@@ -218,14 +331,22 @@ uint16_t buttons_at(const Scenario& s, int64_t frame) {
 }
 
 bool Timeline::satisfied(const Wait& w, const RamReader& read) const {
-    for (const auto& r : w.ram)
-        if (!ram_matches(r, read(r.addr, r.size))) return false;
+    for (const auto& r : w.ram) {
+        uint32_t v = 0;
+        if (!read_ram(read, r, v) || !ram_matches(r, v)) return false;
+    }
+    if (w.steer) {
+        uint32_t x = 0, z = 0;
+        if (!read_ram(read, w.steer->x, x) || !read_ram(read, w.steer->z, z)) return false;
+        if (!steer_reached(*w.steer, sign_extend(x, w.steer->x.size), sign_extend(z, w.steer->z.size))) return false;
+    }
     return true;
 }
 
 void Timeline::advance(int64_t real_frame, const RamReader& read) {
     real_ = real_frame;
-    if (timed_out_) return;
+    steer_ = 0;
+    if (timed_out_ || guard_failed_) return;
     if (waiting_) {
         const Wait& w = s_.waits[next_];
         if (satisfied(w, read)) {
@@ -251,8 +372,21 @@ void Timeline::advance(int64_t real_frame, const RamReader& read) {
         }
     }
     if (waiting_) {
-        script_ = s_.waits[next_].at;
+        const Wait& w = s_.waits[next_];
+        script_ = w.at;
         offset_ = real_ - script_;
+        for (const auto& g : w.guard) {
+            uint32_t v = 0;
+            if (!read_ram(read, g, v) || !ram_matches(g, v)) {
+                guard_failed_ = true;
+                return;
+            }
+        }
+        if (w.steer) {
+            uint32_t x = 0, z = 0;
+            if (read_ram(read, w.steer->x, x) && read_ram(read, w.steer->z, z))
+                steer_ = steer_buttons(*w.steer, sign_extend(x, w.steer->x.size), sign_extend(z, w.steer->z.size));
+        }
     }
 }
 
@@ -260,7 +394,7 @@ uint16_t Timeline::buttons() const {
     uint16_t b = buttons_at(s_, script_);
     if (waiting_) {
         const Wait& w = s_.waits[next_];
-        b |= w.hold;
+        b |= w.hold | steer_;
         if (w.tap && (real_ - wait_start_) % w.tap_every < w.tap_hold) b |= w.tap;
     }
     return b;

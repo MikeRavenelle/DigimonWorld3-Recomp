@@ -1,590 +1,398 @@
 name = "save_load_roundtrip"
 description = "New Game, walk to the Asuka Inn save officer, save to slot 1, power-cycle keeping the card, Continue, load slot 1 and resume in the Inn."
-frames = 58000
+include = ["common/new_game.toml"]
+frames = 12793
 memcard = "blank"
 
-# New Game: the opening scenes are skipped with CROSS taps and the story scenes up to the first free
-# movement (partner Digimon from the Main Lobby, tutorial battle) are clicked through. The scripted walk then
-# goes through Asuka City Central Sector into the Asuka Inn (1F), where the Guardromon save officer stands
-# on the left. Talking to it opens the SAVE screen: slot 1, create new data, execute. A [[reboot]] then
-# power-cycles the machine with the same card image; the title screen's Continue leads to the LOAD screen,
-# slot 1, execute, and the game resumes in the Inn.
+# The shared prefix (common/new_game.toml) plays New Game up to Asuka City Central Sector and documents the RAM
+# words used below. From there the script walks to the Lamb Chop door and back and on to the Asuka Inn (1F), where
+# the Guardromon save officer stands on the left. Talking to it plays two movies and opens the SAVE screen: slot 1,
+# create new data, execute. A [[reboot]] then power-cycles the machine with the same card image; the title
+# screen's Continue leads to the LOAD screen, slot 1, execute, and the game resumes in the Inn.
+#
+# Script frames only order the steps: the clock stops during every [[wait]]/[[walk]] until its RAM condition
+# holds. The save and load screens have no RAM state that is easy to read, so their presses are timed from the
+# moment the game mode becomes 0xC (the card module is deterministic and its transfers take a fixed time).
 
-press = [
-    { button = "START", at = 900 },
-    { button = "UP", at = 960 },
-    { button = "CROSS", at = 1020 },
-    { button = "LEFT", at = 22800, hold = 60 },
-    { button = "DOWN", at = 22870, hold = 60 },
-    { button = "DOWN", at = 22940, hold = 60 },
-    { button = "DOWN", at = 23010, hold = 60 },
-    { button = "LEFT", at = 23080, hold = 60 },
-    { button = "UP", at = 23150, hold = 80 },
-    { button = "RIGHT", at = 23150, hold = 80 },
-    { button = "UP", at = 23240, hold = 80 },
-    { button = "RIGHT", at = 23240, hold = 80 },
-    { button = "UP", at = 23330, hold = 80 },
-    { button = "RIGHT", at = 23330, hold = 80 },
-    { button = "UP", at = 23420, hold = 60 },
-    { button = "UP", at = 23490, hold = 60 },
-    { button = "UP", at = 23560, hold = 60 },
-    { button = "UP", at = 23630, hold = 60 },
-    { button = "UP", at = 23700, hold = 60 },
-    { button = "UP", at = 23770, hold = 60 },
-    { button = "LEFT", at = 23840, hold = 30 },
-    { button = "UP", at = 23880, hold = 30 },
-    { button = "LEFT", at = 23880, hold = 30 },
-    { button = "CROSS", at = 23920, hold = 4 },
-    { button = "CROSS", at = 23960, hold = 4 },
-    { button = "CROSS", at = 24000, hold = 4 },
-    { button = "CROSS", at = 24040, hold = 4 },
-    { button = "CROSS", at = 24080, hold = 4 },
-    { button = "CROSS", at = 24120, hold = 4 },
-    { button = "CROSS", at = 24160, hold = 4 },
-    { button = "CROSS", at = 24200, hold = 4 },
-    { button = "CROSS", at = 24240, hold = 4 },
-    { button = "CROSS", at = 24280, hold = 4 },
-    { button = "CROSS", at = 24320, hold = 4 },
-    { button = "CROSS", at = 24360, hold = 4 },
-    { button = "CROSS", at = 24400, hold = 4 },
-    { button = "CROSS", at = 24440, hold = 4 },
-    { button = "CROSS", at = 24480, hold = 4 },
-    { button = "CROSS", at = 24520, hold = 4 },
-    { button = "CROSS", at = 24560, hold = 4 },
-    { button = "CROSS", at = 24600, hold = 4 },
-    { button = "CROSS", at = 24640, hold = 4 },
-    { button = "CROSS", at = 24680, hold = 4 },
-    { button = "CROSS", at = 24720, hold = 4 },
-    { button = "CROSS", at = 24760, hold = 4 },
-    { button = "CROSS", at = 24800, hold = 4 },
-    { button = "CROSS", at = 24840, hold = 4 },
-    { button = "CROSS", at = 24880, hold = 4 },
-    { button = "CROSS", at = 24920, hold = 4 },
-    { button = "CROSS", at = 24960, hold = 4 },
-    { button = "CROSS", at = 25000, hold = 4 },
-    { button = "CROSS", at = 25040, hold = 4 },
-    { button = "CROSS", at = 25080, hold = 4 },
-    { button = "CROSS", at = 25120, hold = 4 },
-    { button = "CROSS", at = 25160, hold = 4 },
-    { button = "CROSS", at = 25200, hold = 4 },
-    { button = "CROSS", at = 25240, hold = 4 },
-    { button = "CROSS", at = 25280, hold = 4 },
-    { button = "CROSS", at = 25320, hold = 4 },
-    { button = "CROSS", at = 25360, hold = 4 },
-    { button = "CROSS", at = 25400, hold = 4 },
-    { button = "CROSS", at = 25440, hold = 4 },
-    { button = "CROSS", at = 25480, hold = 4 },
-    { button = "CROSS", at = 25520, hold = 4 },
-    { button = "CROSS", at = 25560, hold = 4 },
-    { button = "CROSS", at = 25600, hold = 4 },
-    { button = "CROSS", at = 25640, hold = 4 },
-    { button = "CROSS", at = 25680, hold = 4 },
-    { button = "CROSS", at = 25720, hold = 4 },
-    { button = "CROSS", at = 25760, hold = 4 },
-    { button = "CROSS", at = 25800, hold = 4 },
-    { button = "CROSS", at = 25840, hold = 4 },
-    { button = "CROSS", at = 25880, hold = 4 },
-    { button = "CROSS", at = 25920, hold = 4 },
-    { button = "CROSS", at = 25960, hold = 4 },
-    { button = "CROSS", at = 26000, hold = 4 },
-    { button = "CROSS", at = 26040, hold = 4 },
-    { button = "CROSS", at = 26080, hold = 4 },
-    { button = "CROSS", at = 26120, hold = 4 },
-    { button = "CROSS", at = 26160, hold = 4 },
-    { button = "CROSS", at = 26200, hold = 4 },
-    { button = "CROSS", at = 26240, hold = 4 },
-    { button = "CROSS", at = 26280, hold = 4 },
-    { button = "CROSS", at = 26320, hold = 4 },
-    { button = "CROSS", at = 26360, hold = 4 },
-    { button = "CROSS", at = 26400, hold = 4 },
-    { button = "CROSS", at = 26440, hold = 4 },
-    { button = "CROSS", at = 26480, hold = 4 },
-    { button = "CROSS", at = 26520, hold = 4 },
-    { button = "CROSS", at = 26560, hold = 4 },
-    { button = "CROSS", at = 26600, hold = 4 },
-    { button = "CROSS", at = 26640, hold = 4 },
-    { button = "CROSS", at = 26680, hold = 4 },
-    { button = "CROSS", at = 26720, hold = 4 },
-    { button = "CROSS", at = 26760, hold = 4 },
-    { button = "CROSS", at = 26800, hold = 4 },
-    { button = "CROSS", at = 26840, hold = 4 },
-    { button = "CROSS", at = 26880, hold = 4 },
-    { button = "CROSS", at = 26920, hold = 4 },
-    { button = "CROSS", at = 26960, hold = 4 },
-    { button = "CROSS", at = 27000, hold = 4 },
-    { button = "CROSS", at = 27040, hold = 4 },
-    { button = "CROSS", at = 27080, hold = 4 },
-    { button = "CROSS", at = 27120, hold = 4 },
-    { button = "CROSS", at = 27160, hold = 4 },
-    { button = "CROSS", at = 27200, hold = 4 },
-    { button = "CROSS", at = 27240, hold = 4 },
-    { button = "CROSS", at = 27280, hold = 4 },
-    { button = "CROSS", at = 27320, hold = 4 },
-    { button = "CROSS", at = 27360, hold = 4 },
-    { button = "CROSS", at = 27400, hold = 4 },
-    { button = "CROSS", at = 27440, hold = 4 },
-    { button = "CROSS", at = 27480, hold = 4 },
-    { button = "CROSS", at = 27520, hold = 4 },
-    { button = "CROSS", at = 27560, hold = 4 },
-    { button = "CROSS", at = 27600, hold = 4 },
-    { button = "CROSS", at = 27640, hold = 4 },
-    { button = "CROSS", at = 27680, hold = 4 },
-    { button = "CROSS", at = 27720, hold = 4 },
-    { button = "CROSS", at = 27760, hold = 4 },
-    { button = "CROSS", at = 27800, hold = 4 },
-    { button = "CROSS", at = 27840, hold = 4 },
-    { button = "CROSS", at = 27880, hold = 4 },
-    { button = "CROSS", at = 27920, hold = 4 },
-    { button = "CROSS", at = 27960, hold = 4 },
-    { button = "CROSS", at = 28000, hold = 4 },
-    { button = "CROSS", at = 28040, hold = 4 },
-    { button = "CROSS", at = 28080, hold = 4 },
-    { button = "CROSS", at = 28120, hold = 4 },
-    { button = "CROSS", at = 28160, hold = 4 },
-    { button = "CROSS", at = 28200, hold = 4 },
-    { button = "CROSS", at = 28240, hold = 4 },
-    { button = "CROSS", at = 28280, hold = 4 },
-    { button = "CROSS", at = 28320, hold = 4 },
-    { button = "CROSS", at = 28360, hold = 4 },
-    { button = "CROSS", at = 28400, hold = 4 },
-    { button = "CROSS", at = 28440, hold = 4 },
-    { button = "CROSS", at = 28480, hold = 4 },
-    { button = "CROSS", at = 28520, hold = 4 },
-    { button = "CROSS", at = 28560, hold = 4 },
-    { button = "CROSS", at = 28600, hold = 4 },
-    { button = "CROSS", at = 28640, hold = 4 },
-    { button = "CROSS", at = 28680, hold = 4 },
-    { button = "CROSS", at = 28720, hold = 4 },
-    { button = "CROSS", at = 28760, hold = 4 },
-    { button = "CROSS", at = 28800, hold = 4 },
-    { button = "CROSS", at = 28840, hold = 4 },
-    { button = "CROSS", at = 28880, hold = 4 },
-    { button = "CROSS", at = 28920, hold = 4 },
-    { button = "CROSS", at = 28960, hold = 4 },
-    { button = "CROSS", at = 29000, hold = 4 },
-    { button = "CROSS", at = 29040, hold = 4 },
-    { button = "CROSS", at = 29080, hold = 4 },
-    { button = "CROSS", at = 29120, hold = 4 },
-    { button = "CROSS", at = 29160, hold = 4 },
-    { button = "CROSS", at = 29200, hold = 4 },
-    { button = "CROSS", at = 29240, hold = 4 },
-    { button = "CROSS", at = 29280, hold = 4 },
-    { button = "CROSS", at = 29320, hold = 4 },
-    { button = "CROSS", at = 29360, hold = 4 },
-    { button = "CROSS", at = 29400, hold = 4 },
-    { button = "CROSS", at = 29440, hold = 4 },
-    { button = "CROSS", at = 29480, hold = 4 },
-    { button = "CROSS", at = 29520, hold = 4 },
-    { button = "CROSS", at = 29560, hold = 4 },
-    { button = "CROSS", at = 29600, hold = 4 },
-    { button = "CROSS", at = 29640, hold = 4 },
-    { button = "CROSS", at = 29680, hold = 4 },
-    { button = "CROSS", at = 29720, hold = 4 },
-    { button = "CROSS", at = 29760, hold = 4 },
-    { button = "CROSS", at = 29800, hold = 4 },
-    { button = "CROSS", at = 29840, hold = 4 },
-    { button = "CROSS", at = 29880, hold = 4 },
-    { button = "CROSS", at = 29920, hold = 4 },
-    { button = "CROSS", at = 29960, hold = 4 },
-    { button = "CROSS", at = 30000, hold = 4 },
-    { button = "CROSS", at = 30040, hold = 4 },
-    { button = "CROSS", at = 30080, hold = 4 },
-    { button = "CROSS", at = 30120, hold = 4 },
-    { button = "CROSS", at = 30160, hold = 4 },
-    { button = "CROSS", at = 30200, hold = 4 },
-    { button = "CROSS", at = 30240, hold = 4 },
-    { button = "CROSS", at = 30280, hold = 4 },
-    { button = "CROSS", at = 30320, hold = 4 },
-    { button = "CROSS", at = 30360, hold = 4 },
-    { button = "CROSS", at = 30400, hold = 4 },
-    { button = "CROSS", at = 30440, hold = 4 },
-    { button = "CROSS", at = 30480, hold = 4 },
-    { button = "CROSS", at = 30520, hold = 4 },
-    { button = "CROSS", at = 30560, hold = 4 },
-    { button = "CROSS", at = 30600, hold = 4 },
-    { button = "CROSS", at = 30640, hold = 4 },
-    { button = "CROSS", at = 30680, hold = 4 },
-    { button = "CROSS", at = 30720, hold = 4 },
-    { button = "CROSS", at = 30760, hold = 4 },
-    { button = "CROSS", at = 30800, hold = 4 },
-    { button = "CROSS", at = 30840, hold = 4 },
-    { button = "CROSS", at = 30880, hold = 4 },
-    { button = "CROSS", at = 30920, hold = 4 },
-    { button = "CROSS", at = 30960, hold = 4 },
-    { button = "CROSS", at = 31000, hold = 4 },
-    { button = "CROSS", at = 31040, hold = 4 },
-    { button = "CROSS", at = 31080, hold = 4 },
-    { button = "CROSS", at = 31120, hold = 4 },
-    { button = "CROSS", at = 31160, hold = 4 },
-    { button = "CROSS", at = 31200, hold = 4 },
-    { button = "CROSS", at = 31240, hold = 4 },
-    { button = "CROSS", at = 31280, hold = 4 },
-    { button = "CROSS", at = 31320, hold = 4 },
-    { button = "CROSS", at = 31360, hold = 4 },
-    { button = "CROSS", at = 31400, hold = 4 },
-    { button = "CROSS", at = 31440, hold = 4 },
-    { button = "CROSS", at = 31480, hold = 4 },
-    { button = "CROSS", at = 31520, hold = 4 },
-    { button = "CROSS", at = 31560, hold = 4 },
-    { button = "CROSS", at = 31600, hold = 4 },
-    { button = "CROSS", at = 31640, hold = 4 },
-    { button = "CROSS", at = 31680, hold = 4 },
-    { button = "CROSS", at = 31720, hold = 4 },
-    { button = "CROSS", at = 31760, hold = 4 },
-    { button = "CROSS", at = 31800, hold = 4 },
-    { button = "CROSS", at = 31840, hold = 4 },
-    { button = "CROSS", at = 31880, hold = 4 },
-    { button = "CROSS", at = 31920, hold = 4 },
-    { button = "CROSS", at = 31960, hold = 4 },
-    { button = "CROSS", at = 32000, hold = 4 },
-    { button = "CROSS", at = 32040, hold = 4 },
-    { button = "CROSS", at = 32080, hold = 4 },
-    { button = "CROSS", at = 32120, hold = 4 },
-    { button = "CROSS", at = 32160, hold = 4 },
-    { button = "CROSS", at = 32200, hold = 4 },
-    { button = "CROSS", at = 32240, hold = 4 },
-    { button = "CROSS", at = 32280, hold = 4 },
-    { button = "CROSS", at = 32320, hold = 4 },
-    { button = "CROSS", at = 32360, hold = 4 },
-    { button = "CROSS", at = 32400, hold = 4 },
-    { button = "CROSS", at = 32440, hold = 4 },
-    { button = "CROSS", at = 32480, hold = 4 },
-    { button = "CROSS", at = 32520, hold = 4 },
-    { button = "CROSS", at = 32560, hold = 4 },
-    { button = "CROSS", at = 32600, hold = 4 },
-    { button = "CROSS", at = 32640, hold = 4 },
-    { button = "CROSS", at = 32680, hold = 4 },
-    { button = "CROSS", at = 32720, hold = 4 },
-    { button = "CROSS", at = 32760, hold = 4 },
-    { button = "CROSS", at = 32800, hold = 4 },
-    { button = "CROSS", at = 32840, hold = 4 },
-    { button = "CROSS", at = 32880, hold = 4 },
-    { button = "CROSS", at = 32920, hold = 4 },
-    { button = "CROSS", at = 32960, hold = 4 },
-    { button = "CROSS", at = 33000, hold = 4 },
-    { button = "CROSS", at = 33040, hold = 4 },
-    { button = "CROSS", at = 33080, hold = 4 },
-    { button = "CROSS", at = 33120, hold = 4 },
-    { button = "CROSS", at = 33160, hold = 4 },
-    { button = "CROSS", at = 33200, hold = 4 },
-    { button = "CROSS", at = 33240, hold = 4 },
-    { button = "CROSS", at = 33280, hold = 4 },
-    { button = "CROSS", at = 33320, hold = 4 },
-    { button = "CROSS", at = 33360, hold = 4 },
-    { button = "CROSS", at = 33400, hold = 4 },
-    { button = "CROSS", at = 33440, hold = 4 },
-    { button = "CROSS", at = 33480, hold = 4 },
-    { button = "CROSS", at = 33520, hold = 4 },
-    { button = "CROSS", at = 33560, hold = 4 },
-    { button = "CROSS", at = 33600, hold = 4 },
-    { button = "CROSS", at = 33640, hold = 4 },
-    { button = "CROSS", at = 33680, hold = 4 },
-    { button = "CROSS", at = 33720, hold = 4 },
-    { button = "CROSS", at = 33760, hold = 4 },
-    { button = "CROSS", at = 33800, hold = 4 },
-    { button = "CROSS", at = 33840, hold = 4 },
-    { button = "CROSS", at = 33880, hold = 4 },
-    { button = "CROSS", at = 33920, hold = 4 },
-    { button = "CROSS", at = 33960, hold = 4 },
-    { button = "CROSS", at = 34000, hold = 4 },
-    { button = "CROSS", at = 34040, hold = 4 },
-    { button = "CROSS", at = 34080, hold = 4 },
-    { button = "CROSS", at = 34120, hold = 4 },
-    { button = "CROSS", at = 34160, hold = 4 },
-    { button = "CROSS", at = 34200, hold = 4 },
-    { button = "CROSS", at = 34240, hold = 4 },
-    { button = "CROSS", at = 34280, hold = 4 },
-    { button = "CROSS", at = 34320, hold = 4 },
-    { button = "CROSS", at = 34360, hold = 4 },
-    { button = "CROSS", at = 34400, hold = 4 },
-    { button = "CROSS", at = 34440, hold = 4 },
-    { button = "CROSS", at = 34480, hold = 4 },
-    { button = "CROSS", at = 34520, hold = 4 },
-    { button = "CROSS", at = 34560, hold = 4 },
-    { button = "CROSS", at = 34600, hold = 4 },
-    { button = "CROSS", at = 34640, hold = 4 },
-    { button = "CROSS", at = 34680, hold = 4 },
-    { button = "CROSS", at = 34720, hold = 4 },
-    { button = "CROSS", at = 34760, hold = 4 },
-    { button = "CROSS", at = 34800, hold = 4 },
-    { button = "CROSS", at = 34840, hold = 4 },
-    { button = "CROSS", at = 34880, hold = 4 },
-    { button = "CROSS", at = 34920, hold = 4 },
-    { button = "CROSS", at = 34960, hold = 4 },
-    { button = "CROSS", at = 35000, hold = 4 },
-    { button = "CROSS", at = 35040, hold = 4 },
-    { button = "CROSS", at = 35080, hold = 4 },
-    { button = "CROSS", at = 35120, hold = 4 },
-    { button = "CROSS", at = 35160, hold = 4 },
-    { button = "CROSS", at = 35200, hold = 4 },
-    { button = "CROSS", at = 35240, hold = 4 },
-    { button = "CROSS", at = 35280, hold = 4 },
-    { button = "CROSS", at = 35320, hold = 4 },
-    { button = "CROSS", at = 35360, hold = 4 },
-    { button = "CROSS", at = 35400, hold = 4 },
-    { button = "CROSS", at = 35440, hold = 4 },
-    { button = "CROSS", at = 35480, hold = 4 },
-    { button = "CROSS", at = 35520, hold = 4 },
-    { button = "CROSS", at = 35560, hold = 4 },
-    { button = "CROSS", at = 35600, hold = 4 },
-    { button = "CROSS", at = 35640, hold = 4 },
-    { button = "CROSS", at = 35680, hold = 4 },
-    { button = "CROSS", at = 35720, hold = 4 },
-    { button = "CROSS", at = 35760, hold = 4 },
-    { button = "CROSS", at = 35800, hold = 4 },
-    { button = "CROSS", at = 35840, hold = 4 },
-    { button = "CROSS", at = 35880, hold = 4 },
-    { button = "CROSS", at = 35920, hold = 4 },
-    { button = "CROSS", at = 35960, hold = 4 },
-    { button = "CROSS", at = 36000, hold = 4 },
-    { button = "CROSS", at = 36040, hold = 4 },
-    { button = "CROSS", at = 36080, hold = 4 },
-    { button = "CROSS", at = 36120, hold = 4 },
-    { button = "CROSS", at = 36160, hold = 4 },
-    { button = "CROSS", at = 36200, hold = 4 },
-    { button = "CROSS", at = 36240, hold = 4 },
-    { button = "CROSS", at = 36280, hold = 4 },
-    { button = "CROSS", at = 36320, hold = 4 },
-    { button = "CROSS", at = 36360, hold = 4 },
-    { button = "CROSS", at = 36400, hold = 4 },
-    { button = "CROSS", at = 36440, hold = 4 },
-    { button = "CROSS", at = 36480, hold = 4 },
-    { button = "CROSS", at = 36520, hold = 4 },
-    { button = "CROSS", at = 36560, hold = 4 },
-    { button = "CROSS", at = 36600, hold = 4 },
-    { button = "CROSS", at = 36640, hold = 4 },
-    { button = "CROSS", at = 36680, hold = 4 },
-    { button = "DOWN", at = 36720, hold = 70 },
-    { button = "RIGHT", at = 36720, hold = 70 },
-    { button = "DOWN", at = 36800, hold = 70 },
-    { button = "RIGHT", at = 36800, hold = 70 },
-    { button = "DOWN", at = 36880, hold = 70 },
-    { button = "RIGHT", at = 36880, hold = 70 },
-    { button = "DOWN", at = 36960, hold = 70 },
-    { button = "DOWN", at = 37040, hold = 70 },
-    { button = "LEFT", at = 37120, hold = 60 },
-    { button = "CROSS", at = 37190, hold = 4 },
-    { button = "DOWN", at = 37620, hold = 120 },
-    { button = "RIGHT", at = 37620, hold = 120 },
-    { button = "DOWN", at = 37750, hold = 90 },
-    { button = "RIGHT", at = 37750, hold = 90 },
-    { button = "RIGHT", at = 37850, hold = 60 },
-    { button = "DOWN", at = 37920, hold = 120 },
-    { button = "RIGHT", at = 37920, hold = 120 },
-    { button = "LEFT", at = 38050, hold = 60 },
-    { button = "DOWN", at = 38120, hold = 90 },
-    { button = "RIGHT", at = 38120, hold = 90 },
-    { button = "LEFT", at = 38220, hold = 60 },
-    { button = "UP", at = 38290, hold = 120 },
-    { button = "DOWN", at = 38420, hold = 90 },
-    { button = "LEFT", at = 38420, hold = 90 },
-    { button = "LEFT", at = 38520, hold = 120 },
-    { button = "UP", at = 38650, hold = 120 },
-    { button = "DOWN", at = 38780, hold = 60 },
-    { button = "UP", at = 38850, hold = 60 },
-    { button = "RIGHT", at = 38920, hold = 120 },
-    { button = "UP", at = 39050, hold = 90 },
-    { button = "UP", at = 39150, hold = 90 },
-    { button = "RIGHT", at = 39150, hold = 90 },
-    { button = "RIGHT", at = 39250, hold = 120 },
-    { button = "RIGHT", at = 39380, hold = 120 },
-    { button = "UP", at = 39510, hold = 90 },
-    { button = "LEFT", at = 39510, hold = 90 },
-    { button = "UP", at = 39610, hold = 120 },
-    { button = "UP", at = 39740, hold = 120 },
-    { button = "LEFT", at = 39740, hold = 120 },
-    { button = "CROSS", at = 39870, hold = 4 },
-    { button = "CROSS", at = 39885, hold = 4 },
-    { button = "DOWN", at = 39915, hold = 60 },
-    { button = "RIGHT", at = 39915, hold = 60 },
-    { button = "CROSS", at = 39985, hold = 4 },
-    { button = "CROSS", at = 40000, hold = 4 },
-    { button = "DOWN", at = 40030, hold = 60 },
-    { button = "LEFT", at = 40030, hold = 60 },
-    { button = "CROSS", at = 40100, hold = 4 },
-    { button = "CROSS", at = 40115, hold = 4 },
-    { button = "UP", at = 40145, hold = 90 },
-    { button = "LEFT", at = 40145, hold = 90 },
-    { button = "CROSS", at = 40245, hold = 4 },
-    { button = "CROSS", at = 40260, hold = 4 },
-    { button = "UP", at = 40290, hold = 60 },
-    { button = "RIGHT", at = 40290, hold = 60 },
-    { button = "CROSS", at = 40360, hold = 4 },
-    { button = "CROSS", at = 40375, hold = 4 },
-    { button = "LEFT", at = 40405, hold = 60 },
-    { button = "CROSS", at = 40475, hold = 4 },
-    { button = "CROSS", at = 40490, hold = 4 },
-    { button = "UP", at = 40520, hold = 60 },
-    { button = "CROSS", at = 40590, hold = 4 },
-    { button = "CROSS", at = 40605, hold = 4 },
-    { button = "UP", at = 40635, hold = 90 },
-    { button = "LEFT", at = 40635, hold = 90 },
-    { button = "CROSS", at = 40735, hold = 4 },
-    { button = "CROSS", at = 40750, hold = 4 },
-    { button = "UP", at = 40780, hold = 90 },
-    { button = "CROSS", at = 40880, hold = 4 },
-    { button = "CROSS", at = 40895, hold = 4 },
-    { button = "UP", at = 40925, hold = 60 },
-    { button = "RIGHT", at = 40925, hold = 60 },
-    { button = "CROSS", at = 40995, hold = 4 },
-    { button = "CROSS", at = 41010, hold = 4 },
-    { button = "RIGHT", at = 41040, hold = 120 },
-    { button = "CROSS", at = 41170, hold = 4 },
-    { button = "CROSS", at = 41185, hold = 4 },
-    { button = "DOWN", at = 41215, hold = 120 },
-    { button = "LEFT", at = 41215, hold = 120 },
-    { button = "CROSS", at = 41345, hold = 4 },
-    { button = "CROSS", at = 41360, hold = 4 },
-    { button = "DOWN", at = 41390, hold = 60 },
-    { button = "RIGHT", at = 41390, hold = 60 },
-    { button = "CROSS", at = 41460, hold = 4 },
-    { button = "CROSS", at = 41475, hold = 4 },
-    { button = "DOWN", at = 41505, hold = 60 },
-    { button = "CROSS", at = 41575, hold = 4 },
-    { button = "CROSS", at = 41590, hold = 4 },
-    { button = "UP", at = 41620, hold = 120 },
-    { button = "LEFT", at = 41620, hold = 120 },
-    { button = "CROSS", at = 41750, hold = 4 },
-    { button = "CROSS", at = 41765, hold = 4 },
-    { button = "UP", at = 41795, hold = 120 },
-    { button = "LEFT", at = 41795, hold = 120 },
-    { button = "CROSS", at = 41925, hold = 4 },
-    { button = "CROSS", at = 41940, hold = 4 },
-    { button = "DOWN", at = 41970, hold = 60 },
-    { button = "CROSS", at = 42040, hold = 4 },
-    { button = "CROSS", at = 42055, hold = 4 },
-    { button = "DOWN", at = 42085, hold = 120 },
-    { button = "CROSS", at = 42215, hold = 4 },
-    { button = "CROSS", at = 42230, hold = 4 },
-    { button = "RIGHT", at = 42260, hold = 120 },
-    { button = "CROSS", at = 42390, hold = 4 },
-    { button = "CROSS", at = 42405, hold = 4 },
-    { button = "DOWN", at = 42435, hold = 120 },
-    { button = "RIGHT", at = 42435, hold = 120 },
-    { button = "CROSS", at = 42565, hold = 4 },
-    { button = "CROSS", at = 42580, hold = 4 },
-    { button = "UP", at = 42610, hold = 120 },
-    { button = "CROSS", at = 42740, hold = 4 },
-    { button = "CROSS", at = 42755, hold = 4 },
-    { button = "DOWN", at = 42785, hold = 60 },
-    { button = "RIGHT", at = 42785, hold = 60 },
-    { button = "CROSS", at = 42855, hold = 4 },
-    { button = "CROSS", at = 42870, hold = 4 },
-    { button = "UP", at = 42900, hold = 120 },
-    { button = "LEFT", at = 42900, hold = 120 },
-    { button = "CROSS", at = 43030, hold = 4 },
-    { button = "CROSS", at = 43045, hold = 4 },
-    { button = "DOWN", at = 43375, hold = 60 },
-    { button = "LEFT", at = 43375, hold = 60 },
-    { button = "DOWN", at = 43445, hold = 60 },
-    { button = "LEFT", at = 43445, hold = 60 },
-    { button = "DOWN", at = 43515, hold = 60 },
-    { button = "LEFT", at = 43515, hold = 60 },
-    { button = "UP", at = 43585, hold = 40 },
-    { button = "DOWN", at = 43635, hold = 50 },
-    { button = "LEFT", at = 43635, hold = 50 },
-    { button = "CROSS", at = 43695, hold = 4 },
-    { button = "CROSS", at = 43925, hold = 4 },
-    { button = "CROSS", at = 44155, hold = 4 },
-    { button = "CROSS", at = 44385, hold = 4 },
-    { button = "CROSS", at = 44615, hold = 4 },
-    { button = "CROSS", at = 44845, hold = 4 },
-    { button = "CROSS", at = 45375, hold = 4 },
-    { button = "CROSS", at = 45905, hold = 4 },
-    { button = "CROSS", at = 46435, hold = 4 },
-    { button = "CROSS", at = 46965, hold = 4 },
-    { button = "CROSS", at = 47895, hold = 4 },
-    { button = "CROSS", at = 48425, hold = 4 },
-    { button = "CROSS", at = 48900, hold = 4 },
-    { button = "START", at = 50200, hold = 4 },
-    { button = "CROSS", at = 50320, hold = 4 },
-    { button = "CROSS", at = 50800, hold = 4 },
-    { button = "CROSS", at = 51300, hold = 4 },
-    { button = "CROSS", at = 51900, hold = 4 },
-    { button = "CROSS", at = 52500, hold = 4 },
-]
+# Central Sector: along the street to the Lamb Chop door arrow (CROSS on the arrow walks the player inside).
+[[walk]]
+at = 1474
+label = "to Lamb Chop 1"
+x = { via = 0x8004ADC0, addr = 0x58, size = 4 }
+z = { via = 0x8004ADC0, addr = 0x5C, size = 4 }
+target = [819, 521]
+tolerance = 10
+axes = "x"
+timeout = 900
+guard = [{ addr = 0x800554D4, size = 4, value = 0x1C3 }]
 
-repeat = [
-    { button = "CROSS", from = 1100, to = 22800, every = 45, hold = 3 },
-]
+[[walk]]
+at = 1475
+label = "to Lamb Chop 2"
+x = { via = 0x8004ADC0, addr = 0x58, size = 4 }
+z = { via = 0x8004ADC0, addr = 0x5C, size = 4 }
+target = [801, 482]
+tolerance = 10
+axes = "z"
+timeout = 900
+guard = [{ addr = 0x800554D4, size = 4, value = 0x1C3 }]
 
-[[reboot]]
-at = 49300
+[[walk]]
+at = 1476
+label = "to Lamb Chop 3"
+x = { via = 0x8004ADC0, addr = 0x58, size = 4 }
+z = { via = 0x8004ADC0, addr = 0x5C, size = 4 }
+target = [577, 610]
+tolerance = 10
+timeout = 900
+guard = [{ addr = 0x800554D4, size = 4, value = 0x1C3 }]
+
+[[walk]]
+at = 1477
+label = "to Lamb Chop 4"
+x = { via = 0x8004ADC0, addr = 0x58, size = 4 }
+z = { via = 0x8004ADC0, addr = 0x5C, size = 4 }
+target = [173, 595]
+tolerance = 10
+axes = "x"
+timeout = 900
+guard = [{ addr = 0x800554D4, size = 4, value = 0x1C3 }]
+
+[[walk]]
+at = 1478
+label = "to Lamb Chop 5"
+x = { via = 0x8004ADC0, addr = 0x58, size = 4 }
+z = { via = 0x8004ADC0, addr = 0x5C, size = 4 }
+target = [253, 531]
+tolerance = 10
+axes = "z"
+timeout = 900
+guard = [{ addr = 0x800554D4, size = 4, value = 0x1C3 }]
+
+[[walk]]
+at = 1479
+label = "to Lamb Chop 6"
+x = { via = 0x8004ADC0, addr = 0x58, size = 4 }
+z = { via = 0x8004ADC0, addr = 0x5C, size = 4 }
+target = [292, 545]
+tolerance = 5
+axes = "x"
+timeout = 900
+guard = [{ addr = 0x800554D4, size = 4, value = 0x1C3 }]
+
+[[wait]]
+at = 1481
+label = "Lamb Chop interior"
+ram = [{ addr = 0x800554D4, size = 4, value = 0x1CD }, { addr = 0x800554D0, size = 4, value = 2 }]
+timeout = 1500
+press = "CROSS"
+every = 10
+press_hold = 3
+
+[[walk]]
+at = 1483
+label = "to the exit arrow"
+x = { via = 0x8004ADC0, addr = 0x58, size = 4 }
+z = { via = 0x8004ADC0, addr = 0x5C, size = 4 }
+target = [204, 343]
+tolerance = 5
+timeout = 900
+guard = [{ addr = 0x800554D4, size = 4, value = 0x1CD }]
 
 [[check]]
-at = 19500
-label = "Login Room"
-display_enabled = true
-screen_hash = "08011803080018011802000038037e077ff13ff33fe73c073ff83ff8fff87ff0"
-screenshot = true
-
-[[check]]
-at = 41250
+at = 1513
 label = "Lamb Chop interior"
 display_enabled = true
-screen_hash = "37ff37dcdbdfeff6fbfc7dfc3ffe37ff7fc0ffe0ffe0e7f4000000000f001f80"
+screen_hash = "377f37dcdbdfeff6fbf87dfc3ffe37fe7fc0ffe0ffe0e7f4000000000f001f80"
 screenshot = true
 
+[[wait]]
+at = 1525
+label = "back in Central Sector"
+ram = [{ addr = 0x800554D4, size = 4, value = 0x1C3 }, { addr = 0x800554D0, size = 4, value = 2 }]
+timeout = 1500
+press = "CROSS"
+every = 10
+press_hold = 3
+
+# Central Sector to the Inn door arrow.
+[[walk]]
+at = 1527
+label = "to the Inn 1"
+x = { via = 0x8004ADC0, addr = 0x58, size = 4 }
+z = { via = 0x8004ADC0, addr = 0x5C, size = 4 }
+target = [267, 749]
+tolerance = 10
+axes = "z"
+timeout = 900
+guard = [{ addr = 0x800554D4, size = 4, value = 0x1C3 }]
+
+[[walk]]
+at = 1528
+label = "to the Inn 2"
+x = { via = 0x8004ADC0, addr = 0x58, size = 4 }
+z = { via = 0x8004ADC0, addr = 0x5C, size = 4 }
+target = [529, 644]
+tolerance = 10
+axes = "x"
+timeout = 900
+guard = [{ addr = 0x800554D4, size = 4, value = 0x1C3 }]
+
+[[walk]]
+at = 1529
+label = "to the Inn 3"
+x = { via = 0x8004ADC0, addr = 0x58, size = 4 }
+z = { via = 0x8004ADC0, addr = 0x5C, size = 4 }
+target = [628, 595]
+tolerance = 10
+axes = "x"
+timeout = 900
+guard = [{ addr = 0x800554D4, size = 4, value = 0x1C3 }]
+
+[[walk]]
+at = 1530
+label = "to the Inn 4"
+x = { via = 0x8004ADC0, addr = 0x58, size = 4 }
+z = { via = 0x8004ADC0, addr = 0x5C, size = 4 }
+target = [725, 370]
+tolerance = 10
+axes = "z"
+timeout = 900
+guard = [{ addr = 0x800554D4, size = 4, value = 0x1C3 }]
+
+[[walk]]
+at = 1531
+label = "to the Inn 5"
+x = { via = 0x8004ADC0, addr = 0x58, size = 4 }
+z = { via = 0x8004ADC0, addr = 0x5C, size = 4 }
+target = [668, 369]
+tolerance = 3
+timeout = 900
+guard = [{ addr = 0x800554D4, size = 4, value = 0x1C3 }]
+
+[[wait]]
+at = 1533
+label = "face the arrow"
+ram = [{ via = 0x8004ADC0, addr = 0x60, size = 4, value = 3 }]
+timeout = 300
+hold = ["UP", "LEFT"]
+
+[[wait]]
+at = 1535
+label = "Asuka Inn"
+ram = [{ addr = 0x800554D4, size = 4, value = 0x1C9 }, { addr = 0x800554D0, size = 4, value = 2 }]
+timeout = 1500
+press = "CROSS"
+every = 10
+press_hold = 3
+
+# Asuka Inn 1F: to the Guardromon on the left.
+[[walk]]
+at = 1537
+label = "to the Guardromon 1"
+x = { via = 0x8004ADC0, addr = 0x58, size = 4 }
+z = { via = 0x8004ADC0, addr = 0x5C, size = 4 }
+target = [220, 243]
+tolerance = 5
+timeout = 900
+guard = [{ addr = 0x800554D4, size = 4, value = 0x1C9 }]
+
+[[walk]]
+at = 1538
+label = "to the Guardromon 2"
+x = { via = 0x8004ADC0, addr = 0x58, size = 4 }
+z = { via = 0x8004ADC0, addr = 0x5C, size = 4 }
+target = [210, 170]
+tolerance = 5
+axes = "z"
+timeout = 900
+guard = [{ addr = 0x800554D4, size = 4, value = 0x1C9 }]
+
+[[walk]]
+at = 1539
+label = "to the Guardromon 3"
+x = { via = 0x8004ADC0, addr = 0x58, size = 4 }
+z = { via = 0x8004ADC0, addr = 0x5C, size = 4 }
+target = [197, 179]
+tolerance = 3
+timeout = 900
+guard = [{ addr = 0x800554D4, size = 4, value = 0x1C9 }]
+
+[[wait]]
+at = 1541
+label = "face the Guardromon"
+ram = [{ via = 0x8004ADC0, addr = 0x60, size = 4, value = 1 }]
+timeout = 300
+hold = ["DOWN", "LEFT"]
+
+# Talking to it plays two movies; CROSS presses at fixed offsets from the start of the event (the busy flag at
+# 0x80099114 becomes 1 when it starts) advance it, and the dialogue stays up until the next press.
+[[wait]]
+at = 1543
+label = "talk"
+ram = [{ addr = 0x80099114, size = 4, value = 1 }]
+timeout = 900
+press = "CROSS"
+every = 40
+press_hold = 3
+
+[[press]]
+button = "CROSS"
+at = 1771
+
+[[press]]
+button = "CROSS"
+at = 2001
+
+[[press]]
+button = "CROSS"
+at = 2231
+
+[[press]]
+button = "CROSS"
+at = 2461
+
+[[press]]
+button = "CROSS"
+at = 2691
+
+[[press]]
+button = "CROSS"
+at = 3221
+
+[[press]]
+button = "CROSS"
+at = 3751
+
 [[check]]
-at = 45375
+at = 3221
 label = "save officer dialogue"
 display_enabled = true
-screen_hash = "7f8c39bc19f003a061e4e0ace3ccf3cc3fe0ffe0ff206be0002703e507e20fe0"
+screen_hash = "7b8c39bc0df803a061e4e0acf3ccf3cc3fe0ffe0ff20e9e0002703e407e20fe2"
 screenshot = true
 
+# The SAVE screen (mode 0xC) follows.
+[[wait]]
+at = 3843
+label = "save screen"
+ram = [{ addr = 0x800554D0, size = 4, value = 12 }]
+timeout = 3000
+
+# Save screen: slot, execute, saved (timed from the mode change).
+[[press]]
+button = "CROSS"
+at = 4138
+
+[[press]]
+button = "CROSS"
+at = 4668
+
+[[press]]
+button = "CROSS"
+at = 5598
+
+[[press]]
+button = "CROSS"
+at = 6128
+
+[[press]]
+button = "CROSS"
+at = 6603
+
 [[check]]
-at = 46435
+at = 4138
 label = "save: choose memory card slot"
 display_enabled = true
 screen_hash = "00060006000600068001ffff5af600068001800180018001ffff80018cdf8001"
 screenshot = true
 
 [[check]]
-at = 47895
+at = 5598
 label = "save: confirm"
 display_enabled = true
 screen_hash = "77e277e3ffe300028001ffff37e677e28001c40180018001ffff840180038001"
 screenshot = true
 
 [[check]]
-at = 48855
+at = 6558
 label = "saved"
 display_enabled = true
 screen_hash = "77e277e3ffe300028001ffff37e677e28001ed01ad018001ffff800180018001"
 screenshot = true
 
+[[reboot]]
+at = 7003
+
+[[press]]
+button = "START"
+at = 7903
+
+[[press]]
+button = "CROSS"
+at = 8023
+
+# After the reboot: Continue, then the LOAD screen (mode 0xC).
+[[wait]]
+at = 8043
+label = "load screen"
+ram = [{ addr = 0x800554D0, size = 4, value = 12 }]
+timeout = 3000
+
+[[press]]
+button = "CROSS"
+at = 8474
+
+[[press]]
+button = "CROSS"
+at = 8974
+
+[[press]]
+button = "CROSS"
+at = 9574
+
+[[press]]
+button = "CROSS"
+at = 10174
+
 [[check]]
-at = 50740
+at = 8414
 label = "second boot: load, choose slot"
 display_enabled = true
 screen_hash = "00060006000600068001ffffcf6700068001800180018005ffff80018cdf8201"
 screenshot = true
 
 [[check]]
-at = 51700
+at = 9374
 label = "load: pick block"
 display_enabled = true
 screen_hash = "77e277e3ffe300028001ffff37e677e28001ed018d018001ffff802180058001"
 screenshot = true
 
+[[wait]]
+at = 10193
+label = "loaded in the Inn"
+ram = [{ addr = 0x800554D4, size = 4, value = 0x1C9 }, { addr = 0x800554D0, size = 4, value = 2 }]
+timeout = 3000
+
 [[check]]
-at = 52700
+at = 10320
 label = "loaded"
 display_enabled = true
 screen_hash = "0002ffc20fc200020002ffffffff083f00020002000200020002000200020002"
 screenshot = true
 
 [[check]]
-at = 53700
+at = 11320
 label = "resumed in the Inn"
 display_enabled = true
 screen_hash = "f3eefbce7fec3dfcfff07be075e4f0ea03a31fc03fc07fa0011e011c00170136"
+ram = [{ addr = 0x800554D4, size = 4, value = 0x1C9 }, { addr = 0x800554D0, size = 4, value = 2 }]
 screenshot = true
 
 [[check]]
-at = 55100
+at = 12720
 label = "resumed field stays stable"
 display_enabled = true
 screen_hash = "f3eefbce7fec3dfcfff07be075e4f0ea03a31fc03fc07fa0011e011c00170136"
+ram = [{ addr = 0x800554D4, size = 4, value = 0x1C9 }, { addr = 0x800554D0, size = 4, value = 2 }]
 screenshot = true
-
