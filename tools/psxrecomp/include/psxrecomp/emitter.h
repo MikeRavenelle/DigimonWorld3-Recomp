@@ -40,6 +40,9 @@ std::vector<EmittedFile> emit_segment(const EmitContext& ec, std::size_t funcs_p
 struct TableSegment {
     const CodeSegment* seg;
     const std::map<uint32_t, Function>* funcs;
+    // Address range this segment owns at runtime (0 = whole image). MAIN's image extends over the
+    // overlay slots, so it only owns [base, code_end).
+    uint32_t extent = 0;
 };
 
 // Lookup tables: one RecompFuncEntry array per segment plus `dw3_segments[]` / `dw3_segment_count`.

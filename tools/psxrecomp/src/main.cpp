@@ -193,7 +193,8 @@ int main(int argc, char** argv) {
                 manifest += f.name + "\n";
                 ++files;
             }
-            tables.push_back({&jobs[k].seg, &results[k].functions});
+            uint32_t extent = jobs[k].cfg.code_end ? jobs[k].cfg.code_end - jobs[k].seg.base : 0;
+            tables.push_back({&jobs[k].seg, &results[k].functions, extent});
         }
         auto t = emit_tables(tables);
         changed += write_if_changed(fs::path(out_dir) / t.name, t.text);

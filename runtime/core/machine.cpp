@@ -45,6 +45,8 @@ Machine::Machine(std::span<const RecompSegment> segments)
       gpu_(bus_, irq_, video_, dma_),
       cdrom_(bus_, sched_, irq_, dma_),
       spu_(bus_, irq_, dma_),
+      sio_(bus_, sched_, irq_),
+      mdec_(bus_, sched_, dma_),
       segments_(segments),
       resident_(segments.size(), false),
       verified_(segments.size(), false) {

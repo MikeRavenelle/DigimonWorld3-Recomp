@@ -16,8 +16,10 @@
 #include "dw3/gpu.h"
 #include "dw3/gte.h"
 #include "dw3/irq.h"
+#include "dw3/mdec.h"
 #include "dw3/recomp.h"
 #include "dw3/scheduler.h"
+#include "dw3/sio.h"
 #include "dw3/soft_rasterizer.h"
 #include "dw3/spu.h"
 #include "dw3/timers.h"
@@ -47,6 +49,8 @@ public:
     Gpu& gpu() { return gpu_; }
     Cdrom& cdrom() { return cdrom_; }
     Spu& spu() { return spu_; }
+    Sio& sio() { return sio_; }
+    Mdec& mdec() { return mdec_; }
     RecompContext& ctx() { return bus_.ctx(); }
 
     // Runs due scheduler events, then delivers a pending CPU interrupt via on_interrupt.
@@ -98,6 +102,8 @@ private:
     Gpu gpu_;
     Cdrom cdrom_;
     Spu spu_;
+    Sio sio_;
+    Mdec mdec_;
     SoftRasterizer soft_raster_;
     std::span<const RecompSegment> segments_;
     std::vector<bool> resident_;

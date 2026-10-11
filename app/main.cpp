@@ -28,6 +28,81 @@ struct Options {
     bool trace_bios = false;
     std::string vram_dump;
     uint32_t trace_lo = 0, trace_hi = 0;
+    bool uncapped = false;
+    int shot_every = 0;
+    std::string shot_dir;
+    struct Press {
+        uint16_t button;
+        int64_t from, to;
+    };
+    std::vector<Press> presses;
+};
+
+uint16_t button_from_name(const std::string& n) {
+    static const std::map<std::string, uint16_t> names = {
+        {"UP", dw3::kPadUp},         {"DOWN", dw3::kPadDown},     {"LEFT", dw3::kPadLeft},
+        {"RIGHT", dw3::kPadRight},   {"CROSS", dw3::kPadCross},   {"CIRCLE", dw3::kPadCircle},
+        {"SQUARE", dw3::kPadSquare}, {"TRIANGLE", dw3::kPadTriangle}, {"START", dw3::kPadStart},
+        {"SELECT", dw3::kPadSelect}, {"L1", dw3::kPadL1},         {"R1", dw3::kPadR1},
+        {"L2", dw3::kPadL2},         {"R2", dw3::kPadR2},
+    };
+    auto it = names.find(n);
+    return it == names.end() ? 0 : it->second;
+}
+
+// Port 1 pad: keyboard + first SDL gamepad, plus scripted presses for audit runs.
+class HostPad final : public dw3::PadSource {
+public:
+    const std::vector<Options::Press>* script = nullptr;
+    int64_t frame = 0;
+    SDL_Gamepad* gamepad = nullptr;
+
+    bool connected(int port) override { return port == 0; }
+    uint16_t buttons(int port) override {
+        if (port != 0) return 0;
+        uint16_t b = 0;
+        const bool* k = SDL_GetKeyboardState(nullptr);
+        auto key = [&](SDL_Scancode sc, uint16_t bit) {
+            if (k[sc]) b |= bit;
+        };
+        key(SDL_SCANCODE_UP, dw3::kPadUp);
+        key(SDL_SCANCODE_DOWN, dw3::kPadDown);
+        key(SDL_SCANCODE_LEFT, dw3::kPadLeft);
+        key(SDL_SCANCODE_RIGHT, dw3::kPadRight);
+        key(SDL_SCANCODE_Z, dw3::kPadCross);
+        key(SDL_SCANCODE_X, dw3::kPadCircle);
+        key(SDL_SCANCODE_A, dw3::kPadSquare);
+        key(SDL_SCANCODE_S, dw3::kPadTriangle);
+        key(SDL_SCANCODE_RETURN, dw3::kPadStart);
+        key(SDL_SCANCODE_BACKSPACE, dw3::kPadSelect);
+        key(SDL_SCANCODE_Q, dw3::kPadL1);
+        key(SDL_SCANCODE_W, dw3::kPadR1);
+        key(SDL_SCANCODE_1, dw3::kPadL2);
+        key(SDL_SCANCODE_2, dw3::kPadR2);
+        if (gamepad) {
+            auto pad = [&](SDL_GamepadButton gb, uint16_t bit) {
+                if (SDL_GetGamepadButton(gamepad, gb)) b |= bit;
+            };
+            pad(SDL_GAMEPAD_BUTTON_DPAD_UP, dw3::kPadUp);
+            pad(SDL_GAMEPAD_BUTTON_DPAD_DOWN, dw3::kPadDown);
+            pad(SDL_GAMEPAD_BUTTON_DPAD_LEFT, dw3::kPadLeft);
+            pad(SDL_GAMEPAD_BUTTON_DPAD_RIGHT, dw3::kPadRight);
+            pad(SDL_GAMEPAD_BUTTON_SOUTH, dw3::kPadCross);
+            pad(SDL_GAMEPAD_BUTTON_EAST, dw3::kPadCircle);
+            pad(SDL_GAMEPAD_BUTTON_WEST, dw3::kPadSquare);
+            pad(SDL_GAMEPAD_BUTTON_NORTH, dw3::kPadTriangle);
+            pad(SDL_GAMEPAD_BUTTON_START, dw3::kPadStart);
+            pad(SDL_GAMEPAD_BUTTON_BACK, dw3::kPadSelect);
+            pad(SDL_GAMEPAD_BUTTON_LEFT_SHOULDER, dw3::kPadL1);
+            pad(SDL_GAMEPAD_BUTTON_RIGHT_SHOULDER, dw3::kPadR1);
+            if (SDL_GetGamepadAxis(gamepad, SDL_GAMEPAD_AXIS_LEFT_TRIGGER) > 16000) b |= dw3::kPadL2;
+            if (SDL_GetGamepadAxis(gamepad, SDL_GAMEPAD_AXIS_RIGHT_TRIGGER) > 16000) b |= dw3::kPadR2;
+        }
+        if (script)
+            for (const auto& p : *script)
+                if (frame >= p.from && frame < p.to) b |= p.button;
+        return b;
+    }
 };
 
 Options parse(int argc, char** argv) {
@@ -38,6 +113,23 @@ Options parse(int argc, char** argv) {
         else if (a == "--frames" && i + 1 < argc) o.max_frames = std::atoi(argv[++i]);
         else if (a == "--screenshot" && i + 1 < argc) o.screenshot = argv[++i];
         else if (a == "--trace-bios") o.trace_bios = true;
+        else if (a == "--uncapped") o.uncapped = true;
+        else if (a == "--screenshot-every" && i + 2 < argc) {
+            o.shot_every = std::atoi(argv[++i]);
+            o.shot_dir = argv[++i];
+        }
+        else if (a == "--press" && i + 1 < argc) {
+            std::string spec = argv[++i];
+            auto at = spec.find('@'), plus = spec.find('+');
+            uint16_t bit = button_from_name(spec.substr(0, at));
+            if (!bit || at == std::string::npos) {
+                std::fprintf(stderr, "bad --press %s\n", spec.c_str());
+                std::exit(2);
+            }
+            int64_t from = std::stoll(spec.substr(at + 1, plus == std::string::npos ? std::string::npos : plus - at - 1));
+            int64_t len = plus == std::string::npos ? 6 : std::stoll(spec.substr(plus + 1));
+            o.presses.push_back({bit, from, from + len});
+        }
         else if (a == "--vram-dump" && i + 1 < argc) o.vram_dump = argv[++i];
         else if (a == "--trace-io" && i + 1 < argc) {
             std::string r = argv[++i];
@@ -92,7 +184,7 @@ int main(int argc, char** argv) {
         return 1;
     }
 
-    if (!SDL_Init(SDL_INIT_VIDEO | SDL_INIT_EVENTS)) {
+    if (!SDL_Init(SDL_INIT_VIDEO | SDL_INIT_EVENTS | SDL_INIT_GAMEPAD)) {
         SDL_Log("SDL_Init failed: %s", SDL_GetError());
         return 1;
     }
@@ -108,6 +200,15 @@ int main(int argc, char** argv) {
     static dw3::Bios bios(machine);
     static DiscSource disc_source(*disc);
     machine.cdrom().set_disc(&disc_source);
+    static HostPad host_pad;
+    host_pad.script = &opt.presses;
+    {
+        int n = 0;
+        SDL_JoystickID* ids = SDL_GetGamepads(&n);
+        if (ids && n > 0) host_pad.gamepad = SDL_OpenGamepad(ids[0]);
+        SDL_free(ids);
+    }
+    machine.sio().set_pad_source(0, &host_pad);
     std::size_t funcs = 0;
     for (uint32_t i = 0; i < dw3_segment_count; ++i) funcs += dw3_segments[i].func_count;
     SDL_Log("recompiled code: %u segments, %zu functions", dw3_segment_count, funcs);
@@ -163,9 +264,12 @@ int main(int argc, char** argv) {
     int screen_w = 0, screen_h = 0;
     std::vector<uint32_t> pixels;
     machine.video().on_frame = [&](uint64_t frame) {
+        host_pad.frame = static_cast<int64_t>(frame);
         SDL_Event e;
-        while (SDL_PollEvent(&e))
+        while (SDL_PollEvent(&e)) {
             if (e.type == SDL_EVENT_QUIT) shutdown(0);
+            if (e.type == SDL_EVENT_GAMEPAD_ADDED && !host_pad.gamepad) host_pad.gamepad = SDL_OpenGamepad(e.gdevice.which);
+        }
         SDL_SetRenderDrawColor(renderer, 0, 0, 0, 255);
         SDL_RenderClear(renderer);
         // Present the GPU's display area (software path until the plume renderer lands).
@@ -181,6 +285,14 @@ int main(int argc, char** argv) {
             SDL_UpdateTexture(screen, nullptr, pixels.data(), w * 4);
             SDL_RenderTexture(renderer, screen, nullptr, nullptr);
         }
+        if (opt.shot_every > 0 && frame % static_cast<uint64_t>(opt.shot_every) == 0) {
+            if (SDL_Surface* s = SDL_RenderReadPixels(renderer, nullptr)) {
+                char name[64];
+                std::snprintf(name, sizeof(name), "/frame_%06llu.bmp", static_cast<unsigned long long>(frame));
+                SDL_SaveBMP(s, (opt.shot_dir + name).c_str());
+                SDL_DestroySurface(s);
+            }
+        }
         if (opt.max_frames >= 0 && static_cast<int64_t>(frame) >= opt.max_frames) {
             if (!opt.screenshot.empty()) {
                 if (SDL_Surface* s = SDL_RenderReadPixels(renderer, nullptr)) {
@@ -192,6 +304,15 @@ int main(int argc, char** argv) {
             shutdown(0);
         }
         SDL_RenderPresent(renderer);
+        // Real-time pacing against emulated time (exact NTSC/PAL frame period from the video clock).
+        if (!opt.uncapped && opt.max_frames < 0) {
+            static const uint64_t start_ns = SDL_GetTicksNS();
+            static const int64_t start_cycles = machine.ctx().cycles;
+            uint64_t target = start_ns + static_cast<uint64_t>(
+                static_cast<double>(machine.ctx().cycles - start_cycles) * 1e9 / 33868800.0);
+            uint64_t now = SDL_GetTicksNS();
+            if (target > now) SDL_DelayPrecise(target - now);
+        }
     };
 
     uint32_t entry = bios.load_exe(exe);
