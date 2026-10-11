@@ -7,8 +7,8 @@
 // EvSpIOE (0x0004) success, EvSpTIMOUT (0x0100) no card, EvSpNEW (0x2000) new card (_card_info only),
 // EvSpERROR (0x8000) bad sector / unformatted card. Event classes: the card driver's interrupt handler
 // raises HwCARD (0xF0000011) for every low-level transfer (sector read/write, file I/O, directory reads);
-// the high-level _card_info/_card_load additionally report SwCARD (0xF4000001) once their result is
-// interpreted. This matches how the game waits (SwCARD for info/load, HwCARD for everything else). Source:
+// the high-level _card_info/_card_load and asynchronous (FASYNC) file reads and writes additionally report
+// SwCARD (0xF4000001) once their result is interpreted; those file transfers return 0 immediately. This matches how the game waits (SwCARD for info/load, HwCARD for everything else). Source:
 // psx-spx "BIOS Memory Card Functions" event list and the game's own wait code; not verified against
 // OpenBIOS source text offline.
 
@@ -174,7 +174,10 @@ uint32_t Bios::file_seek(uint32_t fd, int32_t off, uint32_t whence) {
 uint32_t Bios::file_transfer(RecompContext& c, uint32_t fd, uint32_t buf, uint32_t len, bool write) {
     if (fd >= files_.size() || !files_[fd].used) return errno_ = 9, kFail;
     auto& f = files_[fd];
-    if (!(f.mode & (write ? kFwrite : kFread)) || len % memcard::kFrameSize != 0) return errno_ = 0x16, kFail;
+    // Asynchronous handles are accepted whatever access flags they were opened with: libcard writes through a
+    // handle it opened with FREAD|FASYNC.
+    if ((!(f.mode & kFasync) && !(f.mode & (write ? kFwrite : kFread))) || len % memcard::kFrameSize != 0)
+        return errno_ = 0x16, kFail;
     memcard::CardFs fs(m_.sio().card_data(f.slot));
     auto info = fs.find(f.name);
     if (!info) return errno_ = 0x02, kFail;
@@ -190,7 +193,10 @@ uint32_t Bios::file_transfer(RecompContext& c, uint32_t fd, uint32_t buf, uint32
     }
     f.pos += static_cast<uint32_t>(n);
     errno_ = 0;
-    if (f.mode & kFasync) card_async(kSpecIoe);
+    if (f.mode & kFasync) {  // queued: the byte count is not known to the caller, completion is the event
+        card_async(kSpecIoe, true);
+        return 0;
+    }
     return static_cast<uint32_t>(n);
 }
 

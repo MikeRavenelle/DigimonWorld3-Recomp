@@ -2285,11 +2285,22 @@ TEST_F(CardBiosTest, AsyncReadAndWriteSignalIoe) {
     insert(0);
     uint32_t fd = make("A", 1, kFwrite | kFread | kFasync);
     settle();
-    EXPECT_EQ(b0(0x35, fd, kBuf, 128), 128u);
-    EXPECT_EQ(settle(), "HW:IOE");
+    EXPECT_EQ(b0(0x35, fd, kBuf, 128), 0u);  // queued: returns 0, completion comes as an event
+    EXPECT_EQ(settle(), "SW:IOE HW:IOE");
     b0(0x33, fd, 0, 0);
-    EXPECT_EQ(b0(0x34, fd, kBuf, 128), 128u);
-    EXPECT_EQ(settle(), "HW:IOE");
+    EXPECT_EQ(b0(0x34, fd, kBuf, 128), 0u);
+    EXPECT_EQ(settle(), "SW:IOE HW:IOE");
+}
+
+TEST_F(CardBiosTest, AsyncHandleTransfersEvenWithReadOnlyAccess) {
+    insert(0);
+    make("A", 1);
+    uint32_t fd = open("bu00:A", kFread | kFasync);
+    settle();
+    put(kBuf, pat(128, 9));
+    EXPECT_EQ(b0(0x35, fd, kBuf, 128), 0u);
+    EXPECT_EQ(settle(), "SW:IOE HW:IOE");
+    EXPECT_EQ(std::vector<uint8_t>(cards[0].begin() + 8192, cards[0].begin() + 8192 + 128), pat(128, 9));
 }
 
 TEST_F(CardBiosTest, SyncReadAndWriteSignalNothing) {

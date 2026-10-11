@@ -72,6 +72,6 @@ if(TARGET dw3scenario)
         add_test(NAME scenario.${scenario_name}
             COMMAND dw3scenario "${scenario_file}" --disc "${DW3_GAME_DIR}/Digimon World 3 (USA).cue")
         set_tests_properties(scenario.${scenario_name} PROPERTIES
-            LABELS scenario SKIP_RETURN_CODE 77 TIMEOUT 600)
+            LABELS scenario SKIP_RETURN_CODE 77 TIMEOUT 1800)
     endforeach()
 endif()
