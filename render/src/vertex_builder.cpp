@@ -1,6 +1,7 @@
 #include "dw3/vertex_builder.h"
 
 #include <algorithm>
+#include <bit>
 #include <cstdlib>
 
 namespace dw3 {
@@ -142,6 +143,39 @@ void build_triangle(std::vector<HwVertex>& out, const DrawState& s, const Primit
     const float origin = 0.5f / static_cast<float>(scale);
     for (int i = 0; i < 3; ++i)
         out.push_back(make_vertex(st, static_cast<float>(v[i].x) + origin, static_cast<float>(v[i].y) + origin, pl, p[0]->x, p[0]->y, rect));
+}
+
+bool has_precise(const GpuVertex v[3]) { return v[0].precise || v[1].precise || v[2].precise; }
+
+void build_precise_triangle(std::vector<HwVertex>& out, const DrawState& s, const PrimitiveFlags& f, const GpuVertex v[3],
+                            int scale) {
+    HwState st = pack_state(s, f, triangle_dithers(s, f));
+    st.s0 |= state_bits::kPrecise;
+    const bool tex = uses_texture(s, f);
+    const bool persp = v[0].precise && v[1].precise && v[2].precise;
+    uint32_t rect = 0;
+    if (tex)
+        rect = pack_rect(std::min({v[0].u, v[1].u, v[2].u}), std::max({v[0].u, v[1].u, v[2].u}),
+                         std::min({v[0].v, v[1].v, v[2].v}), std::max({v[0].v, v[1].v, v[2].v}));
+    // Same half-subpixel origin as build_triangle. The +0.5 on the attributes matches the planes' rounding offset:
+    // the shader takes the floor.
+    const float origin = 0.5f / static_cast<float>(scale);
+    for (int i = 0; i < 3; ++i) {
+        const GpuVertex& c = f.gouraud ? v[i] : v[0];
+        const bool sub = scale > 1 && v[i].precise;
+        const float attr[6] = {static_cast<float>(c.r) + 0.5f, static_cast<float>(c.g) + 0.5f,
+                               static_cast<float>(c.b) + 0.5f, tex ? static_cast<float>(v[i].u) + 0.5f : 0.0f,
+                               tex ? static_cast<float>(v[i].v) + 0.5f : 0.0f, persp ? v[i].w : 0.0f};
+        HwVertex h;
+        h.x = (sub ? v[i].fx : static_cast<float>(v[i].x)) + origin;
+        h.y = (sub ? v[i].fy : static_cast<float>(v[i].y)) + origin;
+        for (int k = 0; k < 6; ++k) h.plane[k] = std::bit_cast<int32_t>(attr[k]);
+        h.state0 = st.s0;
+        h.state1 = st.s1;
+        h.state2 = st.s2;
+        h.uv_rect = rect;
+        out.push_back(h);
+    }
 }
 
 void build_rect(std::vector<HwVertex>& out, const DrawState& s, const PrimitiveFlags& f, const GpuVertex& v, int width,

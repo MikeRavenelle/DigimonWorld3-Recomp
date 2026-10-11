@@ -76,7 +76,10 @@ True colour (`--true-color`) and texture filtering (`--texture-filter`) draw int
 beside the exact VRAM texture; the layer is only shown where its recorded VRAM word still matches, so everything the
 game can read back or sample stays exact. The CPU-side VRAM array stays authoritative for transfers: the Gpu calls
 `vram_written` after changing it and `vram_read_begin` before reading it, which uploads or reads back the affected
-regions. Only the Vulkan backend on Linux is built; plume's Metal and D3D12 backends are enabled per platform in
+regions. `--precise-geometry` adds sub-pixel vertices and perspective-correct texturing for polygons the GTE projected
+(RTPS/RTPT): the GTE records the position it had before truncating to integer SX/SY, keyed by the packed word, and the
+Gpu attaches it to polygon vertices that still carry that word, falling back to the integer otherwise. No generated
+code is involved, and with the option off nothing is recorded. Only the Vulkan backend on Linux is built; plume's Metal and D3D12 backends are enabled per platform in
 `cmake/Platform.cmake`. plume is fetched at a pinned commit with `cmake/patches/plume-vulkan.patch` applied.
 
 ## Platforms

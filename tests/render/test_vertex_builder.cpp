@@ -1,5 +1,8 @@
 #include <gtest/gtest.h>
 
+#include <bit>
+#include <vector>
+
 #include "dw3/vertex_builder.h"
 
 using namespace dw3;
@@ -230,4 +233,94 @@ TEST(VertexBuilder, RectTextureRegionWrapsToWholePage) {
     s.depth = TexDepth::Bit15;
     EXPECT_EQ(rect_texture_region(s, vert(0, 0, 10, 10), 8, 8), (Region{10, 10, 18, 18}));
     EXPECT_EQ(rect_texture_region(s, vert(0, 0, 250, 10), 16, 8), (Region{0, 10, 256, 18}));
+}
+
+namespace {
+
+GpuVertex precise_vert(int x, int y, float fx, float fy, float w, int u = 0, int v = 0, uint8_t c = 0x80) {
+    GpuVertex g = vert(x, y, u, v, c);
+    g.fx = fx;
+    g.fy = fy;
+    g.w = w;
+    g.precise = true;
+    return g;
+}
+
+float attr(const HwVertex& v, int i) { return std::bit_cast<float>(v.plane[i]); }
+
+}  // namespace
+
+TEST(PreciseVertexBuilder, DetectsPreciseVertices) {
+    GpuVertex v[3] = {vert(0, 0), vert(10, 0), vert(0, 10)};
+    EXPECT_FALSE(has_precise(v));
+    v[1] = precise_vert(10, 0, 10.5f, 0.25f, 100.0f);
+    EXPECT_TRUE(has_precise(v));
+}
+
+TEST(PreciseVertexBuilder, PositionsFollowThePreciseValueAboveNativeResolution) {
+    DrawState s = area(0, 0, 319, 239);
+    PrimitiveFlags f;
+    GpuVertex v[3] = {precise_vert(10, 20, 10.25f, 20.75f, 100.0f), vert(50, 20), precise_vert(10, 60, 10.5f, 60.5f, 100.0f)};
+    std::vector<HwVertex> out;
+    build_precise_triangle(out, s, f, v, 4);
+    ASSERT_EQ(out.size(), 3u);
+    const float origin = 0.5f / 4.0f;
+    EXPECT_FLOAT_EQ(out[0].x, 10.25f + origin);
+    EXPECT_FLOAT_EQ(out[0].y, 20.75f + origin);
+    EXPECT_FLOAT_EQ(out[1].x, 50.0f + origin);  // integer vertex stays where it is
+    EXPECT_FLOAT_EQ(out[2].y, 60.5f + origin);
+    EXPECT_NE(out[0].state0 & state_bits::kPrecise, 0u);
+}
+
+TEST(PreciseVertexBuilder, PositionsStayOnTheIntegerGridAtNativeResolution) {
+    DrawState s = area(0, 0, 319, 239);
+    PrimitiveFlags f;
+    GpuVertex v[3] = {precise_vert(10, 20, 10.25f, 20.75f, 100.0f), precise_vert(50, 20, 50.5f, 20.5f, 100.0f),
+                      precise_vert(10, 60, 10.5f, 60.5f, 100.0f)};
+    std::vector<HwVertex> precise, exact;
+    build_precise_triangle(precise, s, f, v, 1);
+    build_triangle(exact, s, f, v, 1);
+    for (int i = 0; i < 3; ++i) {
+        EXPECT_FLOAT_EQ(precise[i].x, exact[i].x);
+        EXPECT_FLOAT_EQ(precise[i].y, exact[i].y);
+    }
+}
+
+TEST(PreciseVertexBuilder, AttributesCarryTheFloatColourTexelAndDepth) {
+    DrawState s = area(0, 0, 319, 239);
+    s.depth = TexDepth::Bit15;
+    PrimitiveFlags f;
+    f.textured = true;
+    f.gouraud = true;
+    GpuVertex v[3] = {precise_vert(10, 20, 10.5f, 20.5f, 100.0f, 0, 0, 10), precise_vert(50, 20, 50.5f, 20.5f, 200.0f, 31, 0, 20),
+                      precise_vert(10, 60, 10.5f, 60.5f, 400.0f, 0, 31, 30)};
+    std::vector<HwVertex> out;
+    build_precise_triangle(out, s, f, v, 1);
+    ASSERT_EQ(out.size(), 3u);
+    EXPECT_FLOAT_EQ(attr(out[1], 0), 20.5f);  // r + 0.5, the floor is taken per pixel
+    EXPECT_FLOAT_EQ(attr(out[2], 2), 30.5f);
+    EXPECT_FLOAT_EQ(attr(out[1], 3), 31.5f);  // u
+    EXPECT_FLOAT_EQ(attr(out[2], 4), 31.5f);  // v
+    EXPECT_FLOAT_EQ(attr(out[0], 5), 100.0f);
+    EXPECT_FLOAT_EQ(attr(out[2], 5), 400.0f);
+    EXPECT_EQ(out[0].state0 & state_bits::kUnitUv, 0u);
+}
+
+TEST(PreciseVertexBuilder, PerspectiveNeedsEveryVertexToHaveADepth) {
+    DrawState s = area(0, 0, 319, 239);
+    PrimitiveFlags f;
+    GpuVertex v[3] = {precise_vert(10, 20, 10.5f, 20.5f, 100.0f), precise_vert(50, 20, 50.5f, 20.5f, 200.0f), vert(10, 60)};
+    std::vector<HwVertex> out;
+    build_precise_triangle(out, s, f, v, 1);
+    for (const HwVertex& h : out) EXPECT_FLOAT_EQ(attr(h, 5), 0.0f);  // affine for the whole triangle
+}
+
+TEST(PreciseVertexBuilder, FlatColourComesFromTheFirstVertex) {
+    DrawState s = area(0, 0, 319, 239);
+    PrimitiveFlags f;
+    GpuVertex v[3] = {precise_vert(10, 20, 10.5f, 20.5f, 1.0f, 0, 0, 40), precise_vert(50, 20, 50.5f, 20.5f, 1.0f, 0, 0, 90),
+                      precise_vert(10, 60, 10.5f, 60.5f, 1.0f, 0, 0, 90)};
+    std::vector<HwVertex> out;
+    build_precise_triangle(out, s, f, v, 1);
+    for (const HwVertex& h : out) EXPECT_FLOAT_EQ(attr(h, 0), 40.5f);
 }

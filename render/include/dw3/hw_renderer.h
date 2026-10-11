@@ -30,6 +30,9 @@
 // its pixels records the VRAM word it was produced with; presentation shows the enhanced colour only where that
 // word is still the one in VRAM, so uploads, fills and copies need no mirroring and stale pixels fall back to the
 // exact colour.
+// Precise geometry. With HwOptions::precise_geometry, triangles that have sub-pixel vertex positions are drawn from
+// interpolated float attributes instead of the fixed-point planes (see build_precise_triangle); everything else
+// is unchanged. At scale 1 the triangle covers the same pixels as the integer one.
 
 #include <cstdint>
 #include <memory>
@@ -58,6 +61,10 @@ enum class TextureFilter { Nearest, Bilinear, Xbr };
 struct HwOptions {
     bool true_color = false;                           // no dithering, full precision shading and blending
     TextureFilter filter = TextureFilter::Nearest;     // bilinear for triangles, xBR for sprites (internal res > 1)
+    // Triangles whose vertices carry GTE sub-pixel positions (GpuVertex::precise) are drawn on a float path:
+    // positions at sub-pixel precision when the internal resolution is above 1, and perspective-correct texel
+    // coordinates. Other triangles keep the exact fixed-point path.
+    bool precise_geometry = false;
 };
 
 struct HwStats {

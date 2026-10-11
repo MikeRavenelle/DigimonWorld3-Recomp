@@ -4,6 +4,8 @@
 // (GPL-2+) and PCSX-Redux (GPL-2+).
 #include "dw3/gte.h"
 
+#include "dw3/precise_vertex.h"
+
 #include <algorithm>
 #include <array>
 #include <bit>
@@ -210,19 +212,29 @@ struct GteImpl {
         d(11) = static_cast<uint32_t>(clamp_ir(3, mac(3), lm, false));
         push_sz(out[2] >> 12);
 
+        const bool div_overflow = (c(26) & 0xFFFF) >= d(19) * 2;
         uint32_t q = divide(c(26) & 0xFFFF, d(19));
         int64_t m0x = chk0(static_cast<int64_t>(q) * ir(1) + ci(24));
         int64_t m0y = chk0(static_cast<int64_t>(q) * ir(2) + ci(25));
         int32_t sx = static_cast<int32_t>(m0x >> 16), sy = static_cast<int32_t>(m0y >> 16);
+        bool clamped = false;
         if (sx < -0x400 || sx > 0x3FF) {
             sx = std::clamp(sx, -0x400, 0x3FF);
             flag |= 1u << 14;
+            clamped = true;
         }
         if (sy < -0x400 || sy > 0x3FF) {
             sy = std::clamp(sy, -0x400, 0x3FF);
             flag |= 1u << 13;
+            clamped = true;
         }
         push_sxy(sx, sy);
+        // The truncated words above are what the game sees; the fractions behind them are kept for the renderer.
+        // Only a clean projection is recorded: no saturation, no divide overflow, no MAC0 overflow.
+        if (g.precise_ && !clamped && !div_overflow && m0x >= INT32_MIN && m0x <= INT32_MAX && m0y >= INT32_MIN &&
+            m0y <= INT32_MAX)
+            g.precise_->record(sx, sy, static_cast<double>(m0x) / 65536.0, static_cast<double>(m0y) / 65536.0,
+                               static_cast<double>(d(19)));
         if (last) {
             int64_t m0 = chk0(static_cast<int64_t>(q) * ctrl_s16(27) + ci(28));
             set_mac0(m0);

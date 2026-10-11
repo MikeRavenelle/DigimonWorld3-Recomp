@@ -21,6 +21,7 @@ struct PresentOptions {
     int internal_res = 1;  // GPU renderer internal resolution multiplier (1..8)
     bool true_color = false;  // GPU renderer: no dithering, full precision shading
     int texture_filter = 0;   // GPU renderer: 0 nearest, 1 bilinear, 2 xBR
+    bool precise_geometry = false;  // GPU renderer: sub-pixel 3D vertices from the GTE
 };
 
 // Window contents as seen by the user (borders included), RGBA8888.

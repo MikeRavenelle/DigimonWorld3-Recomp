@@ -18,6 +18,7 @@
 #include "dw3/gte.h"
 #include "dw3/irq.h"
 #include "dw3/mdec.h"
+#include "dw3/precise_vertex.h"
 #include "dw3/recomp.h"
 #include "dw3/scheduler.h"
 #include "dw3/sio.h"
@@ -55,6 +56,11 @@ public:
     Sio& sio() { return sio_; }
     Mdec& mdec() { return mdec_; }
     RecompContext& ctx() { return bus_.ctx(); }
+
+    // Sub-pixel vertex tracking: the GTE records the untruncated position of what it projects and the GPU front
+    // end attaches it to polygon vertices that still carry the same word. Off by default (no cost).
+    void enable_precise_geometry();
+    const PreciseVertexCache& precise_vertices() const { return precise_; }
 
     // Runs due scheduler events, then delivers a pending CPU interrupt via on_interrupt.
     void service_events();
@@ -107,6 +113,7 @@ private:
     Timers timers_;
     Dma dma_;
     Gpu gpu_;
+    PreciseVertexCache precise_;
     Cdrom cdrom_;
     Spu spu_;
     XaDecoder xa_;

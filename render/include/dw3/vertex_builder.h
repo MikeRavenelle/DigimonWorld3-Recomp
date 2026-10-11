@@ -40,6 +40,7 @@ constexpr uint32_t kDither = 1u << 3;
 constexpr uint32_t kCheckMask = 1u << 4;
 constexpr uint32_t kSetMask = 1u << 5;
 constexpr uint32_t kUnitUv = 1u << 10;  // texels map 1:1 to pixels on the axes (sprites, tiles): not bilinear filtered
+constexpr uint32_t kPrecise = 1u << 11;  // float attributes instead of planes (see build_precise_triangle)
 }  // namespace state_bits
 
 // True when textures are sampled for this primitive.
@@ -61,6 +62,18 @@ Region clip_region(const DrawState& s);
 // `scale` is the internal resolution multiplier.
 void build_triangle(std::vector<HwVertex>& out, const DrawState& s, const PrimitiveFlags& f, const GpuVertex v[3],
                     int scale = 1);
+
+// True when at least one of the three vertices carries a sub-pixel position.
+bool has_precise(const GpuVertex v[3]);
+
+// Float path for triangles with GTE sub-pixel positions (precise geometry). Instead of the fixed-point planes the
+// vertices carry float attributes in the plane slots (colour r, g, b, texel u, v and depth w, as float bits) that
+// the GPU interpolates itself: colour in screen space, texel coordinates perspective-correct when all vertices
+// have a depth. At scale > 1 vertices with a precise position are placed at it; at scale 1 positions stay on the
+// integer grid so coverage equals build_triangle's and only the attribute interpolation differs. Vertices
+// without a precise position use their integer position.
+void build_precise_triangle(std::vector<HwVertex>& out, const DrawState& s, const PrimitiveFlags& f, const GpuVertex v[3],
+                            int scale = 1);
 
 // Appends six vertices (two triangles) covering the width x height rectangle.
 void build_rect(std::vector<HwVertex>& out, const DrawState& s, const PrimitiveFlags& f, const GpuVertex& v, int width,

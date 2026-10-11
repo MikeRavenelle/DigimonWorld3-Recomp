@@ -117,6 +117,7 @@ struct HwRenderer::Impl {
     int scale = 1;
     // Display layer (see hw_renderer.h): `hi` is drawn next to `rt`, `hi_tex` is its sampled copy.
     bool layer = false;
+    bool precise = false;  // sub-pixel triangles (HwOptions::precise_geometry)
     uint32_t draw_mode = 0;  // push constant of the draw shader: bit0 layer, bit1 true colour, bits 2-3 filter
 
     // VRAM: `rt` is drawn into; `tex` is the sampled copy. With scale > 1, `nat` is a native-resolution texture
@@ -226,6 +227,7 @@ struct HwRenderer::Impl {
 
 bool HwRenderer::Impl::init(const NativeWindow* window, int internal_scale, const HwOptions& options, std::string& error) {
     scale = std::clamp(internal_scale, 1, 8);
+    precise = options.precise_geometry;
     layer = options.true_color || options.filter != TextureFilter::Nearest;
     draw_mode = (layer ? 1u : 0u) | (options.true_color ? 2u : 0u) | (static_cast<uint32_t>(options.filter) << 2);
     iface = CreateVulkanInterface();
@@ -825,7 +827,8 @@ void HwRenderer::triangle(std::span<uint16_t>, const DrawState& s, const Primiti
     const Region bounds = triangle_bounds(s, v);
     if (bounds.empty()) return;
     const std::size_t before = m.pending.size();
-    build_triangle(m.pending, s, f, v, m.scale);
+    if (m.precise && has_precise(v)) build_precise_triangle(m.pending, s, f, v, m.scale);
+    else build_triangle(m.pending, s, f, v, m.scale);
     const bool tex = uses_texture(s, f);
     Region t, c;
     if (tex) {

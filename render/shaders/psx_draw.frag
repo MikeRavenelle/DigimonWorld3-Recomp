@@ -21,8 +21,11 @@
 //   xBR:         edge-directed smoothing of 1:1 sprites and tiles, from the neighbouring texels
 // Filtered taps stay inside the texel bounds of the primitive, so neighbouring sprites of an atlas never bleed in.
 //
+// Precise primitives (state0 bit 11, GTE sub-pixel geometry) take colour and texel coordinates from the interpolated
+// float varyings instead of the planes: every subpixel samples its own position.
+//
 // state0: bit0 textured, 1 raw texture, 2 semi-transparent, 3 dither, 4 check mask, 5 set mask,
-//         6-7 blend mode, 8-9 texture depth (0: 4 bit, 1: 8 bit, 2: 15 bit), 10 texels map 1:1 to pixels
+//         6-7 blend mode, 8-9 texture depth (0: 4 bit, 1: 8 bit, 2: 15 bit), 10 texels map 1:1 to pixels, 11 precise (float attributes)
 // state1: bits 0-15 CLUT attribute, 16-19 texture page x / 64, 20 texture page y / 256
 // state2: texture window: bits 0-4 mask x, 5-9 mask y, 10-14 offset x, 15-19 offset y (8-pixel units)
 
@@ -40,6 +43,8 @@ layout(location = 2) flat in ivec4 vPlanes2;
 layout(location = 3) flat in ivec3 vPlanes3;
 layout(location = 4) flat in uvec3 vState;
 layout(location = 5) flat in uint vUvRect;
+layout(location = 6) noperspective in vec3 vColF;  // precise primitives: colour, floor() selects the 8-bit value
+layout(location = 7) in vec2 vUvF;                 // precise primitives: texel coordinates, floor() selects the texel
 
 layout(location = 0) out vec4 outColor;
 #ifdef DISPLAY_LAYER
@@ -177,6 +182,17 @@ void main() {
     gTrueColor = (params.mode & 2u) != 0u;
     const uint filterMode = (params.mode >> 2) & 3u;
 
+    // Precise primitives. Derivatives are taken before any discard. The display layer samples at the centre of the
+    // subpixel in pixel-centred coordinates, a fixed offset from the sample the varyings give.
+    const bool isPrecise = (s0 & 2048u) != 0u;
+    vec3 colL = vColF;
+    vec2 uvL = vUvF;
+    if (isPrecise && layer) {
+        float shift = 0.5 - 0.5 * float(params.scale);
+        colL += (dFdx(vColF) + dFdy(vColF)) * shift;
+        uvL += (dFdx(vUvF) + dFdy(vUvF)) * shift;
+    }
+
     ivec2 fc = ivec2(gl_FragCoord.xy);
     ivec2 p = fc / params.scale;  // native pixel
     ivec2 sub = fc - p * params.scale;
@@ -192,7 +208,9 @@ void main() {
 
     // Shading colour. Without the display layer the subpixels of a native pixel follow the plane smoothly.
     ivec3 c;
-    if (params.scale > 1 && !layer) {
+    if (isPrecise) {
+        c = clamp(ivec3(floor(vColF)), 0, 255);
+    } else if (params.scale > 1 && !layer) {
         vec2 off = vec2(sub) / float(params.scale);
         vec3 f = vec3(planeF(0, p, off), planeF(3, p, off), planeF(6, p, off));
         c = clamp(ivec3(floor(f / 4096.0)), 0, 255);
@@ -203,7 +221,7 @@ void main() {
     uint bit15 = 0u;
     uint t = 0u;
     if (textured) {
-        ivec2 uv = ivec2(planeAt(9, p) >> 12, planeAt(12, p) >> 12) & 255;
+        ivec2 uv = (isPrecise ? ivec2(floor(vUvF)) : ivec2(planeAt(9, p) >> 12, planeAt(12, p) >> 12)) & 255;
         t = fetchTexel(uv);
         if (t == 0u) discard;
         ivec3 tc = ivec3(int(t & 31u), int((t >> 5) & 31u), int((t >> 10) & 31u)) << 3;
@@ -226,13 +244,13 @@ void main() {
 #ifdef DISPLAY_LAYER
     // Display layer: shaded colour at the centre of this subpixel.
     vec2 off = (vec2(sub) + 0.5) / float(params.scale) - 0.5;
-    vec3 sh = vec3(planeF(0, p, off), planeF(3, p, off), planeF(6, p, off)) / 4096.0;
+    vec3 sh = isPrecise ? colL : vec3(planeF(0, p, off), planeF(3, p, off), planeF(6, p, off)) / 4096.0;
     vec3 cf = gTrueColor ? clamp(sh - 0.5, 0.0, 255.0) : vec3(clamp(ivec3(floor(sh)), 0, 255));
     vec3 hc = cf;
     if (textured) {
         vec3 tcf = texColor(t);
         bool unit = (s0 & 1024u) != 0u;
-        vec2 tuv = vec2(planeF(9, p, off), planeF(12, p, off)) / 4096.0 - 0.5;
+        vec2 tuv = (isPrecise ? uvL : vec2(planeF(9, p, off), planeF(12, p, off)) / 4096.0) - 0.5;
         if (filterMode == 1u && !unit) tcf = bilinearTexel(tuv, tcf);
         else if (filterMode == 2u && params.scale > 1) tcf = unit ? xbrTexel(tuv, tcf) : bilinearTexel(tuv, tcf);
         // The small offset keeps a blend of equal texels (division by the weight sum) from rounding down a step.

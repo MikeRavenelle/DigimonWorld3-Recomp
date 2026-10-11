@@ -204,6 +204,13 @@ GpuVertex Gpu::make_vertex(uint32_t xy) const {
     GpuVertex v;
     v.x = sext11(xy & 0x7FF) + draw_.off_x;
     v.y = sext11((xy >> 16) & 0x7FF) + draw_.off_y;
+    PreciseVertex p;
+    if (precise_ && precise_->find(xy, p)) {
+        v.fx = p.x + static_cast<float>(draw_.off_x);
+        v.fy = p.y + static_cast<float>(draw_.off_y);
+        v.w = p.w;
+        v.precise = true;
+    }
     return v;
 }
 

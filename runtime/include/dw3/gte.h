@@ -7,6 +7,8 @@
 
 namespace dw3 {
 
+class PreciseVertexCache;
+
 class Gte {
 public:
     // MFC2 / MTC2 (with all read/write side effects: SXYP FIFO push, IRGB/ORGB, LZCS/LZCR, etc.)
@@ -24,12 +26,16 @@ public:
 
     void reset();
 
+    // Receives the untruncated screen position of every vertex RTPS/RTPT projects (null: not recorded).
+    void set_precise_sink(PreciseVertexCache* sink) { precise_ = sink; }
+
 private:
     friend struct GteImpl;
 
     uint32_t data_[32]{};
     uint32_t ctrl_[32]{};
     uint32_t cmd_ = 0;
+    PreciseVertexCache* precise_ = nullptr;
 };
 
 }  // namespace dw3

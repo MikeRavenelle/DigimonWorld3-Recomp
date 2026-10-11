@@ -14,6 +14,7 @@
 #include "dw3/bus.h"
 #include "dw3/dma.h"
 #include "dw3/irq.h"
+#include "dw3/precise_vertex.h"
 #include "dw3/video_timing.h"
 
 namespace dw3 {
@@ -46,6 +47,10 @@ struct GpuVertex {
     int32_t x = 0, y = 0;   // already offset-adjusted, sign-extended 11-bit
     uint8_t r = 0, g = 0, b = 0;
     uint8_t u = 0, v = 0;
+    // Sub-pixel position and depth from the GTE (see precise_vertex.h), in the same offset-adjusted pixel
+    // coordinates as x and y; only meaningful when `precise` is set. Renderers other than the GPU one ignore it.
+    float fx = 0, fy = 0, w = 0;
+    bool precise = false;
 };
 
 struct PrimitiveFlags {
@@ -104,6 +109,8 @@ public:
     Gpu(Bus& bus, IrqController& irq, VideoTiming& video, Dma& dma);
 
     void set_rasterizer(Rasterizer* r) { raster_ = r; }
+    // Source of sub-pixel vertex positions for polygon vertices (null: integer vertices only).
+    void set_precise_source(const PreciseVertexCache* c) { precise_ = c; }
 
     void write_gp0(uint32_t word);
     void write_gp1(uint32_t word);
@@ -154,6 +161,7 @@ private:
     IrqController& irq_;
     VideoTiming& video_;
     Rasterizer* raster_ = nullptr;
+    const PreciseVertexCache* precise_ = nullptr;
 
     std::vector<uint16_t> vram_;
     DrawState draw_;

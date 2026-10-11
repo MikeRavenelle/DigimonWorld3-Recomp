@@ -4,6 +4,7 @@
 #include <gtest/gtest.h>
 
 #include <algorithm>
+#include <cmath>
 #include <cstdint>
 #include <cstring>
 #include <random>
@@ -1026,6 +1027,178 @@ TEST_P(HwCompare, DefaultOutputIsTheExactColour) {
     // With scale above 1 the gouraud subpixels follow the plane smoothly; only the top-left one is the exact word.
     if (n == 1) EXPECT_EQ(bad, 0);
 }
+
+// Precise vertices are only an input; without the option the renderer must not look at them.
+TEST_P(HwCompare, PreciseVerticesAreIgnoredWithoutTheOption) {
+    Diff d = run([](Rasterizer& r, std::vector<uint16_t>& v, DrawState& s) {
+        PrimitiveFlags f;
+        f.gouraud = true;
+        f.textured = true;
+        s.depth = TexDepth::Bit15;
+        f.clut = static_cast<uint16_t>(480 << 6);
+        GpuVertex t[3] = {gv(20, 20, 255, 0, 0, 0, 0), gv(200, 40, 0, 255, 0, 200, 10), gv(60, 200, 0, 0, 255, 30, 220)};
+        for (GpuVertex& g : t) {
+            g.fx = static_cast<float>(g.x) + 0.6f;
+            g.fy = static_cast<float>(g.y) + 0.3f;
+            g.w = 100.0f + static_cast<float>(g.x);
+            g.precise = true;
+        }
+        r.triangle(v, s, f, t);
+    });
+    EXPECT_EQ(d.count, 0);
+}
+
+class HwPrecise : public ::testing::TestWithParam<int> {
+protected:
+    void SetUp() override {
+        std::string error;
+        HwOptions o;
+        o.precise_geometry = true;
+        hw = HwRenderer::create(nullptr, {}, error, GetParam(), o);
+        if (!hw) GTEST_SKIP() << "no Vulkan device: " << error;
+        vram.assign(kPixels, 0);
+        s.area_x2 = 319;
+        s.area_y2 = 239;
+        s.tex_base_x = 512;
+        s.depth = TexDepth::Bit15;
+        // 15-bit texels that encode their own coordinates: u in the red field, v in green, blue set so that no
+        // texel is transparent.
+        for (int y = 0; y < 32; ++y)
+            for (int x = 0; x < 32; ++x) vram[y * kVramWidth + 512 + x] = static_cast<uint16_t>(x | (y << 5) | (1 << 10));
+        hw->vram_written(vram, {});
+    }
+    int scale() const { return GetParam(); }
+
+    static GpuVertex pv(int x, int y, float dx, float dy, float w, int u = 0, int v = 0) {
+        GpuVertex g = gv(x, y, 255, 255, 255, u, v);
+        g.fx = static_cast<float>(x) + dx;
+        g.fy = static_cast<float>(y) + dy;
+        g.w = w;
+        g.precise = true;
+        return g;
+    }
+    void clear() { ASSERT_TRUE(hw->vram_fill({0, 0, 320, 240}, 0)); }
+
+    // Mean subpixel column of the lit pixels of a region of the scaled target.
+    double centroid_x(const VramRect& r, int* count = nullptr) {
+        std::vector<uint16_t> px;
+        EXPECT_TRUE(hw->read_scaled(r, px));
+        double sum = 0;
+        int n = 0;
+        const int w = r.w * scale();
+        for (std::size_t i = 0; i < px.size(); ++i)
+            if (px[i]) {
+                sum += static_cast<double>(i % static_cast<std::size_t>(w));
+                ++n;
+            }
+        if (count) *count = n;
+        return n ? sum / n : 0.0;
+    }
+
+    std::unique_ptr<HwRenderer> hw;
+    std::vector<uint16_t> vram;
+    DrawState s;
+};
+
+// A triangle moved by a quarter pixel at a time must move on the scaled target instead of snapping to the pixel
+// grid. At native resolution there is no finer grid: positions stay integer there.
+TEST_P(HwPrecise, SlowlyMovingTriangleDoesNotSnapAboveNativeResolution) {
+    const VramRect box{10, 10, 110, 110};
+    PrimitiveFlags f;
+    double prev = 0, first = 0;
+    for (int step = 0; step < 4; ++step) {
+        clear();
+        const float d = 0.25f * static_cast<float>(step);
+        GpuVertex t[3] = {pv(20, 20, d, 0, 100), pv(100, 20, d, 0, 100), pv(20, 100, d, 0, 100)};
+        hw->triangle(vram, s, f, t);
+        const double cx = centroid_x(box);
+        if (step == 0) first = cx;
+        else if (scale() > 1) EXPECT_GT(cx, prev + 0.3) << "step " << step;
+        prev = cx;
+    }
+    // Three quarter pixels at scale N are 0.75 * N subpixels.
+    EXPECT_NEAR(prev - first, scale() > 1 ? 0.75 * scale() : 0.0, 0.35);
+}
+
+// The same movement of integer vertices snaps: nothing changes until a whole pixel.
+TEST_P(HwPrecise, IntegerVerticesStillSnapToPixels) {
+    const VramRect box{10, 10, 110, 110};
+    PrimitiveFlags f;
+    clear();
+    GpuVertex a[3] = {gv(20, 20), gv(100, 20), gv(20, 100)};
+    hw->triangle(vram, s, f, a);
+    const double base = centroid_x(box);
+    clear();
+    GpuVertex b[3] = {gv(21, 20), gv(101, 20), gv(21, 100)};
+    hw->triangle(vram, s, f, b);
+    EXPECT_NEAR(centroid_x(box) - base, static_cast<double>(scale()), 0.05);
+}
+
+// At native resolution a precise triangle covers exactly the pixels of the integer one; above it the sub-pixel
+// positions only nudge the edges.
+TEST_P(HwPrecise, CoverageMatchesTheIntegerTriangleToWithinItsEdges) {
+    PrimitiveFlags f;
+    GpuVertex p[3] = {pv(20, 20, 0.7f, 0.2f, 500), pv(100, 30, 0.1f, 0.9f, 900), pv(30, 100, 0.5f, 0.5f, 700)};
+    GpuVertex i[3] = {gv(20, 20, 255, 255, 255), gv(100, 30, 255, 255, 255), gv(30, 100, 255, 255, 255)};
+    const VramRect box{10, 10, 110, 110};
+    clear();
+    hw->triangle(vram, s, f, p);
+    int count_p = 0, count_i = 0;
+    std::vector<uint16_t> got_p(kPixels), got_i(kPixels);
+    centroid_x(box, &count_p);
+    hw->read_vram(got_p);
+    clear();
+    hw->triangle(vram, s, f, i);
+    centroid_x(box, &count_i);
+    hw->read_vram(got_i);
+    if (scale() == 1) EXPECT_EQ(compare(got_p, got_i).count, 0);
+    EXPECT_NEAR(static_cast<double>(count_p), static_cast<double>(count_i), 0.03 * count_i);
+}
+
+// Texel coordinates of a quad whose right side is four times as deep follow 1/w, not the screen.
+TEST_P(HwPrecise, TexelCoordinatesArePerspectiveCorrectOnAQuadWithDepth) {
+    PrimitiveFlags f;
+    f.textured = true;
+    f.raw_texture = true;
+    const float wl = 1000.0f, wr = 4000.0f;
+    const int x0 = 40, x1 = 200;
+    GpuVertex v0 = pv(x0, 20, 0, 0, wl, 0, 0), v1 = pv(x1, 20, 0, 0, wr, 31, 0);
+    GpuVertex v2 = pv(x0, 60, 0, 0, wl, 0, 31), v3 = pv(x1, 60, 0, 0, wr, 31, 31);
+    clear();
+    GpuVertex t0[3] = {v0, v1, v2}, t1[3] = {v1, v2, v3};
+    hw->triangle(vram, s, f, t0);
+    hw->triangle(vram, s, f, t1);
+    std::vector<uint16_t> got(kPixels);
+    hw->read_vram(got);
+    int worst = 0, midpoint_gap = 0;
+    for (int x = x0 + 4; x < x1 - 4; ++x) {
+        const double t = static_cast<double>(x - x0) / (x1 - x0);
+        const double persp = (31.0 / wr * t) / ((1 - t) / wl + t / wr);
+        const double affine = 31.0 * t;
+        const int u = got[40 * kVramWidth + x] & 31;
+        worst = std::max(worst, static_cast<int>(std::abs(u - std::floor(persp + 0.5))));
+        if (x == (x0 + x1) / 2) midpoint_gap = static_cast<int>(std::abs(std::floor(persp + 0.5) - std::floor(affine + 0.5)));
+    }
+    EXPECT_LE(worst, 1);
+    EXPECT_GT(midpoint_gap, 5);  // the test would not tell the two apart otherwise
+}
+
+// Without a depth on every vertex the triangle is affine, like the integer path.
+TEST_P(HwPrecise, TexelCoordinatesStayAffineWhenAVertexHasNoDepth) {
+    PrimitiveFlags f;
+    f.textured = true;
+    f.raw_texture = true;
+    GpuVertex a = pv(40, 20, 0, 0, 1000, 0, 0), b = pv(200, 20, 0, 0, 4000, 31, 0), c = gv(40, 60, 128, 128, 128, 0, 31);
+    clear();
+    GpuVertex t[3] = {a, b, c};
+    hw->triangle(vram, s, f, t);
+    std::vector<uint16_t> got(kPixels);
+    hw->read_vram(got);
+    const int u = got[22 * kVramWidth + 120] & 31;
+    EXPECT_NEAR(u, 15.5, 1.5);  // halfway along the top edge
+}
+
+INSTANTIATE_TEST_SUITE_P(InternalRes, HwPrecise, ::testing::Values(1, 4));
 
 }  // namespace
 #endif  // DW3_HW_RENDERER

@@ -75,6 +75,12 @@ void Machine::service_events() {
     if (on_interrupt && cpu_interrupt_deliverable(ctx(), irq_)) on_interrupt(ctx());
 }
 
+void Machine::enable_precise_geometry() {
+    precise_.set_clock([this] { return video_.frame_count(); });
+    gte_.set_precise_sink(&precise_);
+    gpu_.set_precise_source(&precise_);
+}
+
 void Machine::load_segment_image(std::size_t index, std::span<const uint8_t> image) {
     const auto& s = segments_[index];
     std::memcpy(bus_.ram() + phys(s.base), image.data(), std::min<std::size_t>(image.size(), s.size));

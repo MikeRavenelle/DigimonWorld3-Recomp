@@ -17,6 +17,8 @@
 //                      vulkan (alias gpu; no fallback) or software (CPU rasterizer shown through an SDL renderer)
 //   --internal-res N   GPU renderer internal resolution multiplier, 1 (default) to 8
 //   --true-color       GPU renderer: no dithering, full 8-bit shading and blending on screen (game-visible VRAM unchanged)
+//   --precise-geometry GPU renderer: sub-pixel 3D vertices and perspective-correct textures from the GTE's projections
+//                      (best with --internal-res > 1; off by default)
 //   --texture-filter F GPU renderer: nearest (default), bilinear (3D triangles) or xbr (sprites, needs --internal-res > 1)
 //   --scale M          fit (default, 4:3 letterbox), integer or stretch
 //   --filter F         nearest (default) or linear
@@ -182,6 +184,7 @@ Options parse(int argc, char** argv) {
             }
         }
         else if (a == "--true-color") o.present.true_color = true;
+        else if (a == "--precise-geometry") o.present.precise_geometry = true;
         else if (a == "--texture-filter" && i + 1 < argc) {
             std::string v = argv[++i];
             if (v == "nearest") o.present.texture_filter = 0;
@@ -265,6 +268,12 @@ int main(int argc, char** argv) {
     }
     SDL_Log("presenting with %s", presenter->name());
     presenter->attach(machine.gpu());
+    if (opt.present.precise_geometry) {
+        if (std::string(presenter->name()).find("software") != std::string::npos)
+            SDL_Log("--precise-geometry needs the GPU renderer; ignored");
+        else
+            machine.enable_precise_geometry();
+    }
 
     dw3app::AudioOutput audio;
     audio.open(opt.mute || opt.uncapped || opt.max_frames >= 0);

@@ -9,6 +9,7 @@ add_library(dw3runtime STATIC
     render/soft_rasterizer.cpp
     render/present_layout.cpp
     hw/gte.cpp
+    hw/precise_vertex.cpp
     hw/scheduler.cpp
     hw/spu.cpp
     hw/spu_engine.cpp

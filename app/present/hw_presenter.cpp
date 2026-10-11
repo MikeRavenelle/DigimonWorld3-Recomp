@@ -18,6 +18,7 @@ std::unique_ptr<HwPresenter> HwPresenter::create(SDL_Window* window, const Prese
     dw3::HwOptions hw;
     hw.true_color = options.true_color;
     hw.filter = static_cast<dw3::TextureFilter>(options.texture_filter);
+    hw.precise_geometry = options.precise_geometry;
     p->renderer_ = dw3::HwRenderer::create(&native, required_instance_extensions(), error, options.internal_res, hw);
     if (!p->renderer_) return nullptr;
     p->renderer_->set_vsync(options.vsync);
