@@ -31,7 +31,10 @@ if(EXISTS "${DW3_GENERATED_DIR}/sources.txt")
     add_library(dw3_generated STATIC ${DW3_GENERATED_NAMES})
     target_link_libraries(dw3_generated PUBLIC dw3runtime)
     # Generated code is large and label-heavy; always optimise it and keep it quiet.
-    target_compile_options(dw3_generated PRIVATE $<$<C_COMPILER_ID:Clang,GNU>:-O1> $<$<C_COMPILER_ID:Clang,GNU>:-w> $<$<C_COMPILER_ID:MSVC>:/O1> $<$<C_COMPILER_ID:MSVC>:/w>)
+    # -fexceptions: the HLE kernel's ReturnFromException unwinds through recompiled frames.
+    target_compile_options(dw3_generated PRIVATE $<$<C_COMPILER_ID:Clang,GNU>:-O1> $<$<C_COMPILER_ID:Clang,GNU>:-w>
+        $<$<C_COMPILER_ID:Clang,GNU>:-fexceptions> $<$<C_COMPILER_ID:MSVC>:/O1> $<$<C_COMPILER_ID:MSVC>:/w>
+        $<$<C_COMPILER_ID:MSVC>:/EHsc>)
     set(DW3_HAVE_GENERATED ON)
     message(STATUS "DW3: using recompiled code from ${DW3_GENERATED_DIR}")
 else()

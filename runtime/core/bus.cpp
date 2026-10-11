@@ -31,8 +31,13 @@ uint32_t Bus::read(uint32_t addr, int size) {
         std::memcpy(&v, scratchpad_.data() + (p & (DW3_SCRATCHPAD_SIZE - 1)), size);
         return v;
     }
-    if (const auto* h = find(p); h && h->read) return h->read(p - h->base, size);
+    if (const auto* h = find(p); h && h->read) {
+        uint32_t v = h->read(p - h->base, size);
+        if (on_trace && p >= trace_lo && p < trace_hi) on_trace(p, size, false, v);
+        return v;
+    }
     ++unmapped_reads_;
+    if (on_unmapped) on_unmapped(p, size, false, 0);
     return 0;
 }
 
@@ -48,9 +53,11 @@ void Bus::write(uint32_t addr, uint32_t value, int size) {
     }
     if (const auto* h = find(p); h && h->write) {
         h->write(p - h->base, value, size);
+        if (on_trace && p >= trace_lo && p < trace_hi) on_trace(p, size, true, value);
         return;
     }
     ++unmapped_writes_;
+    if (on_unmapped) on_unmapped(p, size, true, value);
 }
 
 }  // namespace dw3

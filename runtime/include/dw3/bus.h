@@ -32,6 +32,13 @@ public:
     uint32_t read(uint32_t addr, int size);
     void write(uint32_t addr, uint32_t value, int size);
 
+    // Optional trace of slow-path accesses within [trace_lo, trace_hi) (physical), after the access.
+    std::function<void(uint32_t addr, int size, bool write, uint32_t value)> on_trace;
+    uint32_t trace_lo = 0, trace_hi = 0;
+
+    // Called for every access that hits no handler (diagnostics). write=false for reads.
+    std::function<void(uint32_t addr, int size, bool write, uint32_t value)> on_unmapped;
+
     // Count of accesses that hit no handler (for audit logging / tests).
     uint64_t unmapped_reads() const { return unmapped_reads_; }
     uint64_t unmapped_writes() const { return unmapped_writes_; }

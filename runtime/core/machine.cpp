@@ -16,6 +16,11 @@ std::string hex(uint32_t v) {
     return b;
 }
 
+// BIOS vectors reached by register jumps (jr/jalr to 0xA0/0xB0/0xC0); function number in $t1.
+void bios_vector_a0(RecompContext* ctx) { dw3_bios_call(ctx, 0xA0, ctx->r[9]); }
+void bios_vector_b0(RecompContext* ctx) { dw3_bios_call(ctx, 0xB0, ctx->r[9]); }
+void bios_vector_c0(RecompContext* ctx) { dw3_bios_call(ctx, 0xC0, ctx->r[9]); }
+
 Machine* machine_of(RecompContext* ctx) {
     if (!ctx->machine) fatal("RecompContext has no Machine");
     return static_cast<Machine*>(ctx->machine);
@@ -37,10 +42,21 @@ Machine::Machine(std::span<const RecompSegment> segments)
       video_(sched_, irq_),
       timers_(bus_, sched_, irq_, video_),
       dma_(bus_, sched_, irq_),
+      gpu_(bus_, irq_, video_, dma_),
+      cdrom_(bus_, sched_, irq_, dma_),
+      spu_(bus_, irq_, dma_),
       segments_(segments),
       resident_(segments.size(), false),
       verified_(segments.size(), false) {
     ctx().machine = this;
+    gpu_.set_rasterizer(&soft_raster_);
+    // Memory/cache control: timing configuration with no functional effect here, but must read back.
+    bus_.map_io({0x1F801000, 0x40, [this](uint32_t o, int) { return mem_ctrl_[o >> 2]; },
+                 [this](uint32_t o, uint32_t v, int) { mem_ctrl_[o >> 2] = v; }});
+    bus_.map_io({0x1F801060, 4, [this](uint32_t, int) { return ram_size_; },
+                 [this](uint32_t, uint32_t v, int) { ram_size_ = v; }});
+    bus_.map_io({0xFFFE0130, 4, [this](uint32_t, int) { return cache_ctrl_; },
+                 [this](uint32_t, uint32_t v, int) { cache_ctrl_ = v; }});
     if (!segments_.empty()) resident_[0] = verified_[0] = true;  // main executable
     dma_.on_ram_written = [this](uint32_t addr, uint32_t len) { invalidate(addr, len); };
     irq_.on_line_change = [this](bool line) {
@@ -101,6 +117,12 @@ RecompFunc Machine::lookup(uint32_t addr) {
     ++lookups_;
     // Functions are keyed by their KSEG0 address; normalise KUSEG/KSEG1 aliases.
     uint32_t key = 0x80000000u | phys(addr);
+    switch (phys(addr)) {
+        case 0xA0: return bios_vector_a0;
+        case 0xB0: return bios_vector_b0;
+        case 0xC0: return bios_vector_c0;
+        default: break;
+    }
     for (int pass = 0; pass < 2; ++pass) {
         int idx = resident_segment(key);
         if (idx >= 0) {

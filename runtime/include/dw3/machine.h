@@ -3,6 +3,7 @@
 // Ties the recompiled code to the emulated hardware: owns the bus, GTE and the function lookup
 // that resolves indirect jumps against whichever overlays are resident.
 
+#include <array>
 #include <cstdint>
 #include <functional>
 #include <span>
@@ -10,11 +11,15 @@
 #include <vector>
 
 #include "dw3/bus.h"
+#include "dw3/cdrom.h"
 #include "dw3/dma.h"
+#include "dw3/gpu.h"
 #include "dw3/gte.h"
 #include "dw3/irq.h"
 #include "dw3/recomp.h"
 #include "dw3/scheduler.h"
+#include "dw3/soft_rasterizer.h"
+#include "dw3/spu.h"
 #include "dw3/timers.h"
 #include "dw3/video_timing.h"
 
@@ -39,6 +44,9 @@ public:
     VideoTiming& video() { return video_; }
     Timers& timers() { return timers_; }
     Dma& dma() { return dma_; }
+    Gpu& gpu() { return gpu_; }
+    Cdrom& cdrom() { return cdrom_; }
+    Spu& spu() { return spu_; }
     RecompContext& ctx() { return bus_.ctx(); }
 
     // Runs due scheduler events, then delivers a pending CPU interrupt via on_interrupt.
@@ -87,10 +95,17 @@ private:
     VideoTiming video_;
     Timers timers_;
     Dma dma_;
+    Gpu gpu_;
+    Cdrom cdrom_;
+    Spu spu_;
+    SoftRasterizer soft_raster_;
     std::span<const RecompSegment> segments_;
     std::vector<bool> resident_;
     std::vector<bool> verified_;  // resident and confirmed since last invalidate
     uint64_t lookups_ = 0, identifications_ = 0;
+    std::array<uint32_t, 16> mem_ctrl_{};  // 0x1F801000-0x1F80103F (delays/sizes), stored only
+    uint32_t ram_size_ = 0x00000B88;       // 0x1F801060
+    uint32_t cache_ctrl_ = 0;              // 0xFFFE0130
 };
 
 }  // namespace dw3
