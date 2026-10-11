@@ -92,3 +92,9 @@ if(TARGET dw3scenario)
         endif()
     endforeach()
 endif()
+
+# On-screen notification text rasterization (app/present/osd.cpp has no SDL dependency).
+dw3_add_test(test_osd
+    SOURCES app/test_osd.cpp ${PROJECT_SOURCE_DIR}/app/present/osd.cpp
+    LIBS dw3runtime)
+target_include_directories(test_osd PRIVATE ${PROJECT_SOURCE_DIR}/app)

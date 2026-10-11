@@ -15,6 +15,8 @@
 
 #if DW3_HW_RENDERER
 #include "dw3/hw_renderer.h"
+#include "shaders/osd.frag.h"
+#include "shaders/osd.vert.h"
 #include "shaders/present.frag.h"
 #include "shaders/present.vert.h"
 #include "shaders/psx_draw.frag.h"
@@ -39,6 +41,8 @@ TEST(Shaders, CompiledToSpirv) {
     EXPECT_TRUE(is_spirv(psx_draw_layer_frag_spv, psx_draw_layer_frag_spv_size));
     EXPECT_TRUE(is_spirv(present_vert_spv, present_vert_spv_size));
     EXPECT_TRUE(is_spirv(present_frag_spv, present_frag_spv_size));
+    EXPECT_TRUE(is_spirv(osd_vert_spv, osd_vert_spv_size));
+    EXPECT_TRUE(is_spirv(osd_frag_spv, osd_frag_spv_size));
 }
 
 namespace {

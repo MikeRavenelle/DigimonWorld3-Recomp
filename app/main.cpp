@@ -286,10 +286,12 @@ int main(int argc, char** argv) {
     dw3app::AudioOutput audio;
     audio.open(opt.mute || opt.uncapped || opt.max_frames >= 0);
 
-    auto read_state_file = [](const std::string& path, std::vector<uint8_t>& data) {
+    // Reads a state file; on failure `why` gets a short reason for the on-screen message.
+    auto read_state_file = [](const std::string& path, std::vector<uint8_t>& data, std::string* why = nullptr) {
         std::string err;
         if (dw3::savestate::read_file(path, data, err)) return true;
         SDL_Log("%s", err.c_str());
+        if (why) *why = err;
         return false;
     };
     bool pacing_reset = false;  // a state was loaded: emulated time jumped, so restart the real-time pacing
@@ -303,6 +305,7 @@ int main(int argc, char** argv) {
             return 1;
         }
         SDL_Log("loaded state %s", opt.load_state.c_str());
+        presenter->notify("Loaded " + std::filesystem::path(opt.load_state).filename().string());
     }
 
     static HostPad host_pad;
@@ -362,23 +365,48 @@ int main(int argc, char** argv) {
     auto slot_path = [&] { return (state_dir / ("slot" + std::to_string(state_slot) + ".state")).string(); };
     auto save_slot = [&] {
         const std::string path = slot_path();
-        host->save_state([path](std::vector<uint8_t> file, const std::string& err) {
+        const int slot = state_slot;
+        host->save_state([&presenter, path, slot](std::vector<uint8_t> file, const std::string& err) {
             std::string werr;
-            if (!err.empty()) SDL_Log("cannot save state: %s", err.c_str());
-            else if (!dw3::savestate::write_file(path, file, werr)) SDL_Log("cannot save state: %s", werr.c_str());
-            else SDL_Log("saved state %s", path.c_str());
+            if (!err.empty()) {
+                SDL_Log("cannot save state: %s", err.c_str());
+                presenter->notify("Save failed: " + err);
+            } else if (!dw3::savestate::write_file(path, file, werr)) {
+                SDL_Log("cannot save state: %s", werr.c_str());
+                presenter->notify("Save failed: " + werr);
+            } else {
+                SDL_Log("saved state %s", path.c_str());
+                presenter->notify("Saved slot " + std::to_string(slot));
+            }
         });
+    };
+    auto select_slot = [&] {
+        SDL_Log("state slot %d", state_slot);
+        presenter->notify("Slot " + std::to_string(state_slot) +
+                          (std::filesystem::exists(slot_path()) ? "" : " (empty)"));
     };
     auto load_slot = [&] {
         const std::string path = slot_path();
+        const int slot = state_slot;
+        if (!std::filesystem::exists(path)) {
+            SDL_Log("slot %d is empty", slot);
+            presenter->notify("Slot " + std::to_string(slot) + " is empty");
+            return;
+        }
         std::vector<uint8_t> data;
-        if (!read_state_file(path, data)) return;
-        host->load_state(std::move(data), [&, path](const std::string& e) {
+        std::string why;
+        if (!read_state_file(path, data, &why)) {
+            presenter->notify("Load failed: " + why);
+            return;
+        }
+        host->load_state(std::move(data), [&, path, slot](const std::string& e) {
             if (e.empty()) {
                 pacing_reset = true;
                 SDL_Log("loaded state %s", path.c_str());
+                presenter->notify("Loaded slot " + std::to_string(slot));
             } else {
                 SDL_Log("cannot load %s: %s", path.c_str(), e.c_str());
+                presenter->notify("Load failed: " + e);
             }
         });
     };
@@ -392,8 +420,8 @@ int main(int argc, char** argv) {
                 switch (e.key.scancode) {
                     case SDL_SCANCODE_F5: save_slot(); break;
                     case SDL_SCANCODE_F7: load_slot(); break;
-                    case SDL_SCANCODE_F6: state_slot = state_slot > 1 ? state_slot - 1 : 9; SDL_Log("state slot %d", state_slot); break;
-                    case SDL_SCANCODE_F8: state_slot = state_slot < 9 ? state_slot + 1 : 1; SDL_Log("state slot %d", state_slot); break;
+                    case SDL_SCANCODE_F6: state_slot = state_slot > 1 ? state_slot - 1 : 9; select_slot(); break;
+                    case SDL_SCANCODE_F8: state_slot = state_slot < 9 ? state_slot + 1 : 1; select_slot(); break;
                     default: break;
                 }
             }

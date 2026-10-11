@@ -20,10 +20,13 @@ public:
 
 private:
     SoftwarePresenter() = default;
+    void draw_osd();
 
     PresentOptions options_;
     SDL_Renderer* renderer_ = nullptr;
     SDL_Texture* texture_ = nullptr;
+    SDL_Texture* osd_texture_ = nullptr;
+    uint64_t osd_serial_ = 0;
     int tex_w_ = 0, tex_h_ = 0;
     std::vector<uint32_t> pixels_;
 };

@@ -21,12 +21,35 @@ std::unique_ptr<SoftwarePresenter> SoftwarePresenter::create(SDL_Window* window,
 
 SoftwarePresenter::~SoftwarePresenter() {
     if (texture_) SDL_DestroyTexture(texture_);
+    if (osd_texture_) SDL_DestroyTexture(osd_texture_);
     if (renderer_) SDL_DestroyRenderer(renderer_);
 }
 
 void SoftwarePresenter::set_vsync(bool on) {
     options_.vsync = on;
     SDL_SetRenderVSync(renderer_, on ? 1 : 0);
+}
+
+// Blends the notification over the window; called after the capture is read so it never ends up in one.
+void SoftwarePresenter::draw_osd() {
+    int ww = 0, wh = 0;
+    SDL_GetCurrentRenderOutputSize(renderer_, &ww, &wh);
+    float opacity = 1.0f;
+    const OsdImage* img = osd_.frame(ww, wh, SDL_GetTicks(), opacity);
+    if (!img) return;
+    if (!osd_texture_ || osd_serial_ != osd_.serial()) {
+        if (osd_texture_) SDL_DestroyTexture(osd_texture_);
+        osd_texture_ = SDL_CreateTexture(renderer_, SDL_PIXELFORMAT_ABGR8888, SDL_TEXTUREACCESS_STATIC, img->w, img->h);
+        if (!osd_texture_) return;
+        SDL_UpdateTexture(osd_texture_, nullptr, img->rgba.data(), img->w * 4);
+        SDL_SetTextureBlendMode(osd_texture_, SDL_BLENDMODE_BLEND);
+        SDL_SetTextureScaleMode(osd_texture_, SDL_SCALEMODE_NEAREST);
+        osd_serial_ = osd_.serial();
+    }
+    SDL_SetTextureAlphaModFloat(osd_texture_, opacity);
+    const SDL_FRect dst = {static_cast<float>(osd_.margin()), static_cast<float>(osd_.margin()),
+                           static_cast<float>(img->w), static_cast<float>(img->h)};
+    SDL_RenderTexture(renderer_, osd_texture_, nullptr, &dst);
 }
 
 bool SoftwarePresenter::present(dw3::Gpu& gpu, Capture* capture) {
@@ -72,6 +95,7 @@ bool SoftwarePresenter::present(dw3::Gpu& gpu, Capture* capture) {
             SDL_DestroySurface(s);
         }
     }
+    draw_osd();
     SDL_RenderPresent(renderer_);
     return true;
 }
