@@ -37,7 +37,39 @@ uint16_t parse_button(const std::string& src, const toml::table& t) {
     return b;
 }
 
+RamCheck parse_ram(const std::string& src, const toml::table& t) {
+    RamCheck r;
+    r.addr = static_cast<uint32_t>(t["addr"].value_or(int64_t{0}));
+    r.size = static_cast<int>(t["size"].value_or(int64_t{4}));
+    r.value = static_cast<uint32_t>(t["value"].value_or(int64_t{0}));
+    r.mask = static_cast<uint32_t>(t["mask"].value_or(int64_t{0xFFFFFFFF}));
+    if (r.size != 1 && r.size != 2 && r.size != 4) fail(src, "ram size must be 1, 2 or 4");
+    if (r.addr % static_cast<uint32_t>(r.size) != 0) fail(src, "ram addr must be aligned to its size");
+    std::string cmp = t["cmp"].value_or(std::string("eq"));
+    if (cmp == "eq") r.cmp = Compare::Eq;
+    else if (cmp == "ne") r.cmp = Compare::Ne;
+    else if (cmp == "lt") r.cmp = Compare::Lt;
+    else if (cmp == "le") r.cmp = Compare::Le;
+    else if (cmp == "gt") r.cmp = Compare::Gt;
+    else if (cmp == "ge") r.cmp = Compare::Ge;
+    else fail(src, "ram `cmp` must be eq, ne, lt, le, gt or ge, not '" + cmp + "'");
+    return r;
+}
+
 }  // namespace
+
+bool ram_matches(const RamCheck& r, uint32_t actual) {
+    const uint32_t a = actual & r.mask, v = r.value & r.mask;
+    switch (r.cmp) {
+        case Compare::Eq: return a == v;
+        case Compare::Ne: return a != v;
+        case Compare::Lt: return a < v;
+        case Compare::Le: return a <= v;
+        case Compare::Gt: return a > v;
+        case Compare::Ge: return a >= v;
+    }
+    return false;
+}
 
 uint16_t button_from_name(const std::string& name) {
     auto it = button_names().find(name);
@@ -87,6 +119,37 @@ Scenario parse(const std::string& text, const std::string& src) {
             s.reboots.push_back(at);
         }
     }
+    if (auto* arr = root["wait"].as_array()) {
+        for (auto& n : *arr) {
+            auto& t = *n.as_table();
+            Wait w;
+            w.at = t["at"].value_or(int64_t{-1});
+            if (w.at <= 0 || w.at > s.frames) fail(src, "[[wait]] `at` must be within (0, frames]");
+            w.label = t["label"].value_or(std::string());
+            w.timeout = t["timeout"].value_or(int64_t{0});
+            if (w.timeout <= 0) fail(src, "[[wait]] needs `timeout` > 0 (real frames)");
+            if (auto* ram = t["ram"].as_array())
+                for (auto& rn : *ram) w.ram.push_back(parse_ram(src, *rn.as_table()));
+            if (w.ram.empty()) fail(src, "[[wait]] needs at least one `ram` condition");
+            if (auto* hold = t["hold"].as_array()) {
+                for (auto& hn : *hold) {
+                    auto name = hn.value<std::string>();
+                    uint16_t b = name ? button_from_name(*name) : 0;
+                    if (!b) fail(src, "[[wait]] `hold` has an unknown button");
+                    w.hold |= b;
+                }
+            }
+            if (auto name = t["press"].value<std::string>()) {
+                w.tap = button_from_name(*name);
+                if (!w.tap) fail(src, "[[wait]] unknown `press` button '" + *name + "'");
+            }
+            w.tap_every = t["every"].value_or(int64_t{40});
+            w.tap_hold = t["press_hold"].value_or(int64_t{4});
+            if (w.tap && w.tap_every <= w.tap_hold) fail(src, "[[wait]] needs every > press_hold");
+            if (!s.waits.empty() && w.at < s.waits.back().at) fail(src, "[[wait]] entries must be in increasing order");
+            s.waits.push_back(std::move(w));
+        }
+    }
     if (auto* arr = root["check"].as_array()) {
         for (auto& n : *arr) {
             auto& t = *n.as_table();
@@ -116,12 +179,7 @@ Scenario parse(const std::string& text, const std::string& src) {
             if (auto* ram = t["ram"].as_array()) {
                 for (auto& rn : *ram) {
                     auto& rt = *rn.as_table();
-                    RamCheck r;
-                    r.addr = static_cast<uint32_t>(rt["addr"].value_or(int64_t{0}));
-                    r.size = static_cast<int>(rt["size"].value_or(int64_t{4}));
-                    r.value = static_cast<uint32_t>(rt["value"].value_or(int64_t{0}));
-                    if (r.size != 1 && r.size != 2 && r.size != 4) fail(src, "ram check size must be 1, 2 or 4");
-                    c.ram.push_back(r);
+                    c.ram.push_back(parse_ram(src, rt));
                 }
             }
             s.checks.push_back(std::move(c));
@@ -156,6 +214,55 @@ uint16_t buttons_at(const Scenario& s, int64_t frame) {
     if (s.skip_intro && since_boot >= kIntroSkipFrame && since_boot < kIntroSkipFrame + 4) b |= 1u << 3;  // START
     for (const auto& p : s.presses)
         if (frame >= p.from && frame < p.to) b |= p.button;
+    return b;
+}
+
+bool Timeline::satisfied(const Wait& w, const RamReader& read) const {
+    for (const auto& r : w.ram)
+        if (!ram_matches(r, read(r.addr, r.size))) return false;
+    return true;
+}
+
+void Timeline::advance(int64_t real_frame, const RamReader& read) {
+    real_ = real_frame;
+    if (timed_out_) return;
+    if (waiting_) {
+        const Wait& w = s_.waits[next_];
+        if (satisfied(w, read)) {
+            waiting_ = false;
+            last_wait_frames_ = real_ - wait_start_;
+            ++next_;
+        } else if (real_ - wait_start_ >= w.timeout) {
+            timed_out_ = true;
+            return;
+        }
+    }
+    if (!waiting_) {
+        script_ = real_ - offset_;
+        while (next_ < s_.waits.size() && s_.waits[next_].at <= script_) {
+            if (satisfied(s_.waits[next_], read)) {
+                last_wait_frames_ = 0;
+                ++next_;
+                continue;
+            }
+            waiting_ = true;
+            wait_start_ = real_;
+            break;
+        }
+    }
+    if (waiting_) {
+        script_ = s_.waits[next_].at;
+        offset_ = real_ - script_;
+    }
+}
+
+uint16_t Timeline::buttons() const {
+    uint16_t b = buttons_at(s_, script_);
+    if (waiting_) {
+        const Wait& w = s_.waits[next_];
+        b |= w.hold;
+        if (w.tap && (real_ - wait_start_) % w.tap_every < w.tap_hold) b |= w.tap;
+    }
     return b;
 }
 

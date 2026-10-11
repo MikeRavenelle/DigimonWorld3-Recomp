@@ -1,0 +1,188 @@
+name = "field_battle"
+description = "New Game, walk out of Asuka City over the Asuka Bridge into Central Park, fight a random encounter to victory and return to the field."
+frames = 41700
+
+# The opening scenes and the story battle are clicked through exactly as in save_load_roundtrip.toml, then the
+# walk to the city gate goes through Asuka City Central Sector. From there the script is driven by RAM:
+#
+#   map id    0x800554D4 (word): 0x1C3 Asuka City Central Sector, 0x1C4 Asuka Bridge (gate chamber), 0x1D2
+#                                Central Park (field), 0x1FA battle arena
+#   game mode 0x800554D0 (word): 2 field, 5/0xE scene transition, 6 battle, 0x14 battle results
+#   enemy HP  0x800A3260 (half): current HP of the first enemy (max HP at 0x800A325E); 0 once it is defeated
+#
+# Walking onto the red exit arrow of a map edge needs CROSS to take the exit. In the field, holding LEFT starts a
+# random encounter after about a thousand frames; the encounter point depends on the frames walked, so the walk
+# is a wait on the battle mode instead of a fixed time. In battle, CROSS picks Fight, the target and the attack;
+# tapping it until the results screens appear wins against the first enemies. A further wait tapping CROSS
+# leads from the results back to the field.
+
+press = [
+    { button = "START", at = 900, hold = 4 },
+    { button = "UP", at = 960, hold = 4 },
+    { button = "CROSS", at = 1020, hold = 4 },
+    { button = "LEFT", at = 22800, hold = 60 },
+    { button = "DOWN", at = 22870, hold = 60 },
+    { button = "DOWN", at = 22940, hold = 60 },
+    { button = "DOWN", at = 23010, hold = 60 },
+    { button = "LEFT", at = 23080, hold = 60 },
+    { button = "UP", at = 23150, hold = 80 },
+    { button = "RIGHT", at = 23150, hold = 80 },
+    { button = "UP", at = 23240, hold = 80 },
+    { button = "RIGHT", at = 23240, hold = 80 },
+    { button = "UP", at = 23330, hold = 80 },
+    { button = "RIGHT", at = 23330, hold = 80 },
+    { button = "UP", at = 23420, hold = 60 },
+    { button = "UP", at = 23490, hold = 60 },
+    { button = "UP", at = 23560, hold = 60 },
+    { button = "UP", at = 23630, hold = 60 },
+    { button = "UP", at = 23700, hold = 60 },
+    { button = "UP", at = 23770, hold = 60 },
+    { button = "LEFT", at = 23840, hold = 30 },
+    { button = "UP", at = 23880, hold = 30 },
+    { button = "LEFT", at = 23880, hold = 30 },
+    { button = "DOWN", at = 36720, hold = 70 },
+    { button = "RIGHT", at = 36720, hold = 70 },
+    { button = "DOWN", at = 36800, hold = 70 },
+    { button = "RIGHT", at = 36800, hold = 70 },
+    { button = "DOWN", at = 36880, hold = 70 },
+    { button = "RIGHT", at = 36880, hold = 70 },
+    { button = "DOWN", at = 36960, hold = 70 },
+    { button = "DOWN", at = 37040, hold = 70 },
+    { button = "LEFT", at = 37120, hold = 60 },
+    { button = "CROSS", at = 37190, hold = 4 },
+    { button = "DOWN", at = 37620, hold = 120 },
+    { button = "RIGHT", at = 37620, hold = 120 },
+    { button = "DOWN", at = 37750, hold = 90 },
+    { button = "RIGHT", at = 37750, hold = 90 },
+    { button = "RIGHT", at = 37850, hold = 60 },
+    { button = "DOWN", at = 37920, hold = 120 },
+    { button = "RIGHT", at = 37920, hold = 120 },
+    { button = "LEFT", at = 38050, hold = 60 },
+    { button = "DOWN", at = 38120, hold = 90 },
+    { button = "RIGHT", at = 38120, hold = 90 },
+    { button = "LEFT", at = 38220, hold = 60 },
+    { button = "UP", at = 38290, hold = 120 },
+    { button = "DOWN", at = 38420, hold = 90 },
+    { button = "LEFT", at = 38420, hold = 90 },
+    { button = "LEFT", at = 38520, hold = 120 },
+    { button = "UP", at = 38650, hold = 120 },
+    { button = "DOWN", at = 38780, hold = 60 },
+    { button = "UP", at = 38850, hold = 60 },
+
+    # Central Sector: down the street to the gate bridge, left onto the exit arrow
+    { button = "DOWN", at = 38920, hold = 400 },
+    { button = "LEFT", at = 39330, hold = 150 },
+    # Asuka Bridge gate chamber: down and left along the bridge to the next exit arrow
+    { button = "DOWN", at = 39750, hold = 450 },
+    { button = "LEFT", at = 39750, hold = 450 },
+]
+
+repeat = [
+    { button = "CROSS", from = 1100, to = 22800, every = 45, hold = 3 },
+    { button = "CROSS", from = 23920, to = 36720, every = 40, hold = 4 },
+]
+
+[[wait]]
+at = 37300
+label = "Central Sector"
+ram = [{ addr = 0x800554D4, size = 4, value = 0x1C3 }, { addr = 0x800554D0, size = 4, value = 2 }]
+timeout = 600
+
+[[wait]]
+at = 39500
+label = "Asuka Bridge"
+ram = [{ addr = 0x800554D4, size = 4, value = 0x1C4 }]
+timeout = 600
+press = "CROSS"
+
+[[wait]]
+at = 40200
+label = "Central Park"
+ram = [{ addr = 0x800554D4, size = 4, value = 0x1D2 }, { addr = 0x800554D0, size = 4, value = 2 }]
+timeout = 900
+press = "CROSS"
+
+[[wait]]
+at = 40500
+label = "random encounter"
+ram = [{ addr = 0x800554D0, size = 4, value = 6 }]
+timeout = 4000
+hold = ["LEFT"]
+
+[[wait]]
+at = 40900
+label = "battle won"
+ram = [{ addr = 0x800554D0, size = 4, value = 0x14 }]
+timeout = 4000
+press = "CROSS"
+every = 45
+press_hold = 3
+
+[[wait]]
+at = 41100
+label = "back in the field"
+ram = [{ addr = 0x800554D0, size = 4, value = 2 }, { addr = 0x800554D4, size = 4, value = 0x1D2 }]
+timeout = 1500
+press = "CROSS"
+every = 45
+press_hold = 3
+
+[[check]]
+at = 39450
+label = "Central Sector gate bridge"
+display_enabled = true
+screen_hash = "fc0ff80fe007c011a7e73fff7f3ffe1fc79f863f44f7e1f7fffffffefffbe7c7"
+screenshot = true
+
+[[check]]
+at = 40100
+label = "Asuka Bridge"
+display_enabled = true
+screen_hash = "ec00e00098000580ef3efd8fe583e4014dff7ff76ffbaffc493749ff49bf4ff7"
+screenshot = true
+
+[[check]]
+at = 40450
+label = "Central Park"
+display_enabled = true
+screen_hash = "ff80e30081800000ffc0ffc0ff00f8809ffcbffcfff8fbf013ff93ff93ff93fe"
+screenshot = true
+
+[[check]]
+at = 40505
+label = "encounter start"
+display_enabled = true
+ram = [{ addr = 0x800554D4, size = 4, value = 0x1FA }]
+screenshot = true
+
+[[check]]
+at = 40800
+label = "battle menu"
+display_enabled = true
+screen_hash = "bfff81800180ffff0bc08bffffff9ffff9c0fe00e6410bc1c8a0ffc0fe00fe80"
+ram = [{ addr = 0x800554D0, size = 4, value = 6 }, { addr = 0x800A3260, size = 2, value = 0, cmp = "gt" }]
+screenshot = true
+
+[[check]]
+at = 41000
+label = "victory"
+display_enabled = true
+screen_hash = "107f307f001f0000105e107e1ffe107f107e105e007e10766e72000000063f86"
+ram = [{ addr = 0x800A3260, size = 2, value = 0 }]
+screenshot = true
+
+[[check]]
+at = 41350
+label = "field after the battle"
+display_enabled = true
+screen_hash = "0780028000000000ffbedff95ff017c0fe00fe00fe02ff023ffefffefffeff80"
+ram = [{ addr = 0x800554D0, size = 4, value = 2 }, { addr = 0x800554D4, size = 4, value = 0x1D2 }]
+screenshot = true
+
+[[check]]
+at = 41600
+label = "field stays stable"
+display_enabled = true
+screen_hash = "0780028000000000ffbedff95ff017c0fe00fe00fe02ff023ffefffefffeff80"
+ram = [{ addr = 0x800554D0, size = 4, value = 2 }, { addr = 0x800554D4, size = 4, value = 0x1D2 }]
+screenshot = true

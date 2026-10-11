@@ -359,3 +359,199 @@ TEST(ScenarioAudio, WavFileWritten) {
 TEST(ScenarioAudio, WavUnwritablePathFails) {
     EXPECT_FALSE(write_wav("/proc/definitely/not/here.wav", std::vector<int16_t>{1, 2}));
 }
+
+namespace {
+constexpr uint16_t kLeft = 1u << 7;
+
+const char* kWaitFile =
+    "name = \"w\"\nframes = 1000\nskip_intro = false\n"
+    "press = [{ button = \"UP\", at = 50, hold = 100 }, { button = \"START\", at = 300, hold = 10 }]\n"
+    "[[wait]]\nat = 100\nlabel = \"flag\"\ntimeout = 100\nram = [{ addr = 0x80010000, size = 2, value = 7 }]\n"
+    "hold = [\"LEFT\"]\npress = \"CROSS\"\nevery = 6\npress_hold = 2\n";
+
+struct FakeRam {
+    uint32_t value = 0;
+    Timeline::RamReader reader() {
+        return [this](uint32_t addr, int) { return addr == 0x80010000 ? value : 0u; };
+    }
+};
+}  // namespace
+
+TEST(ScenarioRam, ComparisonsAndMask) {
+    RamCheck r;
+    r.value = 5;
+    EXPECT_TRUE(ram_matches(r, 5));
+    EXPECT_FALSE(ram_matches(r, 6));
+    r.cmp = Compare::Ne;
+    EXPECT_TRUE(ram_matches(r, 6));
+    r.cmp = Compare::Lt;
+    EXPECT_TRUE(ram_matches(r, 4));
+    EXPECT_FALSE(ram_matches(r, 5));
+    r.cmp = Compare::Le;
+    EXPECT_TRUE(ram_matches(r, 5));
+    r.cmp = Compare::Gt;
+    EXPECT_TRUE(ram_matches(r, 6));
+    EXPECT_FALSE(ram_matches(r, 5));
+    r.cmp = Compare::Ge;
+    EXPECT_TRUE(ram_matches(r, 5));
+    r.cmp = Compare::Eq;
+    r.mask = 0xFF;
+    EXPECT_TRUE(ram_matches(r, 0x1205));
+    EXPECT_FALSE(ram_matches(r, 0x1206));
+}
+
+TEST(ScenarioFormat, RamFieldsParsed) {
+    Scenario s = parse("name = \"x\"\nframes = 10\n[[check]]\nat = 1\n"
+                       "ram = [{ addr = 0x80000004, size = 4, value = 3, mask = 0xF, cmp = \"ge\" }]\n");
+    ASSERT_EQ(s.checks.size(), 1u);
+    ASSERT_EQ(s.checks[0].ram.size(), 1u);
+    EXPECT_EQ(s.checks[0].ram[0].mask, 0xFu);
+    EXPECT_EQ(s.checks[0].ram[0].cmp, Compare::Ge);
+}
+
+TEST(ScenarioFormat, RamBadFieldsRejected) {
+    auto with = [](const char* ram) {
+        return std::string("name = \"x\"\nframes = 10\n[[check]]\nat = 1\nram = [") + ram + "]\n";
+    };
+    EXPECT_THROW(parse(with("{ addr = 0x80000000, size = 3, value = 1 }")), std::runtime_error);
+    EXPECT_THROW(parse(with("{ addr = 0x80000002, size = 4, value = 1 }")), std::runtime_error);
+    EXPECT_THROW(parse(with("{ addr = 0x80000000, size = 4, value = 1, cmp = \"approx\" }")), std::runtime_error);
+}
+
+TEST(ScenarioWait, ParsedFields) {
+    Scenario s = parse(kWaitFile);
+    ASSERT_EQ(s.waits.size(), 1u);
+    const Wait& w = s.waits[0];
+    EXPECT_EQ(w.at, 100);
+    EXPECT_EQ(w.label, "flag");
+    EXPECT_EQ(w.timeout, 100);
+    EXPECT_EQ(w.hold, kLeft);
+    EXPECT_EQ(w.tap, kCross);
+    EXPECT_EQ(w.tap_every, 6);
+    EXPECT_EQ(w.tap_hold, 2);
+    ASSERT_EQ(w.ram.size(), 1u);
+    EXPECT_EQ(w.ram[0].addr, 0x80010000u);
+}
+
+TEST(ScenarioWait, BadWaitsRejected) {
+    const std::string head = "name = \"x\"\nframes = 100\n[[wait]]\n";
+    const std::string cond = "ram = [{ addr = 0x80000000, size = 4, value = 1 }]\n";
+    EXPECT_THROW(parse(head + "at = 10\n" + cond), std::runtime_error);                  // no timeout
+    EXPECT_THROW(parse(head + "at = 10\ntimeout = 5\n"), std::runtime_error);           // no condition
+    EXPECT_THROW(parse(head + "timeout = 5\n" + cond), std::runtime_error);             // no `at`
+    EXPECT_THROW(parse(head + "at = 200\ntimeout = 5\n" + cond), std::runtime_error);   // beyond frames
+    EXPECT_THROW(parse(head + "at = 10\ntimeout = 5\nhold = [\"JUMP\"]\n" + cond), std::runtime_error);
+    EXPECT_THROW(parse(head + "at = 10\ntimeout = 5\npress = \"CROSS\"\nevery = 3\npress_hold = 3\n" + cond),
+                 std::runtime_error);
+}
+
+TEST(ScenarioWait, ClockEqualsRealFramesWithoutWaits) {
+    Scenario s = parse("name = \"x\"\nframes = 100\nskip_intro = false\npress = [{ button = \"UP\", at = 5, hold = 2 }]\n");
+    Timeline t(s);
+    FakeRam ram;
+    for (int64_t f = 0; f < 20; ++f) {
+        t.advance(f, ram.reader());
+        EXPECT_EQ(t.script_frame(), f);
+        EXPECT_EQ(t.buttons(), (f == 5 || f == 6) ? kUp : 0) << f;
+    }
+}
+
+TEST(ScenarioWait, ClockStopsUntilConditionHolds) {
+    Scenario s = parse(kWaitFile);
+    Timeline t(s);
+    FakeRam ram;
+    for (int64_t f = 0; f <= 99; ++f) t.advance(f, ram.reader());
+    EXPECT_EQ(t.script_frame(), 99);
+    EXPECT_FALSE(t.waiting());
+    for (int64_t f = 100; f < 110; ++f) {
+        t.advance(f, ram.reader());
+        EXPECT_TRUE(t.waiting());
+        EXPECT_EQ(t.script_frame(), 100);
+    }
+    ram.value = 7;
+    t.advance(110, ram.reader());
+    EXPECT_FALSE(t.waiting());
+    EXPECT_EQ(t.last_wait_frames(), 10);
+    EXPECT_EQ(t.completed_waits(), 1u);
+    EXPECT_EQ(t.script_frame(), 101);
+    t.advance(111, ram.reader());
+    EXPECT_EQ(t.script_frame(), 102);
+}
+
+TEST(ScenarioWait, HoldAndTapDuringWait) {
+    Scenario s = parse(kWaitFile);
+    Timeline t(s);
+    FakeRam ram;
+    for (int64_t f = 0; f < 100; ++f) t.advance(f, ram.reader());
+    // The UP press at script frames 50..149 covers the wait frame, so it stays held while waiting.
+    for (int64_t f = 100; f < 112; ++f) {
+        t.advance(f, ram.reader());
+        uint16_t want = kUp | kLeft | (((f - 100) % 6 < 2) ? kCross : 0);
+        EXPECT_EQ(t.buttons(), want) << f;
+    }
+    ram.value = 7;
+    t.advance(112, ram.reader());
+    EXPECT_EQ(t.buttons() & (kLeft | kCross), 0);
+}
+
+TEST(ScenarioWait, ShiftsLaterPresses) {
+    Scenario s = parse(kWaitFile);
+    Timeline t(s);
+    FakeRam ram;
+    int64_t real = 0;
+    for (; real < 130; ++real) t.advance(real, ram.reader());  // 30 frames spent waiting
+    ram.value = 7;
+    // START is scripted at script frame 300; the waiting (real frames 100..129) shifts it by 29 frames.
+    for (; real < 340; ++real) {
+        t.advance(real, ram.reader());
+        EXPECT_EQ((t.buttons() & kStart) != 0, real >= 329 && real < 339) << real;
+        EXPECT_FALSE(t.timed_out()) << real;
+    }
+}
+
+TEST(ScenarioWait, TimeoutReported) {
+    Scenario s = parse(kWaitFile);
+    Timeline t(s);
+    FakeRam ram;
+    for (int64_t real = 0; real < 200; ++real) {
+        t.advance(real, ram.reader());
+        EXPECT_FALSE(t.timed_out()) << real;
+    }
+    t.advance(200, ram.reader());  // `timeout` frames after the wait began
+    EXPECT_TRUE(t.timed_out());
+    ASSERT_NE(t.failed_wait(), nullptr);
+    EXPECT_EQ(t.failed_wait()->label, "flag");
+}
+
+TEST(ScenarioWait, AlreadySatisfiedWaitDoesNotStall) {
+    Scenario s = parse(kWaitFile);
+    Timeline t(s);
+    FakeRam ram;
+    ram.value = 7;
+    for (int64_t f = 0; f < 150; ++f) {
+        t.advance(f, ram.reader());
+        EXPECT_EQ(t.script_frame(), f);
+        EXPECT_FALSE(t.waiting());
+    }
+    EXPECT_EQ(t.completed_waits(), 1u);
+    EXPECT_EQ(t.last_wait_frames(), 0);
+}
+
+TEST(ScenarioWait, ConsecutiveWaitsRunInOrder) {
+    Scenario s = parse("name = \"x\"\nframes = 100\nskip_intro = false\n"
+                       "[[wait]]\nat = 10\ntimeout = 50\nram = [{ addr = 0x80010000, size = 4, value = 1 }]\n"
+                       "[[wait]]\nat = 20\ntimeout = 50\nram = [{ addr = 0x80010000, size = 4, value = 2 }]\n");
+    Timeline t(s);
+    FakeRam ram;
+    int64_t f = 0;
+    for (; f < 30; ++f) t.advance(f, ram.reader());
+    EXPECT_EQ(t.script_frame(), 10);
+    ram.value = 1;
+    for (; f < 40; ++f) t.advance(f, ram.reader());
+    EXPECT_EQ(t.script_frame(), 20);
+    EXPECT_TRUE(t.waiting());
+    ram.value = 2;
+    t.advance(f++, ram.reader());
+    EXPECT_FALSE(t.waiting());
+    EXPECT_EQ(t.completed_waits(), 2u);
+}

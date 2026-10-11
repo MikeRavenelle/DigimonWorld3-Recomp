@@ -1,15 +1,19 @@
 // dw3scenario: headless in-game scenario runner.
 //
-//   dw3scenario <file.toml> [--disc PATH] [--record] [--out DIR] [--wav PATH]
+//   dw3scenario <file.toml> [--disc PATH] [--record] [--out DIR] [--wav PATH] [--no-xa] [--watch ADDR[:SIZE]]... [--dump FRAME:PATH]...
 //
 // Boots the recompiled game with the scenario's scripted pad on port 1 (no window, no SDL, uncapped), evaluates
 // every check at its frame and writes BMPs of the display to <out>/<name>/<at>_<label>.bmp for checks with
 // `screenshot = true` and for failed checks. --record prints the actual screen hash of every check as a
 // ready-to-paste `screen_hash = "..."` line and does not fail on hash mismatches. The SPU runs normally (no audio
 // device); its output is metered per frame for `audio_*` checks. --wav PATH saves the whole mixed run as a WAV.
+// --watch ADDR[:SIZE] (SIZE 1, 2 or 4, default 4; repeatable) prints every change of that RAM location with the
+// real and script frame, for finding the addresses that [[wait]] and [[check]] conditions use. --dump FRAME:PATH
+// writes the 2 MiB of main RAM to PATH once the script reaches FRAME (repeatable), for diffing game states.
 //
 // Exit codes: 0 all checks pass, 1 failure, 2 usage/scenario error, 77 disc missing (ctest SKIP).
 
+#include <algorithm>
 #include <cctype>
 #include <chrono>
 #include <cstdio>
@@ -34,19 +38,20 @@ struct Options {
     std::string out = std::string(DW3_SOURCE_DIR) + "/game/audit/scenarios";
     bool record = false;
     std::string wav;  // --wav: whole-run audio dump
+    std::vector<std::pair<uint32_t, int>> watches;  // --watch
+    std::vector<std::pair<int64_t, std::string>> dumps;  // --dump, sorted by frame
     bool no_xa = false;  // --no-xa: drop XA-ADPCM sectors (isolates SPU voice output when auditing)
 };
 
 // Port 1 pad driven by the scenario's input script.
 class ScriptPad final : public dw3::PadSource {
 public:
-    explicit ScriptPad(const sc::Scenario& s) : scenario_(s) {}
-    int64_t frame = 0;
+    explicit ScriptPad(const sc::Timeline& t) : timeline_(t) {}
     bool connected(int port) override { return port == 0; }
-    uint16_t buttons(int port) override { return port == 0 ? sc::buttons_at(scenario_, frame) : 0; }
+    uint16_t buttons(int port) override { return port == 0 ? timeline_.buttons() : 0; }
 
 private:
-    const sc::Scenario& scenario_;
+    const sc::Timeline& timeline_;
 };
 
 std::string slug(const std::string& label) {
@@ -140,7 +145,7 @@ int evaluate(const Options& opt, const sc::Scenario& s, const sc::Check& c, dw3:
             case 2: v = dw3_read16(ctx, ram.addr); break;
             default: v = dw3_read32(ctx, ram.addr); break;
         }
-        report(r, v == ram.value, "ram[" + hex32(ram.addr) + "/" + num(ram.size) + "]",
+        report(r, sc::ram_matches(ram, v), "ram[" + hex32(ram.addr) + "/" + num(ram.size) + "]",
                "actual " + hex32(v) + ", expected " + hex32(ram.value));
     }
 
@@ -206,14 +211,34 @@ int main(int argc, char** argv) {
         else if (a == "--record") opt.record = true;
         else if (a == "--wav" && i + 1 < argc) opt.wav = argv[++i];
         else if (a == "--no-xa") opt.no_xa = true;
+        else if (a == "--dump" && i + 1 < argc) {
+            std::string v = argv[++i];
+            auto colon = v.find(':');
+            if (colon == std::string::npos) {
+                std::fprintf(stderr, "--dump wants FRAME:PATH\n");
+                return 2;
+            }
+            opt.dumps.emplace_back(std::stoll(v.substr(0, colon)), v.substr(colon + 1));
+            std::sort(opt.dumps.begin(), opt.dumps.end());
+        } else if (a == "--watch" && i + 1 < argc) {
+            std::string v = argv[++i];
+            auto colon = v.find(':');
+            uint32_t addr = static_cast<uint32_t>(std::stoul(v.substr(0, colon), nullptr, 0));
+            int size = colon == std::string::npos ? 4 : std::stoi(v.substr(colon + 1));
+            if (size != 1 && size != 2 && size != 4) {
+                std::fprintf(stderr, "--watch size must be 1, 2 or 4\n");
+                return 2;
+            }
+            opt.watches.emplace_back(addr, size);
+        }
         else if (!a.empty() && a[0] != '-' && opt.file.empty()) opt.file = a;
         else {
-            std::fprintf(stderr, "usage: dw3scenario <file.toml> [--disc PATH] [--record] [--out DIR] [--wav PATH] [--no-xa]\n");
+            std::fprintf(stderr, "usage: dw3scenario <file.toml> [--disc PATH] [--record] [--out DIR] [--wav PATH] [--no-xa] [--watch ADDR[:SIZE]] [--dump FRAME:PATH]\n");
             return 2;
         }
     }
     if (opt.file.empty()) {
-        std::fprintf(stderr, "usage: dw3scenario <file.toml> [--disc PATH] [--record] [--out DIR] [--wav PATH] [--no-xa]\n");
+        std::fprintf(stderr, "usage: dw3scenario <file.toml> [--disc PATH] [--record] [--out DIR] [--wav PATH] [--no-xa] [--watch ADDR[:SIZE]] [--dump FRAME:PATH]\n");
         return 2;
     }
     sc::Scenario scenario;
@@ -240,7 +265,16 @@ int main(int argc, char** argv) {
     cfg.log = [](const std::string& s) { std::fprintf(stderr, "%s\n", s.c_str()); };
     std::string error;
     std::unique_ptr<dw3::host::Host> host;
-    ScriptPad pad(scenario);
+    sc::Timeline timeline(scenario);
+    ScriptPad pad(timeline);
+    auto read_ram = [&](uint32_t addr, int size) -> uint32_t {
+        RecompContext* ctx = &host->machine().ctx();
+        return size == 1 ? dw3_read8(ctx, addr) : size == 2 ? dw3_read16(ctx, addr) : dw3_read32(ctx, addr);
+    };
+    std::vector<uint32_t> watch_last(opt.watches.size(), 0);
+    std::vector<bool> watch_seen(opt.watches.size(), false);
+    std::size_t waits_seen = 0, dumps_done = 0;
+    bool wait_timeout = false;
 
     bool want_wav = !opt.wav.empty();
     for (const auto& c : scenario.checks) want_wav = want_wav || c.wav;
@@ -264,23 +298,49 @@ int main(int argc, char** argv) {
         }
         if (opt.no_xa) host->machine().cdrom().set_xa_sink(nullptr);
         host->machine().sio().set_pad_source(0, &pad);
-        const int64_t base = boot ? scenario.reboots[boot - 1] : 0;
-        const int64_t until = boot < scenario.reboots.size() ? scenario.reboots[boot] : -1;
-        if (boot) std::printf("  reboot @%lld\n", static_cast<long long>(base));
+        const int64_t base = last_frame;  // real frames before this boot
+        const int64_t until = boot < scenario.reboots.size() ? scenario.reboots[boot] : -1;  // script frame
+        if (boot) std::printf("  reboot @%lld\n", static_cast<long long>(scenario.reboots[boot - 1]));
         result = host->run([&](uint64_t frame) {
-            pad.frame = base + static_cast<int64_t>(frame);
-            last_frame = pad.frame;
+            last_frame = base + static_cast<int64_t>(frame);
+            timeline.advance(last_frame, read_ram);
+            const int64_t script = timeline.script_frame();
+            while (dumps_done < opt.dumps.size() && script >= opt.dumps[dumps_done].first) {
+                const auto& d = opt.dumps[dumps_done++];
+                std::ofstream f(d.second, std::ios::binary);
+                f.write(reinterpret_cast<const char*>(host->machine().bus().ram()), 2 * 1024 * 1024);
+                std::printf("  dump @%lld -> %s\n", static_cast<long long>(script), d.second.c_str());
+            }
+            for (std::size_t i = 0; i < opt.watches.size(); ++i) {
+                uint32_t v = read_ram(opt.watches[i].first, opt.watches[i].second);
+                if (watch_seen[i] && v == watch_last[i]) continue;
+                std::printf("  watch %s/%d = %s  (real %lld, script %lld)\n", hex32(opt.watches[i].first).c_str(),
+                            opt.watches[i].second, hex32(v).c_str(), static_cast<long long>(last_frame),
+                            static_cast<long long>(script));
+                watch_last[i] = v;
+                watch_seen[i] = true;
+            }
+            while (waits_seen < timeline.completed_waits()) {
+                const auto& w = scenario.waits[waits_seen++];
+                std::printf("  wait @%lld \"%s\": satisfied after %lld frames (timeout %lld)\n", static_cast<long long>(w.at),
+                            w.label.c_str(), static_cast<long long>(timeline.last_wait_frames()), static_cast<long long>(w.timeout));
+            }
+            if (timeline.timed_out()) {
+                wait_timeout = true;
+                dw3::host::Host::stop();
+                return;
+            }
             for (;;) {  // everything the SPU produced during this video frame
                 std::size_t n = host->machine().spu().drain_samples(pcm_buf);
                 meter.add_frame(std::span<const int16_t>(pcm_buf.data(), n * 2));
                 if (n < pcm_buf.size() / 2) break;
             }
-            if (until >= 0 && pad.frame >= until) dw3::host::Host::stop();
-            while (next < scenario.checks.size() && pad.frame >= scenario.checks[next].at)
+            if (until >= 0 && script >= until) dw3::host::Host::stop();
+            while (next < scenario.checks.size() && script >= scenario.checks[next].at)
                 evaluate(opt, scenario, scenario.checks[next++], *host, total, meter);
-            if (until < 0 && next >= scenario.checks.size() && pad.frame >= scenario.frames) dw3::host::Host::stop();
+            if (until < 0 && next >= scenario.checks.size() && script >= scenario.frames) dw3::host::Host::stop();
         });
-        if (result.end != dw3::host::RunResult::End::Stopped) break;
+        if (wait_timeout || result.end != dw3::host::RunResult::End::Stopped) break;
     }
     double secs = std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
 
@@ -302,7 +362,22 @@ int main(int argc, char** argv) {
         std::printf("  FAIL game entry returned at frame %lld\n", static_cast<long long>(last_frame));
         broken = true;
     }
-    if (next < scenario.checks.size()) {
+    if (wait_timeout) {
+        const auto* w = timeline.failed_wait();
+        std::printf("  FAIL wait @%lld \"%s\" timed out after %lld frames (real frame %lld)\n", static_cast<long long>(w->at),
+                    w->label.c_str(), static_cast<long long>(w->timeout), static_cast<long long>(last_frame));
+        for (const auto& r : w->ram) {
+            uint32_t v = read_ram(r.addr, r.size);
+            std::printf("    ram[%s/%d] actual %s\n", hex32(r.addr).c_str(), r.size, hex32(v).c_str());
+        }
+        std::vector<uint32_t> px;
+        int pw = 0, ph = 0;
+        if (host->machine().gpu().snapshot_display(px, pw, ph)) {
+            auto path = std::filesystem::path(opt.out) / scenario.name / ("timeout_" + slug(w->label) + ".bmp");
+            if (write_bmp(path, px, pw, ph)) std::printf("    screenshot %s\n", path.string().c_str());
+        }
+        broken = true;
+    } else if (next < scenario.checks.size()) {
         std::printf("  FAIL %zu check(s) never reached\n", scenario.checks.size() - next);
         broken = true;
     }
