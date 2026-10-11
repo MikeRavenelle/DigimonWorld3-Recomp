@@ -73,6 +73,13 @@ public:
     // save_state queues a capture for the next safe point while the game runs; `done` then receives the state file
     // (header included) or an error message.
     void save_state(std::function<void(std::vector<uint8_t> file, const std::string& error)> done);
+    // Like save_state, but only the serialized machine state is taken at the safe point; the disc references,
+    // compression and `done` run on a worker thread, so `done` must not touch game-thread state. Saves are
+    // delivered in the order they were requested. A save that arrives before the disc index is ready waits for
+    // it on the worker thread.
+    void save_state_async(std::function<void(std::vector<uint8_t> file, const std::string& error)> done);
+    // Starts the worker and has it load (or build) the disc index now rather than at the first save.
+    void prepare_save_states();
     // Loads a state file. Before run() it is applied at once and the game then continues from it; while the game is
     // running it is applied at the next safe point, abandoning the current game position. `done` receives an empty
     // string on success. A file that fails the header checks is rejected immediately; one that turns out to be
@@ -92,7 +99,12 @@ private:
     std::unique_ptr<Machine> machine_;
     std::unique_ptr<Bios> bios_;
     bool running_ = false;
+    struct Worker;
+    std::unique_ptr<Worker> worker_;
+    void start_worker();
+    std::string disc_index_cache_path() const;
     uint64_t identity() const;
+    std::vector<uint8_t> capture_payload();
     std::vector<uint8_t> capture();
     void apply(std::span<const uint8_t> payload);
     std::vector<uint8_t> unpack(std::span<const uint8_t> file);

@@ -2,6 +2,10 @@
 
 #include <algorithm>
 #include <chrono>
+#include <condition_variable>
+#include <deque>
+#include <mutex>
+#include <thread>
 #include <cstring>
 #include <map>
 #include <span>
@@ -68,6 +72,50 @@ std::vector<uint8_t> read_boot_exe(psxdisc::Disc& disc) {
 
 }  // namespace
 
+// Background thread for the expensive part of saving a state: it owns its own handle on the disc image (the
+// emulated drive keeps reading through the game thread's), builds the disc index once, then encodes, compresses
+// and delivers the queued payloads in order.
+struct Host::Worker {
+    std::mutex mutex;
+    std::condition_variable wake;
+    std::deque<std::function<void()>> jobs;
+    bool quit = false;
+    std::thread thread;
+    // Touched only by the worker thread.
+    std::optional<psxdisc::Disc> disc;
+    std::unique_ptr<DiscBytes> stream;
+    std::unique_ptr<DiscIndex> index;
+
+    void post(std::function<void()> job) {
+        {
+            std::lock_guard lock(mutex);
+            jobs.push_back(std::move(job));
+        }
+        wake.notify_one();
+    }
+    void run() {
+        for (;;) {
+            std::function<void()> job;
+            {
+                std::unique_lock lock(mutex);
+                wake.wait(lock, [&] { return quit || !jobs.empty(); });
+                if (jobs.empty()) return;  // quit, and everything queued has been run
+                job = std::move(jobs.front());
+                jobs.pop_front();
+            }
+            job();
+        }
+    }
+    void stop() {
+        {
+            std::lock_guard lock(mutex);
+            quit = true;
+        }
+        wake.notify_one();
+        if (thread.joinable()) thread.join();
+    }
+};
+
 struct Host::Impl {
     Config cfg;
     std::unique_ptr<DiscSource> disc_source;
@@ -128,7 +176,33 @@ struct Host::Impl {
 };
 
 Host::Host() : impl_(std::make_unique<Impl>()) {}
-Host::~Host() = default;
+Host::~Host() {
+    if (worker_) worker_->stop();
+}
+
+std::string Host::disc_index_cache_path() const {
+    if (!impl_->cfg.disc_index_cache.empty()) return impl_->cfg.disc_index_cache;
+    return (platform::user_data_dir() / "cache" / "disc.index").string();
+}
+
+void Host::start_worker() {
+    if (worker_) return;
+    worker_ = std::make_unique<Worker>();
+    Worker* w = worker_.get();
+    w->thread = std::thread([w] { w->run(); });
+    w->post([this, w] {
+        w->disc = psxdisc::Disc::open(impl_->cfg.disc_path);
+        if (!w->disc) return;
+        w->stream = std::make_unique<DiscBytes>(*w->disc);
+        auto t0 = std::chrono::steady_clock::now();
+        w->index = DiscIndex::open(*w->stream, disc_index_cache_path());
+        impl_->log("disc index ready in " +
+                   std::to_string(std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - t0).count()) +
+                   " ms");
+    });
+}
+
+void Host::prepare_save_states() { start_worker(); }
 
 const std::vector<uint8_t>& Host::card_image(int slot) const { return impl_->image[static_cast<std::size_t>(slot)]; }
 
@@ -225,7 +299,7 @@ uint64_t fnv64(const std::vector<uint8_t>& d) {
 // A state belongs to the game, not to a build of the recompiler: the identity is a hash of the boot executable.
 uint64_t Host::identity() const { return fnv64(exe_); }
 
-std::vector<uint8_t> Host::capture() {
+std::vector<uint8_t> Host::capture_payload() {
     StateIo s;
     {
         // Memory cards are not part of a state; their contents are hashed so a load can tell when they differ.
@@ -239,13 +313,15 @@ std::vector<uint8_t> Host::capture() {
     }
     machine_->io(s);
     bios_->io(s);
-    const std::vector<uint8_t>& payload = s.written();
+    return s.written();
+}
+
+std::vector<uint8_t> Host::capture() {
+    const std::vector<uint8_t> payload = capture_payload();
     savestate::Info info;
     info.decoded_size = payload.size();
     DiscBytes stream(*disc_);
-    std::string cache = impl_->cfg.disc_index_cache;
-    if (cache.empty()) cache = (platform::user_data_dir() / "cache" / "disc.index").string();
-    if (auto index = DiscIndex::open(stream, cache)) {
+    if (auto index = DiscIndex::open(stream, disc_index_cache_path())) {
         info.encoding = savestate::kDiscRefs;
         return savestate::wrap(index->encode(payload), identity(), info);
     }
@@ -297,6 +373,48 @@ void Host::save_state(std::function<void(std::vector<uint8_t>, const std::string
             error = e.what();
         }
         done(std::move(file), error);
+    });
+}
+
+void Host::save_state_async(std::function<void(std::vector<uint8_t>, const std::string&)> done) {
+    start_worker();
+    machine_->run_at_safe_point([this, done = std::move(done)]() mutable {
+        std::vector<uint8_t> payload;
+        std::string error;
+        try {
+            auto t0 = std::chrono::steady_clock::now();
+            payload = capture_payload();
+            impl_->log("save state: captured " + std::to_string(payload.size()) + " bytes in " +
+                       std::to_string(std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - t0).count()) +
+                       " us");
+        } catch (const StateError& e) {
+            error = e.what();
+        }
+        if (!error.empty()) {
+            done({}, error);
+            return;
+        }
+        worker_->post([this, payload = std::move(payload), done = std::move(done)] {
+            auto t0 = std::chrono::steady_clock::now();
+            savestate::Info info;
+            info.decoded_size = payload.size();
+            std::vector<uint8_t> file;
+            std::string error;
+            try {
+                if (worker_->index) {
+                    info.encoding = savestate::kDiscRefs;
+                    file = savestate::wrap(worker_->index->encode(payload), identity(), info);
+                } else {
+                    file = savestate::wrap(payload, identity(), info);
+                }
+            } catch (const StateError& e) {
+                error = e.what();
+            }
+            impl_->log("save state: encoded in " +
+                       std::to_string(std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - t0).count()) +
+                       " ms on the worker thread");
+            done(std::move(file), error);
+        });
     });
 }
 

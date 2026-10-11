@@ -41,6 +41,7 @@
 #include <cstdlib>
 #include <filesystem>
 #include <map>
+#include <mutex>
 #include <memory>
 #include <string>
 #include <vector>
@@ -363,21 +364,36 @@ int main(int argc, char** argv) {
     int state_slot = 1;
     const std::filesystem::path state_dir = dw3::platform::user_data_dir() / "states";
     auto slot_path = [&] { return (state_dir / ("slot" + std::to_string(state_slot) + ".state")).string(); };
+    // Saves are encoded and written on the host's worker thread; it hands the outcome back here and the frame
+    // loop shows it. Declared static so it outlives the host, whose destructor finishes the queued saves.
+    struct SaveResults {
+        std::mutex mutex;
+        std::vector<std::string> messages;
+        std::array<int, 10> in_flight{};  // saves not yet on disk, per slot
+    };
+    static SaveResults saves;
     auto save_slot = [&] {
         const std::string path = slot_path();
         const int slot = state_slot;
-        host->save_state([&presenter, path, slot](std::vector<uint8_t> file, const std::string& err) {
-            std::string werr;
+        {
+            std::lock_guard lock(saves.mutex);
+            ++saves.in_flight[static_cast<std::size_t>(slot)];
+        }
+        host->save_state_async([path, slot](std::vector<uint8_t> file, const std::string& err) {
+            std::string werr, message;
             if (!err.empty()) {
                 SDL_Log("cannot save state: %s", err.c_str());
-                presenter->notify("Save failed: " + err);
+                message = "Save failed: " + err;
             } else if (!dw3::savestate::write_file(path, file, werr)) {
                 SDL_Log("cannot save state: %s", werr.c_str());
-                presenter->notify("Save failed: " + werr);
+                message = "Save failed: " + werr;
             } else {
                 SDL_Log("saved state %s", path.c_str());
-                presenter->notify("Saved slot " + std::to_string(slot));
+                message = "Saved slot " + std::to_string(slot);
             }
+            std::lock_guard lock(saves.mutex);
+            --saves.in_flight[static_cast<std::size_t>(slot)];
+            saves.messages.push_back(std::move(message));
         });
     };
     auto select_slot = [&] {
@@ -388,6 +404,13 @@ int main(int argc, char** argv) {
     auto load_slot = [&] {
         const std::string path = slot_path();
         const int slot = state_slot;
+        {
+            std::lock_guard lock(saves.mutex);
+            if (saves.in_flight[static_cast<std::size_t>(slot)] > 0) {
+                presenter->notify("Slot " + std::to_string(slot) + " is still saving");
+                return;
+            }
+        }
         if (!std::filesystem::exists(path)) {
             SDL_Log("slot %d is empty", slot);
             presenter->notify("Slot " + std::to_string(slot) + " is empty");
@@ -413,6 +436,11 @@ int main(int argc, char** argv) {
     auto on_frame = [&](uint64_t frame) {
         host_pad.frame = static_cast<int64_t>(frame);
         audio.pump(machine.spu());
+        {
+            std::lock_guard lock(saves.mutex);
+            for (std::string& message : saves.messages) presenter->notify(std::move(message));
+            saves.messages.clear();
+        }
         SDL_Event e;
         while (SDL_PollEvent(&e)) {
             if (e.type == SDL_EVENT_QUIT) dw3::host::Host::stop();
@@ -456,6 +484,7 @@ int main(int argc, char** argv) {
         }
     };
 
+    host->prepare_save_states();
     SDL_Log("booting SLUS_014.36");
     auto result = host->run(on_frame);
     if (result.end == dw3::host::RunResult::End::Fatal) {

@@ -164,10 +164,22 @@ bool write_file(const std::string& path, std::span<const uint8_t> file, std::str
     std::error_code ec;
     auto parent = std::filesystem::path(path).parent_path();
     if (!parent.empty()) std::filesystem::create_directories(parent, ec);
-    std::ofstream f(path, std::ios::binary | std::ios::trunc);
-    if (f) f.write(reinterpret_cast<const char*>(file.data()), static_cast<std::streamsize>(file.size()));
-    if (!f) {
-        error = "cannot write " + path;
+    // Written beside the target and renamed over it, so a reader never sees a half-written file.
+    const std::string temp = path + ".tmp";
+    {
+        std::ofstream f(temp, std::ios::binary | std::ios::trunc);
+        if (f) f.write(reinterpret_cast<const char*>(file.data()), static_cast<std::streamsize>(file.size()));
+        if (f) f.flush();
+        if (!f) {
+            error = "cannot write " + path;
+            std::filesystem::remove(temp, ec);
+            return false;
+        }
+    }
+    std::filesystem::rename(temp, path, ec);
+    if (ec) {
+        error = "cannot write " + path + ": " + ec.message();
+        std::filesystem::remove(temp, ec);
         return false;
     }
     return true;
