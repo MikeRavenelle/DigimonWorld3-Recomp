@@ -5,6 +5,10 @@ frames = 1000
 [[check]]
 at = 840
 label = "title screen (Press Start Button)"
+# title music (SPU voices): ~5600 RMS
+audio_min_rms = 1000.0
+audio_max_rms = 20000.0
+wav = true
 display_enabled = true
 display_width = 320
 screen_hash = "1ffc3dfe000000007ffe1fce1ffe1ffe07e8000070007ffe001003f00cb00002"
@@ -17,6 +21,8 @@ at = 900
 [[check]]
 at = 990
 label = "Start/Continue menu"
+audio_min_rms = 1000.0
+audio_max_rms = 20000.0
 min_primitives = 1000
 screen_hash = "1ffe3ffe000000007ffe1fce1ffe3ffe0008000270007ffe007003f00cb00182"
 screenshot = true

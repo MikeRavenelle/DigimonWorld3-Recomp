@@ -24,6 +24,7 @@ dw3_add_test(test_runtime
             runtime/test_timers.cpp runtime/test_dma.cpp runtime/test_cdrom.cpp runtime/test_machine.cpp runtime/test_spu.cpp
             runtime/test_bios.cpp runtime/test_soft_rasterizer.cpp runtime/test_sio.cpp
             runtime/test_mdec.cpp runtime/test_memcard.cpp
+            runtime/test_spu_dsp.cpp runtime/test_spu_voices.cpp runtime/test_xa.cpp
     LIBS dw3runtime)
 
 # Differential emitter tests: emit_testgen recompiles the programs of psxrecomp/test_programs.h at build

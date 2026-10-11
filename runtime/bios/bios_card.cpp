@@ -1,7 +1,7 @@
 // Native BIOS memory card and file functions on top of the card images attached to Sio.
 //
 // References: psx-spx "BIOS Memory Card Functions" / "BIOS File Functions" / "Memory Card Data Format";
-// behaviour cross-checked against PCSX-Redux's HLE BIOS (GPL-2+) and OpenBIOS (MIT). No code was copied.
+// behaviour follows PCSX-Redux HLE BIOS (GPL-2+) and OpenBIOS (MIT).
 //
 // Every operation is applied to the image immediately. Completion is reported a short time later with
 // EvSpIOE (0x0004) success, EvSpTIMOUT (0x0100) no card, EvSpNEW (0x2000) new card (_card_info only),

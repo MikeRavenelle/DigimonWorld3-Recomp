@@ -182,11 +182,13 @@ TEST(Spu, KeyOnOffTracksVoices) {
     EXPECT_EQ(r.spu.voices_on(), 0x00000004u);
 }
 
-TEST(Spu, EndxReportsVoicesNotPlaying) {
+// Replaces the old fake-ENDX test (ENDX used to read as "not keyed on"); ENDX now reflects real loop-end state.
+TEST(Spu, EndxStartsClearAndKeyOnClearsBits) {
     Rig r;
+    EXPECT_EQ(r.r16(Spu::kEndx), 0x0000);
+    EXPECT_EQ(r.r16(Spu::kEndx + 2), 0x0000);
     r.w16(Spu::kKeyOn, 0x0003);
-    EXPECT_EQ(r.r16(Spu::kEndx), 0xFFFC);
-    EXPECT_EQ(r.r16(Spu::kEndx + 2), 0x00FF);
+    EXPECT_EQ(r.r16(Spu::kEndx), 0x0000);
 }
 
 TEST(Spu, ThirtyTwoBitAccessSplitsIntoHalves) {

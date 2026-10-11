@@ -1,6 +1,6 @@
 // MDEC model. Register/command/decoding rules from psx-spx "Macroblock Decoder (MDEC)"
-// (https://psx-spx.consoledev.net/macroblockdecodermdec/). Algorithm structure cross-checked against the
-// published behaviour of PCSX-Redux / Mednafen (GPL-2+); no code copied.
+// (https://psx-spx.consoledev.net/macroblockdecodermdec/). Behaviour follows PCSX-Redux and
+// Mednafen (GPL-2+).
 
 #include "dw3/mdec.h"
 

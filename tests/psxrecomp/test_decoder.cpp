@@ -1,4 +1,4 @@
-// Decoder / disassembler tests (T-RECOMP-01).
+// Decoder / disassembler tests.
 // Expected disassembly strings follow `mips64-linux-gnu-objdump -D -b binary -m mips:3000 -EL` (whitespace
 // normalized to a single space between mnemonic and operands).
 

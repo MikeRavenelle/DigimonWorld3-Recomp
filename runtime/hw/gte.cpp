@@ -1,8 +1,7 @@
 // PS1 Geometry Transformation Engine (COP2).
 //
-// Behaviour follows the psx-spx GTE documentation. The overall structure (44-bit MAC checks applied per addition,
-// IR3 quirk in RTP, buggy MVMVA far-colour variant, unsigned Newton-Raphson divider) was informed by the GTE
-// implementations of Beetle PSX / Mednafen (GPL-2+) and PCSX-Redux (GPL-2+). The code here is written from scratch.
+// Behaviour follows psx-spx GTE documentation; cross-checked against Beetle PSX / Mednafen
+// (GPL-2+) and PCSX-Redux (GPL-2+).
 #include "dw3/gte.h"
 
 #include <algorithm>

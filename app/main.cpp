@@ -13,6 +13,7 @@
 //                      from frame F for N frames (default 6)
 //   --intro            with --frames, do not press START at frame 300 (by default audit runs skip the intro)
 //   --uncapped         do not pace to real time (always on with --frames)
+//   --mute             no audio output (the SPU still runs; audio is also off for --frames audit runs)
 //   --screenshot-every N DIR   save the window image every N frames
 //   --vram-dump PATH   save the whole VRAM as a BMP on exit
 //   --trace-io LO:HI   log bus accesses to the hex physical range LO..HI
@@ -27,6 +28,7 @@
 #include <string>
 
 #include "dw3/host.h"
+#include "audio_out.h"
 #include "dw3/platform.h"
 
 namespace {
@@ -41,6 +43,7 @@ struct Options {
     std::string vram_dump;
     uint32_t trace_lo = 0, trace_hi = 0;
     bool uncapped = false;
+    bool mute = false;
     bool intro = false;
     int shot_every = 0;
     std::string shot_dir;
@@ -130,6 +133,7 @@ Options parse(int argc, char** argv) {
         else if (a == "--memcard2" && i + 1 < argc) o.memcard[1] = argv[++i];
         else if (a == "--no-memcard") o.no_memcard = true;
         else if (a == "--uncapped") o.uncapped = true;
+        else if (a == "--mute") o.mute = true;
         else if (a == "--intro") o.intro = true;
         else if (a == "--screenshot-every" && i + 2 < argc) {
             o.shot_every = std::atoi(argv[++i]);
@@ -200,6 +204,9 @@ int main(int argc, char** argv) {
         return 1;
     }
 
+    dw3app::AudioOutput audio;
+    audio.open(opt.mute || opt.uncapped || opt.max_frames >= 0);
+
     static HostPad host_pad;
     host_pad.script = &opt.presses;
     {
@@ -234,6 +241,7 @@ int main(int argc, char** argv) {
                 static_cast<long long>(machine.ctx().cycles), static_cast<unsigned long long>(bios.calls()),
                 static_cast<unsigned long long>(bios.interrupts_delivered()),
                 static_cast<unsigned long long>(machine.lookups()));
+        audio.close();
         SDL_DestroyRenderer(renderer);
         SDL_DestroyWindow(window);
         SDL_Quit();
@@ -245,6 +253,7 @@ int main(int argc, char** argv) {
     std::vector<uint32_t> pixels;
     auto on_frame = [&](uint64_t frame) {
         host_pad.frame = static_cast<int64_t>(frame);
+        audio.pump(machine.spu());
         SDL_Event e;
         while (SDL_PollEvent(&e)) {
             if (e.type == SDL_EVENT_QUIT) dw3::host::Host::stop();

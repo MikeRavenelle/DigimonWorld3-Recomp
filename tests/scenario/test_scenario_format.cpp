@@ -3,7 +3,10 @@
 #include <gtest/gtest.h>
 
 #include <bit>
+#include <cmath>
+#include <filesystem>
 #include <stdexcept>
+#include <string>
 #include <vector>
 
 #include "scenario.h"
@@ -185,4 +188,158 @@ TEST(ScenarioHash, DifferentImagesFarApart) {
             b[static_cast<std::size_t>(y * 320 + x)] = y < 120 ? 0xFFFFFFFFu : 0xFF000000u;
         }
     EXPECT_GE(hash_distance(perceptual_hash(a.data(), 320, 240), perceptual_hash(b.data(), 320, 240)), 100);
+}
+
+// ---- Audio checks ----
+
+TEST(ScenarioAudio, CheckFieldsParsed) {
+    Scenario s = parse(R"(name="t"
+frames=100
+[[check]]
+at=50
+audio_min_rms=100.5
+audio_max_rms=9000
+audio_frames=30
+wav=true
+)");
+    ASSERT_EQ(s.checks.size(), 1u);
+    EXPECT_DOUBLE_EQ(*s.checks[0].audio_min_rms, 100.5);
+    EXPECT_DOUBLE_EQ(*s.checks[0].audio_max_rms, 9000.0);
+    EXPECT_EQ(s.checks[0].audio_frames, 30);
+    EXPECT_TRUE(s.checks[0].wav);
+}
+
+TEST(ScenarioAudio, Defaults) {
+    Scenario s = parse("name=\"t\"\nframes=100\n[[check]]\nat=50\n");
+    EXPECT_FALSE(s.checks[0].audio_min_rms);
+    EXPECT_FALSE(s.checks[0].audio_max_rms);
+    EXPECT_EQ(s.checks[0].audio_frames, 60);
+    EXPECT_FALSE(s.checks[0].wav);
+}
+
+TEST(ScenarioAudio, ZeroWindowRejected) {
+    EXPECT_THROW(parse("name=\"t\"\nframes=100\n[[check]]\nat=50\naudio_frames=0\n"), std::runtime_error);
+}
+
+TEST(ScenarioAudio, MinAboveMaxRejected) {
+    EXPECT_THROW(parse("name=\"t\"\nframes=100\n[[check]]\nat=50\naudio_min_rms=10.0\naudio_max_rms=5.0\n"),
+                 std::runtime_error);
+}
+
+TEST(ScenarioAudio, MeterOfSilenceIsZero) {
+    AudioMeter m;
+    std::vector<int16_t> z(200, 0);
+    m.add_frame(z);
+    EXPECT_EQ(m.rms(60), 0.0);
+    EXPECT_EQ(m.frames(), 1u);
+}
+
+TEST(ScenarioAudio, MeterOfEmptyIsZero) {
+    AudioMeter m;
+    EXPECT_EQ(m.rms(10), 0.0);
+    m.add_frame({});
+    EXPECT_EQ(m.rms(10), 0.0);
+}
+
+TEST(ScenarioAudio, MeterConstantSignalRms) {
+    AudioMeter m;
+    std::vector<int16_t> c(100, 1000);
+    for (int i = 0; i < 5; ++i) m.add_frame(c);
+    EXPECT_DOUBLE_EQ(m.rms(5), 1000.0);
+    EXPECT_DOUBLE_EQ(m.rms(1), 1000.0);
+}
+
+TEST(ScenarioAudio, MeterSquareWaveRms) {
+    AudioMeter m;
+    std::vector<int16_t> sq;
+    for (int i = 0; i < 100; ++i) sq.push_back(i % 2 ? 3000 : -3000);
+    m.add_frame(sq);
+    EXPECT_DOUBLE_EQ(m.rms(1), 3000.0);
+}
+
+TEST(ScenarioAudio, MeterWindowCoversOnlyLastFrames) {
+    AudioMeter m;
+    std::vector<int16_t> loud(100, 8000), quiet(100, 0);
+    m.add_frame(loud);
+    for (int i = 0; i < 10; ++i) m.add_frame(quiet);
+    EXPECT_EQ(m.rms(10), 0.0);
+    EXPECT_GT(m.rms(11), 0.0);
+    EXPECT_NEAR(m.rms(11), 8000.0 / std::sqrt(11.0), 1e-6);
+}
+
+TEST(ScenarioAudio, MeterWindowLargerThanHistoryUsesAll) {
+    AudioMeter m;
+    std::vector<int16_t> c(10, 500);
+    m.add_frame(c);
+    EXPECT_DOUBLE_EQ(m.rms(1000), 500.0);
+}
+
+TEST(ScenarioAudio, MeterWeightsFramesBySampleCount) {
+    AudioMeter m;
+    m.add_frame(std::vector<int16_t>(300, 1000));
+    m.add_frame(std::vector<int16_t>(100, 0));
+    EXPECT_NEAR(m.rms(2), std::sqrt(300.0 * 1e6 / 400.0), 1e-6);
+}
+
+TEST(ScenarioAudio, MeterKeepsSamplesOnlyWhenAsked) {
+    AudioMeter off(false), on(true);
+    std::vector<int16_t> c = {1, 2, 3, 4};
+    off.add_frame(c);
+    on.add_frame(c);
+    EXPECT_TRUE(off.all().empty());
+    EXPECT_EQ(on.all(), c);
+    EXPECT_TRUE(off.window(1).empty());
+}
+
+TEST(ScenarioAudio, MeterWindowSamples) {
+    AudioMeter m(true);
+    m.add_frame(std::vector<int16_t>{1, 1});
+    m.add_frame(std::vector<int16_t>{2, 2});
+    m.add_frame(std::vector<int16_t>{3, 3});
+    EXPECT_EQ(m.window(2), (std::vector<int16_t>{2, 2, 3, 3}));
+    EXPECT_EQ(m.window(10), (std::vector<int16_t>{1, 1, 2, 2, 3, 3}));
+}
+
+TEST(ScenarioAudio, WavHeaderLayout) {
+    std::vector<int16_t> pcm = {1, -1, 256, -256};
+    auto b = wav_bytes(pcm);
+    ASSERT_EQ(b.size(), 44u + 8u);
+    EXPECT_EQ(std::string(b.begin(), b.begin() + 4), "RIFF");
+    EXPECT_EQ(std::string(b.begin() + 8, b.begin() + 12), "WAVE");
+    EXPECT_EQ(std::string(b.begin() + 12, b.begin() + 16), "fmt ");
+    EXPECT_EQ(std::string(b.begin() + 36, b.begin() + 40), "data");
+    auto u32 = [&](std::size_t o) { return b[o] | (b[o + 1] << 8) | (b[o + 2] << 16) | (static_cast<uint32_t>(b[o + 3]) << 24); };
+    EXPECT_EQ(u32(4), 36u + 8u);
+    EXPECT_EQ(u32(16), 16u);
+    EXPECT_EQ(b[20], 1);   // PCM
+    EXPECT_EQ(b[22], 2);   // stereo
+    EXPECT_EQ(u32(24), 44100u);
+    EXPECT_EQ(u32(28), 44100u * 4);
+    EXPECT_EQ(b[32], 4);   // block align
+    EXPECT_EQ(b[34], 16);  // bits
+    EXPECT_EQ(u32(40), 8u);
+}
+
+TEST(ScenarioAudio, WavSamplesLittleEndian) {
+    auto b = wav_bytes(std::vector<int16_t>{0x1234, -2});
+    EXPECT_EQ(b[44], 0x34);
+    EXPECT_EQ(b[45], 0x12);
+    EXPECT_EQ(b[46], 0xFE);
+    EXPECT_EQ(b[47], 0xFF);
+}
+
+TEST(ScenarioAudio, WavCustomRate) {
+    auto b = wav_bytes(std::vector<int16_t>{0, 0}, 22050);
+    EXPECT_EQ(b[24] | (b[25] << 8), 22050);
+}
+
+TEST(ScenarioAudio, WavFileWritten) {
+    auto path = std::filesystem::temp_directory_path() / "dw3_scenario_test" / "x.wav";
+    ASSERT_TRUE(write_wav(path.string(), std::vector<int16_t>{1, 2, 3, 4}));
+    EXPECT_EQ(std::filesystem::file_size(path), 44u + 8u);
+    std::filesystem::remove_all(path.parent_path());
+}
+
+TEST(ScenarioAudio, WavUnwritablePathFails) {
+    EXPECT_FALSE(write_wav("/proc/definitely/not/here.wav", std::vector<int16_t>{1, 2}));
 }

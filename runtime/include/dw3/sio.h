@@ -3,8 +3,8 @@
 // SIO0: controller / memory card serial port at 0x1F801040-0x1F80104F (JOY_DATA, JOY_STAT, JOY_MODE,
 // JOY_CTRL, JOY_BAUD), with digital pads and 128 KiB memory cards on two ports.
 //
-// Behaviour follows the psx-spx "Controllers and Memory Cards" documentation and was cross-checked against
-// the approach of PCSX-Redux (GPL-2+) and Beetle PSX / Mednafen (GPL-2+); no code was copied.
+// Behaviour follows psx-spx "Controllers and Memory Cards" documentation, PCSX-Redux and
+// Beetle PSX / Mednafen (GPL-2+).
 //
 // Model: no per-cycle ticking. Writing JOY_DATA (with TXEN set) schedules the end of the byte exchange at
 // 8 * reload * factor cycles; at that point the addressed device computes its reply, the RX FIFO is pushed

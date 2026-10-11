@@ -6,6 +6,10 @@ skip_intro = false
 [[check]]
 at = 1200
 label = "FMV frame mid-intro"
+# the intro FMV soundtrack is XA-ADPCM only (SPU voices are silent): ~6300 RMS
+audio_min_rms = 1000.0
+audio_max_rms = 20000.0
+wav = true
 display_enabled = true
 min_commands = 9000
 screen_hash = "fe7efe72fe700000003f18ff1dffdefe000200640024003e0000607c807c806e"
@@ -14,6 +18,8 @@ screenshot = true
 [[check]]
 at = 2400
 label = "FMV still playing"
+audio_min_rms = 1000.0
+audio_max_rms = 20000.0
 min_commands = 20000
 screen_hash = "f8ffffff3f3f0000003f0067b00ff01f00c7004300400027000018030c8500cf"
 screenshot = true

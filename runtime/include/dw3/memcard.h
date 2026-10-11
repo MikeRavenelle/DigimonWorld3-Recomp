@@ -7,8 +7,8 @@
 // replacement data, 63 the write-test frame (a copy of frame 0). Blocks 1-15 (frames 64..1023) hold file data.
 // Every system frame ends with a checksum byte: the XOR of the 127 bytes before it.
 //
-// The directory/chain handling was written from the specification and cross-checked against the approach of
-// PCSX-Redux (GPL-2+) and Beetle PSX / Mednafen (GPL-2+); no code was copied.
+// Directory/chain handling follows psx-spx specification; cross-checked against PCSX-Redux and
+// Beetle PSX / Mednafen (GPL-2+).
 
 #include <array>
 #include <cstddef>

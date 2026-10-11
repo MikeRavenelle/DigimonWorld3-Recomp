@@ -31,6 +31,10 @@ screenshot = true
 [[check]]
 at = 1800
 label = "field scene rendered"
+# field BGM (SPU voices): ~2600 RMS
+audio_min_rms = 500.0
+audio_max_rms = 20000.0
+wav = true
 display_width = 320
 display_height = 240
 min_primitives = 100000

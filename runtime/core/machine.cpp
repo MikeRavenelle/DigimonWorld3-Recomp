@@ -45,6 +45,7 @@ Machine::Machine(std::span<const RecompSegment> segments)
       gpu_(bus_, irq_, video_, dma_),
       cdrom_(bus_, sched_, irq_, dma_),
       spu_(bus_, irq_, dma_),
+      xa_(&cdrom_),
       sio_(bus_, sched_, irq_),
       mdec_(bus_, sched_, dma_),
       segments_(segments),
@@ -52,6 +53,8 @@ Machine::Machine(std::span<const RecompSegment> segments)
       verified_(segments.size(), false) {
     ctx().machine = this;
     gpu_.set_rasterizer(&soft_raster_);
+    cdrom_.set_xa_sink(&xa_);
+    spu_.set_cd_source(&xa_);
     // Memory/cache control: timing configuration with no functional effect here, but must read back.
     bus_.map_io({0x1F801000, 0x40, [this](uint32_t o, int) { return mem_ctrl_[o >> 2]; },
                  [this](uint32_t o, uint32_t v, int) { mem_ctrl_[o >> 2] = v; }});

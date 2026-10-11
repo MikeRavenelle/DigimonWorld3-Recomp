@@ -1,4 +1,4 @@
-// MIPS R3000A decoder and objdump-style disassembler (T-RECOMP-01).
+// MIPS R3000A decoder and objdump-style disassembler.
 //
 // Decoding is lenient about reserved/don't-care bits (like the real CPU) but strict about opcodes:
 // unknown primary/SPECIAL/COP selectors decode to Op::Invalid. REGIMM follows the R3000 quirk: rt bit 0 selects

@@ -10,6 +10,9 @@ add_library(dw3runtime STATIC
     hw/gte.cpp
     hw/scheduler.cpp
     hw/spu.cpp
+    hw/spu_engine.cpp
+    hw/spu_dsp.cpp
+    hw/xa.cpp
     hw/irq.cpp
     hw/video_timing.cpp
     hw/timers.cpp

@@ -6,6 +6,8 @@ skip_intro = false
 [[check]]
 at = 60
 label = "loading screen displayed"
+# nothing is playing yet
+audio_max_rms = 10.0
 display_enabled = true
 display_width = 320
 display_height = 480

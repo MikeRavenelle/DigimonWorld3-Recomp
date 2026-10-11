@@ -2,7 +2,10 @@
 
 #include <algorithm>
 #include <bit>
+#include <cmath>
 #include <cstdio>
+#include <filesystem>
+#include <fstream>
 #include <map>
 #include <sstream>
 #include <stdexcept>
@@ -95,6 +98,13 @@ Scenario parse(const std::string& text, const std::string& src) {
             }
             c.max_hash_distance = static_cast<int>(t["max_hash_distance"].value_or(int64_t{24}));
             c.screenshot = t["screenshot"].value_or(false);
+            if (auto v = t["audio_min_rms"].value<double>()) c.audio_min_rms = *v;
+            if (auto v = t["audio_max_rms"].value<double>()) c.audio_max_rms = *v;
+            c.audio_frames = static_cast<int>(t["audio_frames"].value_or(int64_t{60}));
+            if (c.audio_frames <= 0) fail(src, "`audio_frames` must be > 0");
+            if (c.audio_min_rms && c.audio_max_rms && *c.audio_min_rms > *c.audio_max_rms)
+                fail(src, "`audio_min_rms` exceeds `audio_max_rms`");
+            c.wav = t["wav"].value_or(false);
             if (auto* ram = t["ram"].as_array()) {
                 for (auto& rn : *ram) {
                     auto& rt = *rn.as_table();
@@ -131,6 +141,67 @@ uint16_t buttons_at(const Scenario& s, int64_t frame) {
     for (const auto& p : s.presses)
         if (frame >= p.from && frame < p.to) b |= p.button;
     return b;
+}
+
+void AudioMeter::add_frame(std::span<const int16_t> pcm) {
+    Block b;
+    b.first = samples_.size();
+    b.count = pcm.size();
+    for (int16_t v : pcm) b.sum_sq += static_cast<double>(v) * v;
+    blocks_.push_back(b);
+    if (keep_) samples_.insert(samples_.end(), pcm.begin(), pcm.end());
+}
+
+double AudioMeter::rms(int n) const {
+    double sum = 0;
+    std::size_t count = 0;
+    std::size_t from = blocks_.size() > static_cast<std::size_t>(std::max(n, 0)) ? blocks_.size() - static_cast<std::size_t>(n) : 0;
+    for (std::size_t i = from; i < blocks_.size(); ++i) {
+        sum += blocks_[i].sum_sq;
+        count += blocks_[i].count;
+    }
+    return count ? std::sqrt(sum / static_cast<double>(count)) : 0.0;
+}
+
+std::vector<int16_t> AudioMeter::window(int n) const {
+    std::size_t from = blocks_.size() > static_cast<std::size_t>(std::max(n, 0)) ? blocks_.size() - static_cast<std::size_t>(n) : 0;
+    if (!keep_ || from >= blocks_.size()) return {};
+    std::size_t start = blocks_[from].first;
+    return std::vector<int16_t>(samples_.begin() + static_cast<std::ptrdiff_t>(start), samples_.end());
+}
+
+std::vector<uint8_t> wav_bytes(std::span<const int16_t> pcm, uint32_t rate) {
+    std::vector<uint8_t> out;
+    auto put32 = [&](uint32_t v) { for (int i = 0; i < 4; ++i) out.push_back(static_cast<uint8_t>(v >> (8 * i))); };
+    auto put16 = [&](uint16_t v) { out.push_back(static_cast<uint8_t>(v)); out.push_back(static_cast<uint8_t>(v >> 8)); };
+    auto tag = [&](const char* t) { out.insert(out.end(), t, t + 4); };
+    const uint32_t bytes = static_cast<uint32_t>(pcm.size() * 2);
+    tag("RIFF");
+    put32(36 + bytes);
+    tag("WAVE");
+    tag("fmt ");
+    put32(16);
+    put16(1);  // PCM
+    put16(2);  // channels
+    put32(rate);
+    put32(rate * 4);
+    put16(4);
+    put16(16);
+    tag("data");
+    put32(bytes);
+    for (int16_t v : pcm) put16(static_cast<uint16_t>(v));
+    return out;
+}
+
+bool write_wav(const std::string& path, std::span<const int16_t> pcm, uint32_t rate) {
+    std::error_code ec;
+    auto parent = std::filesystem::path(path).parent_path();
+    if (!parent.empty()) std::filesystem::create_directories(parent, ec);
+    std::ofstream f(path, std::ios::binary);
+    if (!f) return false;
+    auto bytes = wav_bytes(pcm, rate);
+    f.write(reinterpret_cast<const char*>(bytes.data()), static_cast<std::streamsize>(bytes.size()));
+    return static_cast<bool>(f);
 }
 
 std::array<uint64_t, 4> perceptual_hash(const uint32_t* rgba, int width, int height) {

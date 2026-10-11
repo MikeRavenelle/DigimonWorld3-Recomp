@@ -125,6 +125,7 @@ std::unique_ptr<Host> Host::create(const Config& cfg, std::string& error) {
     Host* self = h.get();
     im.disc_source = std::make_unique<DiscSource>(*h->disc_);
     m.cdrom().set_disc(im.disc_source.get());
+    m.spu().start(m.scheduler());  // timed sample generation (a periodic event; plain Machine tests stay quiet)
 
     if (cfg.card_mode == CardMode::Blank) {
         im.image[0].assign(memcard::kCardSize, 0);

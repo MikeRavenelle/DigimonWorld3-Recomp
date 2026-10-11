@@ -1,11 +1,12 @@
 // dw3scenario: headless in-game scenario runner.
 //
-//   dw3scenario <file.toml> [--disc PATH] [--record] [--out DIR]
+//   dw3scenario <file.toml> [--disc PATH] [--record] [--out DIR] [--wav PATH]
 //
 // Boots the recompiled game with the scenario's scripted pad on port 1 (no window, no SDL, uncapped), evaluates
 // every check at its frame and writes BMPs of the display to <out>/<name>/<at>_<label>.bmp for checks with
 // `screenshot = true` and for failed checks. --record prints the actual screen hash of every check as a
-// ready-to-paste `screen_hash = "..."` line and does not fail on hash mismatches.
+// ready-to-paste `screen_hash = "..."` line and does not fail on hash mismatches. The SPU runs normally (no audio
+// device); its output is metered per frame for `audio_*` checks. --wav PATH saves the whole mixed run as a WAV.
 //
 // Exit codes: 0 all checks pass, 1 failure, 2 usage/scenario error, 77 disc missing (ctest SKIP).
 
@@ -15,6 +16,7 @@
 #include <cstring>
 #include <filesystem>
 #include <fstream>
+#include <span>
 #include <string>
 #include <vector>
 
@@ -31,6 +33,8 @@ struct Options {
     std::string disc = std::string(DW3_SOURCE_DIR) + "/game/Digimon World 3 (USA).cue";
     std::string out = std::string(DW3_SOURCE_DIR) + "/game/audit/scenarios";
     bool record = false;
+    std::string wav;  // --wav: whole-run audio dump
+    bool no_xa = false;  // --no-xa: drop XA-ADPCM sectors (isolates SPU voice output when auditing)
 };
 
 // Port 1 pad driven by the scenario's input script.
@@ -103,7 +107,8 @@ void report(Results& r, bool ok, const std::string& field, const std::string& de
 }
 
 // Evaluates one check against the live machine. Returns the number of failures it added.
-int evaluate(const Options& opt, const sc::Scenario& s, const sc::Check& c, dw3::host::Host& host, Results& total) {
+int evaluate(const Options& opt, const sc::Scenario& s, const sc::Check& c, dw3::host::Host& host, Results& total,
+             const sc::AudioMeter& meter) {
     dw3::Machine& m = host.machine();
     Results r;
     std::printf("  check @%lld \"%s\"\n", static_cast<long long>(c.at), c.label.c_str());
@@ -137,6 +142,24 @@ int evaluate(const Options& opt, const sc::Scenario& s, const sc::Check& c, dw3:
         }
         report(r, v == ram.value, "ram[" + hex32(ram.addr) + "/" + num(ram.size) + "]",
                "actual " + hex32(v) + ", expected " + hex32(ram.value));
+    }
+
+    if (c.audio_min_rms || c.audio_max_rms) {
+        double rms = meter.rms(c.audio_frames);
+        char buf[96];
+        std::snprintf(buf, sizeof(buf), "%.1f over %d frames", rms, c.audio_frames);
+        if (c.audio_min_rms)
+            report(r, rms >= *c.audio_min_rms, "audio_min_rms", std::string(buf) + ", expected >= " + std::to_string(*c.audio_min_rms));
+        if (c.audio_max_rms)
+            report(r, rms <= *c.audio_max_rms, "audio_max_rms", std::string(buf) + ", expected <= " + std::to_string(*c.audio_max_rms));
+    }
+    if (opt.record)
+        std::printf("    RECORD audio rms %.1f over %d frames\n", meter.rms(c.audio_frames), c.audio_frames);
+    if (c.wav) {
+        auto path = std::filesystem::path(opt.out) / s.name / (num(c.at) + "_" + slug(c.label) + ".wav");
+        auto pcm = meter.window(c.audio_frames);
+        if (sc::write_wav(path.string(), pcm)) std::printf("    audio %s\n", path.string().c_str());
+        else std::printf("    cannot write %s\n", path.string().c_str());
     }
 
     std::vector<uint32_t> pixels;
@@ -181,14 +204,16 @@ int main(int argc, char** argv) {
         if (a == "--disc" && i + 1 < argc) opt.disc = argv[++i];
         else if (a == "--out" && i + 1 < argc) opt.out = argv[++i];
         else if (a == "--record") opt.record = true;
+        else if (a == "--wav" && i + 1 < argc) opt.wav = argv[++i];
+        else if (a == "--no-xa") opt.no_xa = true;
         else if (!a.empty() && a[0] != '-' && opt.file.empty()) opt.file = a;
         else {
-            std::fprintf(stderr, "usage: dw3scenario <file.toml> [--disc PATH] [--record] [--out DIR]\n");
+            std::fprintf(stderr, "usage: dw3scenario <file.toml> [--disc PATH] [--record] [--out DIR] [--wav PATH] [--no-xa]\n");
             return 2;
         }
     }
     if (opt.file.empty()) {
-        std::fprintf(stderr, "usage: dw3scenario <file.toml> [--disc PATH] [--record] [--out DIR]\n");
+        std::fprintf(stderr, "usage: dw3scenario <file.toml> [--disc PATH] [--record] [--out DIR] [--wav PATH] [--no-xa]\n");
         return 2;
     }
     sc::Scenario scenario;
@@ -219,8 +244,14 @@ int main(int argc, char** argv) {
         std::fprintf(stderr, "%s\n", error.c_str());
         return 1;
     }
+    if (opt.no_xa) host->machine().cdrom().set_xa_sink(nullptr);
     ScriptPad pad(scenario);
     host->machine().sio().set_pad_source(0, &pad);
+
+    bool want_wav = !opt.wav.empty();
+    for (const auto& c : scenario.checks) want_wav = want_wav || c.wav;
+    sc::AudioMeter meter(want_wav);
+    std::vector<int16_t> pcm_buf(4096);
 
     std::printf("scenario %s: %s\n", scenario.name.c_str(), scenario.description.c_str());
     Results total;
@@ -230,12 +261,26 @@ int main(int argc, char** argv) {
     auto result = host->run([&](uint64_t frame) {
         pad.frame = static_cast<int64_t>(frame);
         last_frame = pad.frame;
+        for (;;) {  // everything the SPU produced during this video frame
+            std::size_t n = host->machine().spu().drain_samples(pcm_buf);
+            meter.add_frame(std::span<const int16_t>(pcm_buf.data(), n * 2));
+            if (n < pcm_buf.size() / 2) break;
+        }
         while (next < scenario.checks.size() && pad.frame >= scenario.checks[next].at)
-            evaluate(opt, scenario, scenario.checks[next++], *host, total);
+            evaluate(opt, scenario, scenario.checks[next++], *host, total, meter);
         if (next >= scenario.checks.size() && pad.frame >= scenario.frames) dw3::host::Host::stop();
     });
     double secs = std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
 
+    std::printf("  audio: %llu frames generated, %llu XA sectors decoded, ring overruns %llu, XA fifo %zu queued / %llu dropped\n",
+                static_cast<unsigned long long>(host->machine().spu().frames_generated()),
+                static_cast<unsigned long long>(host->machine().xa().sectors()),
+                static_cast<unsigned long long>(host->machine().spu().audio().overruns()),
+                host->machine().xa().queued(), static_cast<unsigned long long>(host->machine().xa().fifo().overruns()));
+    if (!opt.wav.empty()) {
+        if (sc::write_wav(opt.wav, meter.all())) std::printf("  audio %s (%zu frames)\n", opt.wav.c_str(), meter.all().size() / 2);
+        else std::printf("  cannot write %s\n", opt.wav.c_str());
+    }
     bool broken = false;
     if (result.end == dw3::host::RunResult::End::Fatal) {
         std::printf("  FAIL runtime fatal at frame %lld: %s\n", static_cast<long long>(last_frame),

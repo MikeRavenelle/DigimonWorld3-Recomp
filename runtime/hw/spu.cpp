@@ -1,9 +1,14 @@
-// SPU register-level model. Register semantics follow psx-spx "Sound Processing Unit (SPU)".
+// SPU model. Register semantics and DSP behaviour follow psx-spx "Sound Processing Unit (SPU)"
+// (https://psx-spx.consoledev.net/); details psx-spx leaves open follow PCSX-Redux and Beetle PSX / Mednafen
+// (both GPL-2.0-or-later).
 
 #include "dw3/spu.h"
 
+#include <algorithm>
 
 namespace dw3 {
+
+using namespace spu_dsp;
 
 Spu::Spu(Bus& bus, IrqController& irq, Dma& dma) : irq_(irq), ram_(kRamSize, 0) {
     bus.map_io({kBase, kSize,
@@ -34,13 +39,24 @@ uint16_t Spu::read16(uint32_t off) {
             if (mode == 2) s |= 1u << 8;   // DMA write request
             if (mode == 3) s |= 1u << 9;   // DMA read request
             if (mode >= 2) s |= 1u << 7;   // DMA R/W request
-            return static_cast<uint16_t>(s | (regs_[kSpuStat >> 1] & (1u << 6)));  // bit 6: IRQ9 flag
+            s |= regs_[kSpuStat >> 1] & (1u << 6);               // bit 6: IRQ9 flag
+            if (capture_pos_ >= 0x100) s |= 1u << 11;            // capture buffers: second half being written
+            return static_cast<uint16_t>(s);
         }
         case kTransferFifo: return read_ram16();
-        case kEndx: return static_cast<uint16_t>(~voices_on_ & 0xFFFF);
-        case kEndx + 2: return static_cast<uint16_t>((~voices_on_ >> 16) & 0xFF);
-        default: return regs_[off >> 1];
+        case kEndx: return static_cast<uint16_t>(endx_ & 0xFFFF);
+        case kEndx + 2: return static_cast<uint16_t>((endx_ >> 16) & 0xFF);
+        case kMainVolXL: return static_cast<uint16_t>(main_vol_[0].level);
+        case kMainVolXR: return static_cast<uint16_t>(main_vol_[1].level);
+        default: break;
     }
+    if (off < 0x180) {
+        const Voice& v = voices_[off >> 4];
+        if ((off & 0xF) == 0xC) return static_cast<uint16_t>(v.level);  // ENVX
+    } else if (off >= kVoiceVolX && off < kVoiceVolX + kVoices * 4) {
+        return static_cast<uint16_t>(voices_[(off - kVoiceVolX) >> 2].vol[(off >> 1) & 1].level);
+    }
+    return regs_[off >> 1];
 }
 
 void Spu::write16(uint32_t off, uint16_t v) {
@@ -49,14 +65,28 @@ void Spu::write16(uint32_t off, uint16_t v) {
     switch (off) {
         case kTransferAddr: transfer_addr_ = static_cast<uint32_t>(v) * 8; break;
         case kTransferFifo: write_ram16(v); break;
-        case kKeyOn: voices_on_ |= v; break;
-        case kKeyOn + 2: voices_on_ |= static_cast<uint32_t>(v & 0xFF) << 16; break;
-        case kKeyOff: voices_on_ &= ~static_cast<uint32_t>(v); break;
-        case kKeyOff + 2: voices_on_ &= ~(static_cast<uint32_t>(v & 0xFF) << 16); break;
+        case kKeyOn: key_on(v); break;
+        case kKeyOn + 2: key_on(static_cast<uint32_t>(v & 0xFF) << 16); break;
+        case kKeyOff: key_off(v); break;
+        case kKeyOff + 2: key_off(static_cast<uint32_t>(v & 0xFF) << 16); break;
         case kSpuCnt:
             if (!(v & (1u << 6))) regs_[kSpuStat >> 1] &= ~(1u << 6);  // IRQ9 enable cleared -> ack
             break;
-        default: break;
+        case kMainVolL: main_vol_[0].write(v); break;
+        case kMainVolR: main_vol_[1].write(v); break;
+        case kReverbStart: reverb_.set_start(static_cast<uint32_t>(v) * 8); break;
+        default:
+            if (off < 0x180) {
+                Voice& vc = voices_[off >> 4];
+                switch ((off & 0xF) >> 1) {
+                    case 0: vc.vol[0].write(v); break;
+                    case 1: vc.vol[1].write(v); break;
+                    case 6: vc.level = static_cast<int16_t>(v); break;  // ENVX: jump the envelope
+                    case 7: vc.repeat = (static_cast<uint32_t>(v) * 8) & (kRamSize - 1); break;
+                    default: break;
+                }
+            }
+            break;
     }
 }
 
@@ -97,5 +127,6 @@ void Spu::dma_read(std::span<uint32_t> out) {
         w = lo | (static_cast<uint32_t>(read_ram16()) << 16);
     }
 }
+
 
 }  // namespace dw3

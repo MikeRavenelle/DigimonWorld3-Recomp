@@ -11,8 +11,8 @@
 // Memory cards: the card functions (A0:AB/AC, B0:4E/4F) and the "bu00:"/"bu10:" file functions operate
 // directly on the images attached to Sio (see Sio::card_data), using dw3/memcard.h for the filesystem.
 // Operations complete immediately; their completion events (SwCARD then HwCARD) are delivered later.
-// Event/DIRENTRY details follow psx-spx "BIOS Memory Card Functions"/"BIOS File Functions", cross-checked
-// against PCSX-Redux's HLE BIOS and OpenBIOS (GPL-2+/MIT); no code was copied.
+// Event/DIRENTRY details follow psx-spx "BIOS Memory Card Functions"/"BIOS File Functions",
+// PCSX-Redux HLE BIOS and OpenBIOS (GPL-2+/MIT).
 
 #include <array>
 #include <cstdint>

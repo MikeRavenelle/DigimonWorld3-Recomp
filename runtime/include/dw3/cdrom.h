@@ -3,9 +3,8 @@
 // CD-ROM controller at 0x1F801800-0x1F801803 (index-multiplexed registers, parameter/response/data FIFOs,
 // command set, sector streaming, XA routing, DMA channel 3).
 //
-// Behaviour follows the psx-spx CD-ROM Drive documentation. Command semantics, the XA routing rule
-// ((submode & 0x44) == 0x44 with Mode.XA) and the INT1-drop-on-overrun policy were cross-checked against
-// the approach of PCSX-Redux (GPL-2+) and Beetle PSX / Mednafen (GPL-2+); no code was copied.
+// Behaviour follows psx-spx CD-ROM Drive documentation; cross-checked against PCSX-Redux and
+// Beetle PSX / Mednafen (GPL-2+).
 //
 // The disc is reached only through SectorSource so the runtime does not depend on the disc library.
 

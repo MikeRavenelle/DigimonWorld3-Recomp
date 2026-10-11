@@ -25,6 +25,7 @@
 #include "dw3/spu.h"
 #include "dw3/timers.h"
 #include "dw3/video_timing.h"
+#include "dw3/xa.h"
 
 namespace dw3 {
 
@@ -50,6 +51,7 @@ public:
     Gpu& gpu() { return gpu_; }
     Cdrom& cdrom() { return cdrom_; }
     Spu& spu() { return spu_; }
+    XaDecoder& xa() { return xa_; }
     Sio& sio() { return sio_; }
     Mdec& mdec() { return mdec_; }
     RecompContext& ctx() { return bus_.ctx(); }
@@ -107,6 +109,7 @@ private:
     Gpu gpu_;
     Cdrom cdrom_;
     Spu spu_;
+    XaDecoder xa_;
     Sio sio_;
     Mdec mdec_;
     SoftRasterizer soft_raster_;

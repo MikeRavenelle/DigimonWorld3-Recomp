@@ -30,10 +30,15 @@
 //   max_hash_distance = 24     # allowed Hamming distance (default 24)
 //   ram = [{ addr = 0x800A0000, size = 4, value = 1 }]
 //   screenshot = true          # save BMP of the display (for review; never committed)
+//   audio_min_rms = 100.0      # RMS (int16 units, both channels) of the mixed output over the last `audio_frames` video frames
+//   audio_max_rms = 20000.0
+//   audio_frames = 60          # window length in video frames (default 60)
+//   wav = true                 # save that audio window as <out>/<name>/<at>_<label>.wav (never committed)
 
 #include <array>
 #include <cstdint>
 #include <optional>
+#include <span>
 #include <string>
 #include <vector>
 
@@ -61,6 +66,9 @@ struct Check {
     int max_hash_distance = 24;
     std::vector<RamCheck> ram;
     bool screenshot = false;
+    std::optional<double> audio_min_rms, audio_max_rms;
+    int audio_frames = 60;
+    bool wav = false;
 };
 
 struct Scenario {
@@ -80,6 +88,33 @@ Scenario load(const std::string& path);
 Scenario parse(const std::string& toml_text, const std::string& source_name = "<string>");
 
 uint16_t button_from_name(const std::string& name);  // 0 if unknown
+
+// Collects the mixed audio of each video frame and answers windowed RMS queries.
+class AudioMeter {
+public:
+    explicit AudioMeter(bool keep_samples = false) : keep_(keep_samples) {}
+    // Adds one video frame's worth of interleaved stereo int16 samples (may be empty).
+    void add_frame(std::span<const int16_t> interleaved);
+    std::size_t frames() const { return blocks_.size(); }  // video frames added
+    // RMS over the last n video frames (all if fewer); 0 if no samples.
+    double rms(int n) const;
+    // Samples of the last n video frames (needs keep_samples).
+    std::vector<int16_t> window(int n) const;
+    const std::vector<int16_t>& all() const { return samples_; }
+
+private:
+    struct Block {
+        double sum_sq = 0;
+        std::size_t count = 0, first = 0;  // samples (not frames); first = offset into samples_
+    };
+    bool keep_;
+    std::vector<Block> blocks_;
+    std::vector<int16_t> samples_;
+};
+
+// 44-byte-header PCM WAV (16-bit stereo) bytes / file writer.
+std::vector<uint8_t> wav_bytes(std::span<const int16_t> interleaved_stereo, uint32_t sample_rate = 44100);
+bool write_wav(const std::string& path, std::span<const int16_t> interleaved_stereo, uint32_t sample_rate = 44100);
 
 // Buttons held at `frame` (including the automatic intro skip).
 uint16_t buttons_at(const Scenario& s, int64_t frame);
