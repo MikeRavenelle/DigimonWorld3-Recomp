@@ -48,11 +48,12 @@ protected:
     Osd osd_;
 };
 
-enum class RendererChoice { Auto, Gpu, Software };
+enum class RendererChoice { Auto, Gpu, Vulkan, D3D12, Software };
 
-// Creates the window and the requested presenter for it. The GPU path needs a Vulkan-capable window; Auto tries
-// it first and falls back to a plain window with the software path. `log` receives diagnostics. Returns null if
-// no path works.
+// Creates the window and the requested presenter for it. Auto tries the GPU renderer on each graphics API the
+// platform offers (Direct3D 12, then Vulkan, on Windows; Vulkan elsewhere) and falls back to a plain window with
+// the software path; Gpu does the same without the fallback; Vulkan and D3D12 try only that API. `log` receives
+// diagnostics. Returns null if no path works.
 std::unique_ptr<Presenter> create_presenter(const char* title, int width, int height, RendererChoice choice,
                                             const PresentOptions& options, void (*log)(const std::string&),
                                             SDL_Window*& window);

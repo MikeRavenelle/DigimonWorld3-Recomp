@@ -1,9 +1,25 @@
 #include "native_window.h"
 
 #include <SDL3/SDL.h>
+#ifndef _WIN32
 #include <SDL3/SDL_vulkan.h>
+#endif
 
 namespace dw3app {
+
+#ifdef _WIN32
+
+// On Windows both backends present straight to the window handle.
+dw3::NativeWindow describe_window(SDL_Window* window) {
+    dw3::NativeWindow w;
+    w.user = window;
+    w.hwnd = SDL_GetPointerProperty(SDL_GetWindowProperties(window), SDL_PROP_WINDOW_WIN32_HWND_POINTER, nullptr);
+    return w;
+}
+
+std::vector<std::string> required_instance_extensions() { return {}; }
+
+#else
 
 namespace {
 
@@ -40,5 +56,7 @@ std::vector<std::string> required_instance_extensions() {
     for (Uint32 i = 0; names && i < count; ++i) out.emplace_back(names[i]);
     return out;
 }
+
+#endif
 
 }  // namespace dw3app

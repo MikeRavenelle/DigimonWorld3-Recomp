@@ -13,8 +13,9 @@
 //                      from frame F for N frames (default 6)
 //   --intro            with --frames, do not press START at frame 300 (by default audit runs skip the intro)
 //   --uncapped         do not pace to real time (always on with --frames)
-//   --renderer R       auto (default: the plume GPU renderer, falling back to software if it cannot start),
-//                      vulkan (alias gpu; no fallback) or software (CPU rasterizer shown through an SDL renderer)
+//   --renderer R       auto (default: the plume GPU renderer, falling back to software if it cannot start; on Windows
+//                      Direct3D 12 first, then Vulkan), gpu (the same without the software fallback), vulkan or d3d12
+//                      (that API only), or software (CPU rasterizer shown through an SDL renderer)
 //   --internal-res N   GPU renderer internal resolution multiplier, 1 (default) to 8
 //   --true-color       GPU renderer: no dithering, full 8-bit shading and blending on screen (game-visible VRAM unchanged)
 //   --precise-geometry GPU renderer: sub-pixel 3D vertices and perspective-correct textures from the GTE's projections
@@ -165,7 +166,9 @@ Options parse(int argc, char** argv) {
         else if (a == "--renderer" && i + 1 < argc) {
             std::string v = argv[++i];
             if (v == "auto") o.renderer = dw3app::RendererChoice::Auto;
-            else if (v == "gpu" || v == "vulkan") o.renderer = dw3app::RendererChoice::Gpu;
+            else if (v == "gpu") o.renderer = dw3app::RendererChoice::Gpu;
+            else if (v == "vulkan") o.renderer = dw3app::RendererChoice::Vulkan;
+            else if (v == "d3d12") o.renderer = dw3app::RendererChoice::D3D12;
             else if (v == "software") o.renderer = dw3app::RendererChoice::Software;
             else {
                 std::fprintf(stderr, "bad --renderer %s\n", v.c_str());

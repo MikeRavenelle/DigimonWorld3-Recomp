@@ -2,6 +2,8 @@
 
 #include <SDL3/SDL.h>
 
+#include <vector>
+
 #include "hw_presenter.h"
 #include "software_presenter.h"
 
@@ -14,19 +16,35 @@ std::unique_ptr<Presenter> create_presenter(const char* title, int width, int he
                                             SDL_Window*& window) {
     std::string error;
     window = nullptr;
-    if (choice != RendererChoice::Software) {
-        window = SDL_CreateWindow(title, width, height, SDL_WINDOW_RESIZABLE | SDL_WINDOW_VULKAN);
+    std::vector<dw3::GraphicsApi> apis;
+    const bool software_only = choice == RendererChoice::Software;
+    if (choice == RendererChoice::Vulkan) apis = {dw3::GraphicsApi::Vulkan};
+    else if (choice == RendererChoice::D3D12) apis = {dw3::GraphicsApi::D3D12};
+    else if (!software_only) {
+#ifdef _WIN32
+        apis = {dw3::GraphicsApi::D3D12, dw3::GraphicsApi::Vulkan};
+#else
+        apis = {dw3::GraphicsApi::Vulkan};
+#endif
+    }
+    for (const dw3::GraphicsApi api : apis) {
+        // A window that has had a swap chain of one API cannot get one of another, so every attempt has its own.
+        SDL_WindowFlags flags = SDL_WINDOW_RESIZABLE;
+#ifndef _WIN32
+        flags |= SDL_WINDOW_VULKAN;
+#endif
+        window = SDL_CreateWindow(title, width, height, flags);
         if (window) {
-            if (auto gpu = HwPresenter::create(window, options, error)) return gpu;
+            if (auto gpu = HwPresenter::create(window, api, options, error)) return gpu;
             SDL_DestroyWindow(window);
             window = nullptr;
         } else {
-            error = std::string("no Vulkan-capable window: ") + SDL_GetError();
+            error = std::string("window creation failed: ") + SDL_GetError();
         }
-        log("GPU renderer unavailable: " + error);
-        if (choice == RendererChoice::Gpu) return nullptr;
-        log("falling back to the software presentation path");
+        log(std::string(api == dw3::GraphicsApi::D3D12 ? "Direct3D 12" : "Vulkan") + " renderer unavailable: " + error);
     }
+    if (choice != RendererChoice::Auto && choice != RendererChoice::Software) return nullptr;
+    if (!software_only) log("falling back to the software presentation path");
     window = SDL_CreateWindow(title, width, height, SDL_WINDOW_RESIZABLE);
     if (!window) {
         log(std::string("window creation failed: ") + SDL_GetError());
