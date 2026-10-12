@@ -1,0 +1,150 @@
+name = "endgame_card_shop"
+description = "From the late-game save in Amaterasu Inn go through the Underground Path and Central Sector to the AM Yellow Cruiser and open its card shop (STCRDSHP)."
+start_state = "endgame.state"   # written by endgame_state.toml
+start_frame = 1300
+frames = 3300
+include = ["common/endgame_to_central.toml"]
+memcard = "game:memcards/endgame.mcd"   # personal save data under the game directory; skipped when absent
+skip_intro = false
+
+# The Amaterasu maps mirror the Asuka ones. Map ids (word 0x800554D4) seen on the way:
+#   0x270 Amaterasu Inn 1F, 0x291 Underground Path, 0x1FE Amaterasu City Central Sector (the east half), 0x31A AM Yellow Cruiser
+# Game mode 0x800554D0: 2 field, 0x13 card shop. The overlay slot at 0x80082448 starts with 0x80083C50 while the card shop
+# (STCRDSHP) is loaded and with 0x8008315C for the field (FIELDSTG).
+#
+# The route up to Central Sector is common/endgame_to_central.toml.
+
+# Central Sector: to the Yellow Cruiser door at the north end of the street.
+[[press]]
+button = "RIGHT"
+at = 2110
+hold = 80
+
+[[press]]
+button = "RIGHT"
+at = 2192
+hold = 80
+
+[[press]]
+button = "UP"
+at = 2274
+hold = 60
+
+[[press]]
+button = "LEFT"
+at = 2274
+hold = 60
+
+[[press]]
+button = "LEFT"
+at = 2336
+hold = 60
+
+[[press]]
+button = "UP"
+at = 2398
+hold = 60
+
+[[press]]
+button = "RIGHT"
+at = 2398
+hold = 60
+
+[[repeat]]
+button = "CROSS"
+from = 2398
+to = 2458
+every = 10
+
+[[wait]]
+at = 2460
+label = "AM Yellow Cruiser"
+ram = [{ addr = 0x800554D4, size = 4, value = 0x31A }, { addr = 0x800554D0, size = 4, value = 2 },
+       { via = 0x8004ADC0, addr = 0x58, size = 4, value = 0, cmp = "ne" }]
+timeout = 900
+press = "CROSS"
+every = 10
+press_hold = 3
+
+[[wait]]
+at = 2462
+label = "Yellow Cruiser settled"
+ram = [{ addr = 0x80099114, size = 4, value = 0 }]
+timeout = 900
+
+[[check]]
+at = 2650
+label = "Yellow Cruiser"
+display_enabled = true
+ram = [{ addr = 0x800554D4, size = 4, value = 0x31A }]
+screen_hash = "fde238fc10700000f9dcf0f1ffe0fe2088397ffffffefdec000000000036007e"
+screenshot = true
+
+# Yellow Cruiser: to Divermon behind the counter; CROSS talks to him and then picks "Open"/shop.
+[[press]]
+button = "LEFT"
+at = 2564
+hold = 90
+
+[[press]]
+button = "DOWN"
+at = 2656
+hold = 30
+
+[[press]]
+button = "DOWN"
+at = 2688
+hold = 70
+
+[[press]]
+button = "RIGHT"
+at = 2688
+hold = 70
+
+[[press]]
+button = "UP"
+at = 2760
+hold = 50
+
+[[press]]
+button = "UP"
+at = 2812
+hold = 50
+
+[[press]]
+button = "RIGHT"
+at = 2812
+hold = 50
+
+[[press]]
+button = "UP"
+at = 2864
+hold = 50
+
+[[press]]
+button = "LEFT"
+at = 2864
+hold = 50
+
+[[repeat]]
+button = "CROSS"
+from = 2864
+to = 2914
+every = 10
+
+[[wait]]
+at = 2872
+label = "card shop"
+ram = [{ addr = 0x800554D0, size = 4, value = 0x13 }, { addr = 0x80082448, size = 4, value = 0x80083C50 }]
+timeout = 900
+press = "CROSS"
+every = 30
+press_hold = 3
+
+[[check]]
+at = 3100
+label = "card shop menu"
+display_enabled = true
+ram = [{ addr = 0x800554D0, size = 4, value = 0x13 }]
+screen_hash = "098c783efe7fce73ce7304730f0c0f8c318c318c318cce6300427a7332734621"
+screenshot = true

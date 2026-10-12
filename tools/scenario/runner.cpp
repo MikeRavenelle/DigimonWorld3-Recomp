@@ -1,6 +1,6 @@
 // dw3scenario: headless in-game scenario runner.
 //
-//   dw3scenario <file.toml> [--disc PATH] [--state-dir DIR] [--record] [--out DIR] [--wav PATH] [--no-xa] [--watch ADDR[:SIZE]]... [--dump FRAME:PATH]...
+//   dw3scenario <file.toml> [--disc PATH] [--game-dir DIR] [--state-dir DIR] [--record] [--out DIR] [--wav PATH] [--no-xa] [--watch ADDR[:SIZE]]... [--dump FRAME:PATH]...
 //
 // Boots the recompiled game with the scenario's scripted pad on port 1 (no window, no SDL, uncapped), evaluates
 // every check at its frame and writes BMPs of the display to <out>/<name>/<at>_<label>.bmp for checks with
@@ -14,7 +14,7 @@
 // [[savestate]] / [[loadstate]] / start_state entries (see scenario.h) read and write save states under --state-dir
 // (default game/audit/states); relative state paths are resolved against it.
 //
-// Exit codes: 0 all checks pass, 1 failure, 2 usage/scenario error, 77 disc missing (ctest SKIP).
+// Exit codes: 0 all checks pass, 1 failure, 2 usage/scenario error, 77 disc missing (ctest SKIP); the same for a missing "game:" memory card image.
 
 #include <algorithm>
 #include <cctype>
@@ -23,6 +23,7 @@
 #include <cstring>
 #include <filesystem>
 #include <fstream>
+#include <iterator>
 #include <map>
 #include <span>
 #include <string>
@@ -40,6 +41,7 @@ namespace sc = dw3::scenario;
 struct Options {
     std::string file;
     std::string disc = std::string(DW3_SOURCE_DIR) + "/game/Digimon World 3 (USA).cue";
+    std::string game_dir;  // --game-dir: base of "game:" memory card paths (default: the disc's directory)
     std::string out = std::string(DW3_SOURCE_DIR) + "/game/audit/scenarios";
     std::string state_dir = std::string(DW3_SOURCE_DIR) + "/game/audit/states";
     bool record = false;
@@ -247,6 +249,7 @@ int main(int argc, char** argv) {
     for (int i = 1; i < argc; ++i) {
         std::string a = argv[i];
         if (a == "--disc" && i + 1 < argc) opt.disc = argv[++i];
+        else if (a == "--game-dir" && i + 1 < argc) opt.game_dir = argv[++i];
         else if (a == "--out" && i + 1 < argc) opt.out = argv[++i];
         else if (a == "--state-dir" && i + 1 < argc) opt.state_dir = argv[++i];
         else if (a == "--record") opt.record = true;
@@ -286,12 +289,12 @@ int main(int argc, char** argv) {
         }
         else if (!a.empty() && a[0] != '-' && opt.file.empty()) opt.file = a;
         else {
-            std::fprintf(stderr, "usage: dw3scenario <file.toml> [--disc PATH] [--state-dir DIR] [--record] [--out DIR] [--wav PATH] [--no-xa] [--watch ADDR[:SIZE]] [--dump FRAME:PATH]\n");
+            std::fprintf(stderr, "usage: dw3scenario <file.toml> [--disc PATH] [--game-dir DIR] [--state-dir DIR] [--record] [--out DIR] [--wav PATH] [--no-xa] [--watch ADDR[:SIZE]] [--dump FRAME:PATH]\n");
             return 2;
         }
     }
     if (opt.file.empty()) {
-        std::fprintf(stderr, "usage: dw3scenario <file.toml> [--disc PATH] [--state-dir DIR] [--record] [--out DIR] [--wav PATH] [--no-xa] [--watch ADDR[:SIZE]] [--dump FRAME:PATH]\n");
+        std::fprintf(stderr, "usage: dw3scenario <file.toml> [--disc PATH] [--game-dir DIR] [--state-dir DIR] [--record] [--out DIR] [--wav PATH] [--no-xa] [--watch ADDR[:SIZE]] [--dump FRAME:PATH]\n");
         return 2;
     }
     sc::Scenario scenario;
@@ -307,12 +310,30 @@ int main(int argc, char** argv) {
         return 77;
     }
 
+    if (opt.game_dir.empty()) opt.game_dir = std::filesystem::path(opt.disc).parent_path().string();
     dw3::host::Config cfg;
     cfg.disc_path = opt.disc;
     cfg.disc_index_cache = (std::filesystem::path(opt.state_dir) / "disc.index").string();
     if (scenario.memcard == "none") cfg.card_mode = dw3::host::CardMode::None;
     else if (scenario.memcard == "blank") cfg.card_mode = dw3::host::CardMode::Blank;
-    else {
+    else if (scenario.memcard.rfind("game:", 0) == 0) {
+        std::filesystem::path card = std::filesystem::path(opt.game_dir) / scenario.memcard.substr(5);
+        std::ifstream f(card, std::ios::binary);
+        if (!f) {
+            std::printf("SKIP: memory card image not found: %s\n", card.string().c_str());
+            return 77;
+        }
+        cfg.blank_card.assign(std::istreambuf_iterator<char>(f), std::istreambuf_iterator<char>());
+        if (cfg.blank_card.size() != 128 * 1024) {
+            std::fprintf(stderr, "scenario error: %s is not a 128 KiB card image\n", card.string().c_str());
+            return 2;
+        }
+        // Images converted from DexDrive files can leave the header frame's checksum at zero, which the game's card
+        // library rejects as an unformatted card. Repair it in memory (the file itself is never touched).
+        auto& img = cfg.blank_card;
+        if (img[0] == 'M' && img[1] == 'C' && img[127] == 0) img[127] = static_cast<uint8_t>('M' ^ 'C');
+        cfg.card_mode = dw3::host::CardMode::Blank;
+    } else {
         std::fprintf(stderr, "scenario error: unknown memcard \"%s\"\n", scenario.memcard.c_str());
         return 2;
     }
