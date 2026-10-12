@@ -1,6 +1,6 @@
 #pragma once
 
-// GPU renderer built on the plume render hardware interface (Vulkan backend). It implements the same Rasterizer
+// GPU renderer built on the plume render hardware interface (Vulkan and Direct3D 12 backends). It implements the same Rasterizer
 // interface as the software rasterizer and keeps the 1024x512 VRAM as a GPU texture, so primitives are drawn on
 // the GPU and the CLUT/texture lookups, blending, dithering and mask handling run in the fragment shader.
 //
@@ -45,8 +45,10 @@
 
 namespace dw3 {
 
-// A window to present to, described by callbacks so that the windowing library supplies the Vulkan surface.
+// A window to present to. On Windows the native handle is enough; elsewhere the windowing library supplies the Vulkan
+// surface through callbacks.
 struct NativeWindow {
+    void* hwnd = nullptr;  // Windows: the HWND (used by both the Direct3D 12 and the Vulkan backend)
     void* user = nullptr;
     // Creates a VkSurfaceKHR for the given VkInstance and returns its handle (0 on failure).
     uint64_t (*create_surface)(void* user, void* vk_instance) = nullptr;
@@ -56,9 +58,13 @@ struct NativeWindow {
 
 enum class TextureFilter { Nearest, Bilinear, Xbr };
 
+// The graphics API the renderer runs on. Direct3D 12 exists on Windows builds only.
+enum class GraphicsApi { Vulkan, D3D12 };
+
 // Display options that add precision or smoothing on top of the exact PS1 output. The defaults leave the output
 // untouched.
 struct HwOptions {
+    GraphicsApi api = GraphicsApi::Vulkan;
     bool true_color = false;                           // no dithering, full precision shading and blending
     TextureFilter filter = TextureFilter::Nearest;     // bilinear for triangles, xBR for sprites (internal res > 1)
     // Triangles whose vertices carry GTE sub-pixel positions (GpuVertex::precise) are drawn on a float path:
@@ -121,6 +127,9 @@ public:
     // Reads the colour that is shown for a native-pixel region of the scaled target (display layer where valid,
     // else the exact colour), (w*N) x (h*N) pixels as RGBA8. For tests and diagnostics.
     bool read_display(const VramRect& r, std::vector<uint32_t>& rgba);
+
+    // True if this build contains the backend for `api`.
+    static bool api_compiled_in(GraphicsApi api);
 
     int internal_scale() const;
     const HwStats& stats() const;

@@ -1,5 +1,6 @@
-// Tests for the shader blobs and, when a Vulkan device is available, a comparison of the GPU renderer against the
-// software rasterizer on the same primitives.
+// Tests for the shader blobs and, when a GPU device is available, a comparison of the GPU renderer against the
+// software rasterizer on the same primitives. The comparison runs on every graphics API the build contains (Vulkan,
+// and Direct3D 12 on Windows); all of them must produce the software rasterizer's pixels.
 
 #include <gtest/gtest.h>
 
@@ -7,7 +8,9 @@
 #include <cmath>
 #include <cstdint>
 #include <cstring>
+#include <ostream>
 #include <random>
+#include <string>
 #include <vector>
 
 #include "dw3/soft_rasterizer.h"
@@ -22,6 +25,17 @@
 #include "shaders/psx_draw.frag.h"
 #include "shaders/psx_draw_layer.frag.h"
 #include "shaders/psx_draw.vert.h"
+#ifdef DW3_HAVE_D3D12
+#include "shaders/osd.frag.dxil.h"
+#include "shaders/osd.vert.dxil.h"
+#include "shaders/present.frag.dxil.h"
+#include "shaders/present.vert.dxil.h"
+#include "shaders/psx_draw.frag.dxil.h"
+#include "shaders/psx_draw_layer.frag.dxil.h"
+#include "shaders/psx_draw.vert.dxil.h"
+#include "shaders/vram_copy.frag.dxil.h"
+#include "shaders/vram_copy.vert.dxil.h"
+#endif
 
 namespace {
 
@@ -45,11 +59,60 @@ TEST(Shaders, CompiledToSpirv) {
     EXPECT_TRUE(is_spirv(osd_frag_spv, osd_frag_spv_size));
 }
 
+#ifdef DW3_HAVE_D3D12
+namespace {
+bool is_dxil(const uint8_t* data, std::size_t size) { return size > 4 && std::memcmp(data, "DXBC", 4) == 0; }
+}  // namespace
+
+TEST(Shaders, CompiledToDxil) {
+    using namespace dw3::shaders;
+    EXPECT_TRUE(is_dxil(psx_draw_vert_dxil, psx_draw_vert_dxil_size));
+    EXPECT_TRUE(is_dxil(psx_draw_frag_dxil, psx_draw_frag_dxil_size));
+    EXPECT_TRUE(is_dxil(psx_draw_layer_frag_dxil, psx_draw_layer_frag_dxil_size));
+    EXPECT_TRUE(is_dxil(present_vert_dxil, present_vert_dxil_size));
+    EXPECT_TRUE(is_dxil(present_frag_dxil, present_frag_dxil_size));
+    EXPECT_TRUE(is_dxil(osd_vert_dxil, osd_vert_dxil_size));
+    EXPECT_TRUE(is_dxil(osd_frag_dxil, osd_frag_dxil_size));
+    EXPECT_TRUE(is_dxil(vram_copy_vert_dxil, vram_copy_vert_dxil_size));
+    EXPECT_TRUE(is_dxil(vram_copy_frag_dxil, vram_copy_frag_dxil_size));
+}
+#endif
+
 namespace {
 
 using namespace dw3;
 
 constexpr int kPixels = kVramWidth * kVramHeight;
+
+// Test parameter: the graphics API and the internal resolution. It converts to the resolution so that the tests can
+// use it as one.
+struct GpuParam {
+    GraphicsApi api;
+    int scale;
+    operator int() const { return scale; }
+};
+
+const char* api_name(GraphicsApi api) { return api == GraphicsApi::D3D12 ? "D3D12" : "Vulkan"; }
+
+void PrintTo(const GpuParam& p, std::ostream* os) { *os << api_name(p.api) << " " << p.scale << "x"; }
+
+std::string gpu_param_name(const ::testing::TestParamInfo<GpuParam>& info) {
+    return std::string(api_name(info.param.api)) + "_" + std::to_string(info.param.scale) + "x";
+}
+
+// Every compiled-in graphics API at each of the given internal resolutions.
+std::vector<GpuParam> gpu_params(std::initializer_list<int> scales) {
+    std::vector<GpuParam> out;
+    for (GraphicsApi api : {GraphicsApi::Vulkan, GraphicsApi::D3D12})
+        if (HwRenderer::api_compiled_in(api))
+            for (int scale : scales) out.push_back({api, scale});
+    return out;
+}
+
+std::unique_ptr<HwRenderer> create_renderer(const GpuParam& p, std::string& error, HwOptions options = {}) {
+    options.api = p.api;
+    return HwRenderer::create(nullptr, {}, error, p.scale, options);
+}
 
 struct Scene {
     std::vector<uint16_t> vram;
@@ -100,12 +163,12 @@ Diff compare(const std::vector<uint16_t>& a, const std::vector<uint16_t>& b) {
     return d;
 }
 
-class HwCompare : public ::testing::TestWithParam<int> {
+class HwCompare : public ::testing::TestWithParam<GpuParam> {
 protected:
     void SetUp() override {
         std::string error;
-        hw = HwRenderer::create(nullptr, {}, error, GetParam());
-        if (!hw) GTEST_SKIP() << "no Vulkan device: " << error;
+        hw = create_renderer(GetParam(), error);
+        if (!hw) GTEST_SKIP() << "no GPU device: " << error;
     }
 
     // Runs `draw` against both rasterizers starting from the same VRAM and returns the difference.
@@ -444,8 +507,8 @@ TEST_P(HwVramOps, ManyFramesOfWorkStayCorrect) {
     EXPECT_EQ(mismatches(), 0);
 }
 
-INSTANTIATE_TEST_SUITE_P(InternalRes, HwCompare, ::testing::Values(1, 2, 3, 4));
-INSTANTIATE_TEST_SUITE_P(InternalRes, HwVramOps, ::testing::Values(1, 2, 3, 4));
+INSTANTIATE_TEST_SUITE_P(InternalRes, HwCompare, ::testing::ValuesIn(gpu_params({1, 2, 3, 4})), gpu_param_name);
+INSTANTIATE_TEST_SUITE_P(InternalRes, HwVramOps, ::testing::ValuesIn(gpu_params({1, 2, 3, 4})), gpu_param_name);
 
 // Tests that look at the scaled image itself (internal resolution above 1).
 class HwScaled : public HwCompare {
@@ -609,7 +672,7 @@ TEST_P(HwScaled, SemiTransparencyAndMaskWorkPerSubpixel) {
     EXPECT_EQ(marked, 32 * 64);
 }
 
-INSTANTIATE_TEST_SUITE_P(InternalRes, HwScaled, ::testing::Values(2, 3, 4, 8));
+INSTANTIATE_TEST_SUITE_P(InternalRes, HwScaled, ::testing::ValuesIn(gpu_params({2, 3, 4, 8})), gpu_param_name);
 
 // ---- display layer: true colour and texture filtering ---------------------------------------------------
 
@@ -621,13 +684,13 @@ uint32_t expand_word(uint16_t w) {
 int chan(uint32_t px, int c) { return static_cast<int>((px >> (8 * c)) & 255); }
 
 // Base of the display layer tests: a renderer with the given options, run against the software rasterizer.
-class HwLayerBase : public ::testing::TestWithParam<int> {
+class HwLayerBase : public ::testing::TestWithParam<GpuParam> {
 protected:
     virtual HwOptions options() const = 0;
     void SetUp() override {
         std::string error;
-        hw = HwRenderer::create(nullptr, {}, error, GetParam(), options());
-        if (!hw) GTEST_SKIP() << "no Vulkan device: " << error;
+        hw = create_renderer(GetParam(), error, options());
+        if (!hw) GTEST_SKIP() << "no GPU device: " << error;
         vram.assign(kPixels, 0);
         ref.assign(kPixels, 0);
         s.area_x2 = 319;
@@ -824,7 +887,7 @@ TEST_P(HwTrueColor, FillsAndUploadsOverEnhancedPixelsShowTheirExactColour) {
     }
 }
 
-INSTANTIATE_TEST_SUITE_P(InternalRes, HwTrueColor, ::testing::Values(1, 2, 4));
+INSTANTIATE_TEST_SUITE_P(InternalRes, HwTrueColor, ::testing::ValuesIn(gpu_params({1, 2, 4})), gpu_param_name);
 
 class HwBilinear : public HwLayerBase {
 protected:
@@ -943,7 +1006,7 @@ TEST_P(HwBilinear, SpritesAndTilesStayPixelExact) {
     EXPECT_EQ(differs_from_exact({100, 20, 40, 30}), 0);
 }
 
-INSTANTIATE_TEST_SUITE_P(InternalRes, HwBilinear, ::testing::Values(1, 2, 4));
+INSTANTIATE_TEST_SUITE_P(InternalRes, HwBilinear, ::testing::ValuesIn(gpu_params({1, 2, 4})), gpu_param_name);
 
 class HwXbr : public HwLayerBase {
 protected:
@@ -1005,7 +1068,7 @@ TEST_P(HwXbr, OpaqueSpriteEdgesAreNotEaten) {
     EXPECT_EQ(differs_from_exact({40, 40, 16, 16}), 0);
 }
 
-INSTANTIATE_TEST_SUITE_P(InternalRes, HwXbr, ::testing::Values(1, 4));
+INSTANTIATE_TEST_SUITE_P(InternalRes, HwXbr, ::testing::ValuesIn(gpu_params({1, 4})), gpu_param_name);
 
 // Without any display option the shown image is the exact image.
 TEST_P(HwCompare, DefaultOutputIsTheExactColour) {
@@ -1052,14 +1115,14 @@ TEST_P(HwCompare, PreciseVerticesAreIgnoredWithoutTheOption) {
     EXPECT_EQ(d.count, 0);
 }
 
-class HwPrecise : public ::testing::TestWithParam<int> {
+class HwPrecise : public ::testing::TestWithParam<GpuParam> {
 protected:
     void SetUp() override {
         std::string error;
         HwOptions o;
         o.precise_geometry = true;
-        hw = HwRenderer::create(nullptr, {}, error, GetParam(), o);
-        if (!hw) GTEST_SKIP() << "no Vulkan device: " << error;
+        hw = create_renderer(GetParam(), error, o);
+        if (!hw) GTEST_SKIP() << "no GPU device: " << error;
         vram.assign(kPixels, 0);
         s.area_x2 = 319;
         s.area_y2 = 239;
@@ -1202,7 +1265,7 @@ TEST_P(HwPrecise, TexelCoordinatesStayAffineWhenAVertexHasNoDepth) {
     EXPECT_NEAR(u, 15.5, 1.5);  // halfway along the top edge
 }
 
-INSTANTIATE_TEST_SUITE_P(InternalRes, HwPrecise, ::testing::Values(1, 4));
+INSTANTIATE_TEST_SUITE_P(InternalRes, HwPrecise, ::testing::ValuesIn(gpu_params({1, 4})), gpu_param_name);
 
 }  // namespace
 #endif  // DW3_HW_RENDERER
