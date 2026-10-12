@@ -112,8 +112,13 @@ game can read back or sample stays exact. The CPU-side VRAM array stays authorit
 regions. `--precise-geometry` adds sub-pixel vertices and perspective-correct texturing for polygons the GTE projected
 (RTPS/RTPT): the GTE records the position it had before truncating to integer SX/SY, keyed by the packed word, and the
 Gpu attaches it to polygon vertices that still carry that word, falling back to the integer otherwise. No generated
-code is involved, and with the option off nothing is recorded. Only the Vulkan backend on Linux is built; plume's Metal and D3D12 backends are enabled per platform in
-`cmake/Platform.cmake`. plume is fetched at a pinned commit with `cmake/patches/plume-vulkan.patch` applied.
+code is involved, and with the option off nothing is recorded. Linux builds use plume's Vulkan backend; Windows builds contain both Vulkan and Direct3D 12
+(`--renderer auto` prefers Direct3D 12 there). The shaders are written in GLSL and compiled to SPIR-V with glslang;
+for Direct3D 12 the SPIR-V is converted to HLSL with SPIRV-Cross and compiled to DXIL with DXC, and both forms are
+embedded and chosen by the backend at run time. Vertex inputs use `TEXCOORD<location>` semantics, which is what
+SPIRV-Cross emits, and vertex shaders are flipped in y for Direct3D's clip space. plume is fetched at a pinned commit
+with `cmake/patches/plume-vulkan.patch` and `cmake/patches/plume-d3d12.patch` applied. The renderer tests run against
+the software rasterizer on every backend the build contains, so all backends are held to the same pixels.
 
 ## Platforms
 
@@ -122,10 +127,14 @@ code is involved, and with the option off nothing is recorded. Only the Vulkan b
 | Linux x86_64 | primary | Vulkan |
 | macOS arm64 | second | Metal |
 | Linux arm64 | planned | Vulkan |
-| Windows x64 | planned | D3D12 / Vulkan |
+| Windows x64 | builds and runs (cross-compiled; see BUILDING.md) | D3D12 / Vulkan |
 
 Arch- and OS-specific code lives only in `runtime/platform` and `cmake/Platform.cmake`.
 Generated C is architecture-neutral.
+
+C++ exceptions cross generated C frames (a fatal error in a test, the stop request, a restored save state). On
+Windows the C++ code is therefore compiled with `/EHs`: `/EHsc` lets the compiler assume `extern "C"` functions never
+throw, and a `catch` around a call into the runtime's C interface is then skipped.
 
 ## Licensing
 
