@@ -1,10 +1,19 @@
 include(GoogleTest)
 
+# Paths given to a Windows test executable that runs under Wine: Wine maps the Linux root to drive Z:.
+function(dw3_test_path out path)
+    if(CMAKE_CROSSCOMPILING AND CMAKE_SYSTEM_NAME STREQUAL "Windows" AND path MATCHES "^/")
+        set(path "Z:${path}")
+    endif()
+    set(${out} "${path}" PARENT_SCOPE)
+endfunction()
+dw3_test_path(DW3_TEST_GAME_DIR "${DW3_GAME_DIR}")
+
 function(dw3_add_test name)
     cmake_parse_arguments(T "" "" "SOURCES;LIBS" ${ARGN})
     add_executable(${name} ${T_SOURCES})
     target_link_libraries(${name} PRIVATE ${T_LIBS} GTest::gtest_main)
-    target_compile_definitions(${name} PRIVATE DW3_GAME_DIR="${DW3_GAME_DIR}")
+    target_compile_definitions(${name} PRIVATE DW3_GAME_DIR="${DW3_TEST_GAME_DIR}")
     dw3_target_defaults(${name})
     if(CMAKE_CROSSCOMPILING)
         # The executable cannot be run at build time to list its tests; register it as a single test.
@@ -83,9 +92,11 @@ if(TARGET dw3scenario)
     file(GLOB DW3_SCENARIO_FILES CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/scenarios/*.toml")
     foreach(scenario_file ${DW3_SCENARIO_FILES})
         get_filename_component(scenario_name "${scenario_file}" NAME_WE)
+        dw3_test_path(scenario_arg "${scenario_file}")
+        dw3_test_path(state_dir_arg "${CMAKE_BINARY_DIR}/states")
         add_test(NAME scenario.${scenario_name}
-            COMMAND dw3scenario "${scenario_file}" --disc "${DW3_GAME_DIR}/Digimon World 3 (USA).cue"
-                    --state-dir "${CMAKE_BINARY_DIR}/states")
+            COMMAND dw3scenario "${scenario_arg}" --disc "${DW3_TEST_GAME_DIR}/Digimon World 3 (USA).cue"
+                    --state-dir "${state_dir_arg}")
         set_tests_properties(scenario.${scenario_name} PROPERTIES
             LABELS scenario SKIP_RETURN_CODE 77 TIMEOUT 1800)
         # Save states are build products (they contain game data): a scenario that writes one is the fixture setup

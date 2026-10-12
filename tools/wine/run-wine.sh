@@ -9,7 +9,19 @@
 #   DW3_WINEPREFIX  Wine prefix to use; created on first use
 #                   (default: ${XDG_DATA_HOME:-~/.local/share}/dw3-wine/pfx)
 #   DW3_WINEDEBUG   value for WINEDEBUG (default: -all)
+#
+# Inside a distrobox/toolbox container (where the cross build and CTest run) the script runs itself again on the host
+# with distrobox-host-exec, because Wine needs the host's GPU and audio. That makes it usable as
+# CMAKE_CROSSCOMPILING_EMULATOR: `ctest` can run in the container, the tests execute on the host.
 set -euo pipefail
+
+if [[ -e /run/.containerenv && -z "${DW3_ON_HOST:-}" ]] && command -v distrobox-host-exec >/dev/null; then
+    forward=()
+    for name in DW3_PROTON DW3_WINEPREFIX DW3_WINEDEBUG WINEDLLOVERRIDES VKD3D_DEBUG VKD3D_CONFIG; do
+        if [[ -n "${!name:-}" ]]; then forward+=("$name=${!name}"); fi
+    done
+    exec distrobox-host-exec env DW3_ON_HOST=1 "${forward[@]}" "$(readlink -f "${BASH_SOURCE[0]}")" "$@"
+fi
 
 proton="${DW3_PROTON:-}"
 if [[ -z "$proton" ]]; then
@@ -27,7 +39,11 @@ fi
 prefix="${DW3_WINEPREFIX:-${XDG_DATA_HOME:-$HOME/.local/share}/dw3-wine/pfx}"
 export PATH="$proton/files/bin:$PATH"
 export LD_LIBRARY_PATH="$proton/files/lib/x86_64-linux-gnu:$proton/files/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
-if [[ ! -d "$prefix" ]]; then
+# Several tests may start at once (ctest -j): only one creates the prefix, the others wait for it.
+mkdir -p "$(dirname "$prefix")"
+exec 9>"$prefix.lock"
+flock 9
+if [[ ! -d "$prefix/drive_c" ]]; then
     mkdir -p "$prefix"
     WINEPREFIX="$prefix" WINEDEBUG=-all "$proton/files/bin/wine" wineboot --init >/dev/null 2>&1 || true
     WINEPREFIX="$prefix" "$proton/files/bin/wineserver" -w || true
@@ -38,6 +54,7 @@ if [[ ! -d "$prefix" ]]; then
         fi
     done
 fi
+exec 9>&-
 
 export WINEPREFIX="$prefix"
 export VKD3D_SHADER_CACHE_PATH="$prefix/vkd3d-cache"
