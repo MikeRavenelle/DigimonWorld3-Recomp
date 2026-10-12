@@ -1,0 +1,57 @@
+name = "midgame_state"
+description = "Continue from a mid-game memory card and save the state that the card battle scenario starts from."
+frames = 1400
+memcard = "game:memcards/midgame.mcd"   # personal save data under the game directory; skipped when absent
+
+# The card image is copied into an in-memory card, so the file is never written. The save (one game, level 98-99 party) is in
+# Seiryu City, in the Seiryu Tower inn: the player stands in the entrance room next to the Guardromon that saves the game.
+#
+#   map id    0x800554D4 (word): 0x1E1 Seiryu Tower (the inn), 0x4E9 Seiryu City East Sector (0xFFFFFFFF while loading)
+#   game mode 0x800554D0 (word): 0xE title, 0xC save/load screen, 2 field
+#   field object 0x8004ADC0: pointer to the player object, 0 while a map loads (see common/new_game.toml)
+#
+# Title: START, then CROSS on Continue; slot 1 is the first choice on the LOAD screen (mode 0xC).
+[[press]]
+button = "START"
+at = 900
+
+[[press]]
+button = "CROSS"
+at = 1020
+
+[[wait]]
+at = 1040
+label = "load screen"
+ram = [{ addr = 0x800554D0, size = 4, value = 12 }]
+timeout = 3000
+
+# CROSS picks slot 1, the block and Execute; the load takes a while (about 1300 frames), so the taps run until the
+# game is back in the field.
+[[wait]]
+at = 1050
+label = "loaded in Seiryu Tower"
+ram = [{ addr = 0x800554D4, size = 4, value = 0x1E1 }, { addr = 0x800554D0, size = 4, value = 2 },
+       { via = 0x8004ADC0, addr = 0x58, size = 4, value = 0, cmp = "ne" }]
+timeout = 6000
+press = "CROSS"
+every = 150
+press_hold = 3
+
+# The map title fades out and the first frames of the field settle.
+[[wait]]
+at = 1060
+label = "scene settled"
+ram = [{ addr = 0x80099114, size = 4, value = 0 }]
+timeout = 1200
+
+[[check]]
+at = 1200
+label = "Seiryu Tower inn"
+display_enabled = true
+screen_hash = "0002ffc20fc200020002ffffffff087f00020002000200020002000200020002"
+ram = [{ addr = 0x800554D4, size = 4, value = 0x1E1 }, { addr = 0x800554D0, size = 4, value = 2 }]
+screenshot = true
+
+[[savestate]]
+at = 1300
+path = "midgame.state"
