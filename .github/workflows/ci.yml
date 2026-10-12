@@ -79,90 +79,43 @@ jobs:
       - name: Unit tests
         run: ctest --preset macos-arm64-debug -LE scenario -j4
 
-  windows-cross:
-    name: Windows x64 cross build, unit tests under Wine
-    runs-on: ubuntu-24.04
+  windows:
+    name: Windows x64 native build and unit tests
+    runs-on: windows-latest
     env:
-      XWIN_VERSION: 0.10.0
-      DXC_TAG: v1.9.2609
-      DXC_ARCHIVE: linux_dxc_2026_09_28.x86_x64.tar.gz
-      DW3_XWIN_DIR: ${{ github.workspace }}/.tools/xwin
+      GLSLANG_VERSION: 16.6.0
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install packages
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends clang lld llvm cmake ninja-build glslang-tools spirv-tools \
-            libx11-dev libxext-dev libxrandr-dev libxcursor-dev libxi-dev libxfixes-dev libxss-dev \
-            libxkbcommon-dev libwayland-dev libasound2-dev libpulse-dev libudev-dev libdrm-dev libgbm-dev \
-            libegl-dev libvulkan-dev wine wine64 xvfb
-          # clang-cl, lld-link and the llvm-lib/llvm-rc/llvm-mt tools live in the LLVM directory, not in /usr/bin.
-          echo "$(llvm-config --bindir)" >> "$GITHUB_PATH"
-
-      # The Windows SDK and the MSVC CRT are downloaded from Microsoft by xwin and are never part of the repository
-      # or of the build output. Running xwin with --accept-license means accepting Microsoft's license terms.
-      - name: Cache the Windows SDK (xwin)
-        id: xwin-cache
-        uses: actions/cache@v4
+      # clang-cl links against the MSVC libraries and the Windows SDK, so the developer environment is needed. It also
+      # puts the Ninja that ships with Visual Studio on the PATH.
+      - uses: ilammy/msvc-dev-cmd@v1
         with:
-          path: ${{ env.DW3_XWIN_DIR }}
-          key: xwin-${{ env.XWIN_VERSION }}-sdk-1
+          arch: x64
 
-      - name: Fetch the Windows SDK
-        if: steps.xwin-cache.outputs.cache-hit != 'true'
+      - name: Fetch glslang
+        shell: pwsh
         run: |
-          curl -fsSL "https://github.com/Jake-Shadle/xwin/releases/download/${XWIN_VERSION}/xwin-${XWIN_VERSION}-x86_64-unknown-linux-musl.tar.gz" \
-            | tar -xz -C "$RUNNER_TEMP"
-          "$RUNNER_TEMP/xwin-${XWIN_VERSION}-x86_64-unknown-linux-musl/xwin" --accept-license splat --output "$DW3_XWIN_DIR"
-          rm -rf "$DW3_XWIN_DIR/.xwin-cache"
-
-      - name: Cache DXC
-        id: dxc-cache
-        uses: actions/cache@v4
-        with:
-          path: .tools/dxc
-          key: dxc-${{ env.DXC_TAG }}-1
-
-      - name: Fetch DXC
-        if: steps.dxc-cache.outputs.cache-hit != 'true'
-        run: |
-          mkdir -p .tools/dxc
-          curl -fsSL "https://github.com/microsoft/DirectXShaderCompiler/releases/download/${DXC_TAG}/${DXC_ARCHIVE}" \
-            | tar -xz -C .tools/dxc
-
-      # The differential emitter test generates its test programs with a tool that runs on the build machine.
-      - name: Build the host emitter test generator
-        run: |
-          cmake --preset linux-x64-release -DDW3_BUILD_APP=OFF
-          cmake --build --preset linux-x64-release --target emit_testgen
+          $dir = "$env:GITHUB_WORKSPACE\.tools\glslang"
+          Invoke-WebRequest "https://github.com/KhronosGroup/glslang/releases/download/$env:GLSLANG_VERSION/glslang-$env:GLSLANG_VERSION-windows-x86_64-release.zip" -OutFile "$env:RUNNER_TEMP\glslang.zip"
+          Expand-Archive "$env:RUNNER_TEMP\glslang.zip" -DestinationPath $dir
+          "$dir\bin" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
 
       - name: Configure
-        run: |
-          cat > "$RUNNER_TEMP/wine-ci.sh" <<'EOF'
-          #!/bin/sh
-          # Runs a Windows test executable under Wine on a virtual display. Direct3D 12 and Vulkan are not available
-          # on the runner, so no GPU test runs here.
-          export WINEDEBUG=-all WINEPREFIX="$HOME/.wine-ci"
-          exec xvfb-run -a wine64 "$@"
-          EOF
-          chmod +x "$RUNNER_TEMP/wine-ci.sh"
-          cmake --preset windows-x64-cross-release \
-            -DDW3_DXC="$GITHUB_WORKSPACE/.tools/dxc/bin/dxc" \
-            -DCMAKE_CROSSCOMPILING_EMULATOR="$RUNNER_TEMP/wine-ci.sh"
+        run: cmake --preset windows-x64-release
 
       - name: Build
-        run: cmake --build --preset windows-x64-cross-release
+        run: cmake --build --preset windows-x64-release
 
-      - name: Initialise the Wine prefix
-        run: WINEPREFIX="$HOME/.wine-ci" WINEDEBUG=-all xvfb-run -a wineboot --init
-
-      - name: Unit tests under Wine
-        run: ctest --preset windows-x64-cross-release -LE scenario -E test_render -j2
+      # The runner has no GPU and the renderer does not use software adapters, so the GPU cases in test_render skip
+      # themselves; everything else in it runs.
+      - name: Unit tests
+        run: ctest --preset windows-x64-release -LE scenario -j4
 
       - name: Check the package contents
+        shell: bash
         run: |
-          cmake --install build/windows-x64-cross-release --component app --prefix "$RUNNER_TEMP/stage"
+          cmake --install build/windows-x64-release --component app --prefix "$RUNNER_TEMP/stage"
           find "$RUNNER_TEMP/stage" -type f | sort
           test -f "$RUNNER_TEMP/stage/dw3recomp.exe"
           test "$(find "$RUNNER_TEMP/stage" -type f | wc -l)" -eq 3
