@@ -21,10 +21,15 @@
 //   --precise-geometry GPU renderer: sub-pixel 3D vertices and perspective-correct textures from the GTE's projections
 //                      (best with --internal-res > 1; off by default)
 //   --texture-filter F GPU renderer: nearest (default), bilinear (3D triangles) or xbr (sprites, needs --internal-res > 1)
+//   --window-size WxH  initial window size in pixels (default 1280x960)
+//   --fullscreen       start in (borderless, desktop) fullscreen; F11 or Alt+Enter toggles it
+//   --resize-at F WxH  resize the window at frame F (repeatable; for checking swap chain resizing in audit runs)
+//   --fullscreen-at F  toggle fullscreen at frame F (repeatable)
 //   --scale M          fit (default, 4:3 letterbox), integer or stretch
 //   --filter F         nearest (default) or linear
 //   --no-vsync         present without waiting for the display refresh (always on with --uncapped/--frames)
 //   --mute             no audio output (the SPU still runs; audio is also off for --frames audit runs)
+//   --audio            with --frames: play audio and pace to real time (logs buffer underruns and drops at exit)
 //   --screenshot-every N DIR   save the window image every N frames
 //   --vram-dump PATH   save the whole VRAM as a BMP on exit
 //   --trace-io LO:HI   log bus accesses to the hex physical range LO..HI
@@ -68,6 +73,14 @@ struct Options {
     uint32_t trace_lo = 0, trace_hi = 0;
     bool uncapped = false;
     bool mute = false;
+    bool audio = false;
+    int window_w = 1280, window_h = 960;
+    bool fullscreen = false;
+    struct WindowAction {
+        int64_t frame;
+        int w, h;  // 0x0: toggle fullscreen
+    };
+    std::vector<WindowAction> window_actions;
     bool intro = false;
     int shot_every = 0;
     std::string shot_dir;
@@ -149,6 +162,18 @@ public:
     }
 };
 
+bool parse_size(const char* text, int& w, int& h) {
+    char* end = nullptr;
+    const long a = std::strtol(text, &end, 10);
+    if (end == text || (*end != 'x' && *end != 'X')) return false;
+    const char* rest = end + 1;
+    const long b = std::strtol(rest, &end, 10);
+    if (end == rest || *end != '\0') return false;
+    w = static_cast<int>(a);
+    h = static_cast<int>(b);
+    return true;
+}
+
 Options parse(int argc, char** argv) {
     Options o;
     for (int i = 1; i < argc; ++i) {
@@ -162,6 +187,23 @@ Options parse(int argc, char** argv) {
         else if (a == "--no-memcard") o.no_memcard = true;
         else if (a == "--uncapped") o.uncapped = true;
         else if (a == "--mute") o.mute = true;
+        else if (a == "--audio") o.audio = true;
+        else if (a == "--window-size" && i + 1 < argc) {
+            if (!parse_size(argv[++i], o.window_w, o.window_h) || o.window_w < 160 || o.window_h < 120) {
+                std::fprintf(stderr, "bad --window-size %s (WxH)\n", argv[i]);
+                std::exit(2);
+            }
+        }
+        else if (a == "--fullscreen") o.fullscreen = true;
+        else if (a == "--resize-at" && i + 2 < argc) {
+            Options::WindowAction act{std::atoll(argv[++i]), 0, 0};
+            if (!parse_size(argv[++i], act.w, act.h) || act.w < 160 || act.h < 120) {
+                std::fprintf(stderr, "bad --resize-at size %s (WxH)\n", argv[i]);
+                std::exit(2);
+            }
+            o.window_actions.push_back(act);
+        }
+        else if (a == "--fullscreen-at" && i + 1 < argc) o.window_actions.push_back({std::atoll(argv[++i]), 0, 0});
         else if (a == "--intro") o.intro = true;
         else if (a == "--renderer" && i + 1 < argc) {
             std::string v = argv[++i];
@@ -248,7 +290,11 @@ void on_quit_signal(int) {
 }  // namespace
 
 int main(int argc, char** argv) {
-    Options opt = parse(argc, argv);
+    // Arguments are UTF-8 on every platform (on Windows main() would otherwise get them in the ANSI code page).
+    std::vector<std::string> args = dw3::platform::command_line_utf8(argc, argv);
+    std::vector<char*> arg_ptrs;
+    for (std::string& a : args) arg_ptrs.push_back(a.data());
+    Options opt = parse(static_cast<int>(arg_ptrs.size()), arg_ptrs.data());
     SDL_Log("DW3Recomp starting (os=%s arch=%s)", dw3::platform::os_name(dw3::platform::host_os()).data(),
             dw3::platform::arch_name(dw3::platform::host_arch()).data());
 
@@ -285,13 +331,14 @@ int main(int argc, char** argv) {
     opt.present.vsync = !(opt.no_vsync || opt.uncapped || opt.max_frames >= 0);
     SDL_Window* window = nullptr;
     std::unique_ptr<dw3app::Presenter> presenter = dw3app::create_presenter(
-        "Digimon World 3 Recomp", 1280, 960, opt.renderer, opt.present, [](const std::string& s) { SDL_Log("%s", s.c_str()); },
+        "Digimon World 3 Recomp", opt.window_w, opt.window_h, opt.renderer, opt.present, [](const std::string& s) { SDL_Log("%s", s.c_str()); },
         window);
     if (!presenter) {
         SDL_Log("no presentation path available");
         return 1;
     }
     SDL_Log("presenting with %s", presenter->name());
+    if (opt.fullscreen) SDL_SetWindowFullscreen(window, true);
     presenter->attach(machine.gpu());
     if (opt.present.precise_geometry) {
         if (std::string(presenter->name()).find("software") != std::string::npos)
@@ -301,7 +348,7 @@ int main(int argc, char** argv) {
     }
 
     dw3app::AudioOutput audio;
-    audio.open(opt.mute || opt.uncapped || opt.max_frames >= 0);
+    audio.open(opt.mute || opt.uncapped || (opt.max_frames >= 0 && !opt.audio));
 
     // Reads a state file; on failure `why` gets a short reason for the on-screen message.
     auto read_state_file = [](const std::string& path, std::vector<uint8_t>& data, std::string* why = nullptr) {
@@ -322,7 +369,7 @@ int main(int argc, char** argv) {
             return 1;
         }
         SDL_Log("loaded state %s", opt.load_state.c_str());
-        presenter->notify("Loaded " + std::filesystem::path(opt.load_state).filename().string());
+        presenter->notify("Loaded " + dw3::platform::path_to_utf8(dw3::platform::path_from_utf8(opt.load_state).filename()));
     }
 
     static HostPad host_pad;
@@ -379,7 +426,7 @@ int main(int argc, char** argv) {
     };
     int state_slot = 1;
     const std::filesystem::path state_dir = dw3::platform::user_data_dir() / "states";
-    auto slot_path = [&] { return (state_dir / ("slot" + std::to_string(state_slot) + ".state")).string(); };
+    auto slot_path = [&] { return dw3::platform::path_to_utf8(state_dir / ("slot" + std::to_string(state_slot) + ".state")); };
     // Saves are encoded and written on the host's worker thread; it hands the outcome back here and the frame
     // loop shows it. Declared static so it outlives the host, whose destructor finishes the queued saves.
     struct SaveResults {
@@ -415,7 +462,7 @@ int main(int argc, char** argv) {
     auto select_slot = [&] {
         SDL_Log("state slot %d", state_slot);
         presenter->notify("Slot " + std::to_string(state_slot) +
-                          (std::filesystem::exists(slot_path()) ? "" : " (empty)"));
+                          (std::filesystem::exists(dw3::platform::path_from_utf8(slot_path())) ? "" : " (empty)"));
     };
     auto load_slot = [&] {
         const std::string path = slot_path();
@@ -427,7 +474,7 @@ int main(int argc, char** argv) {
                 return;
             }
         }
-        if (!std::filesystem::exists(path)) {
+        if (!std::filesystem::exists(dw3::platform::path_from_utf8(path))) {
             SDL_Log("slot %d is empty", slot);
             presenter->notify("Slot " + std::to_string(slot) + " is empty");
             return;
@@ -449,8 +496,22 @@ int main(int argc, char** argv) {
             }
         });
     };
+    auto toggle_fullscreen = [&] {
+        const bool now = (SDL_GetWindowFlags(window) & SDL_WINDOW_FULLSCREEN) != 0;
+        SDL_SetWindowFullscreen(window, !now);
+        SDL_Log("fullscreen %s", now ? "off" : "on");
+    };
     auto on_frame = [&](uint64_t frame) {
         host_pad.frame = static_cast<int64_t>(frame);
+        for (const auto& act : opt.window_actions) {
+            if (act.frame != static_cast<int64_t>(frame)) continue;
+            if (act.w > 0) {
+                SDL_SetWindowSize(window, act.w, act.h);
+                SDL_Log("window resized to %dx%d", act.w, act.h);
+            } else {
+                toggle_fullscreen();
+            }
+        }
         audio.pump(machine.spu());
         {
             std::lock_guard lock(saves.mutex);
@@ -465,6 +526,10 @@ int main(int argc, char** argv) {
                     case SDL_SCANCODE_F5: save_slot(); break;
                     case SDL_SCANCODE_F7: load_slot(); break;
                     case SDL_SCANCODE_F6: state_slot = state_slot > 1 ? state_slot - 1 : 9; select_slot(); break;
+                    case SDL_SCANCODE_F11: toggle_fullscreen(); break;
+                    case SDL_SCANCODE_RETURN:
+                        if (e.key.mod & SDL_KMOD_ALT) toggle_fullscreen();
+                        break;
                     case SDL_SCANCODE_F8: state_slot = state_slot < 9 ? state_slot + 1 : 1; select_slot(); break;
                     default: break;
                 }
@@ -486,7 +551,7 @@ int main(int argc, char** argv) {
             dw3::host::Host::stop();
         }
         // Real-time pacing against emulated time (exact NTSC/PAL frame period from the video clock).
-        if (!opt.uncapped && opt.max_frames < 0) {
+        if (!opt.uncapped && (opt.max_frames < 0 || opt.audio)) {
             static uint64_t start_ns = SDL_GetTicksNS();
             static int64_t start_cycles = machine.ctx().cycles;
             if (pacing_reset) {

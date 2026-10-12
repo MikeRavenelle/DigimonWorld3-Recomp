@@ -31,6 +31,11 @@ elseif(DW3_OS STREQUAL "windows")
     set(DW3_RENDER_VULKAN ON)
 endif()
 
+if(MSVC AND NOT DEFINED CMAKE_MSVC_RUNTIME_LIBRARY)
+    # Static CRT: the executable runs without the Visual C++ redistributable.
+    set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded")
+endif()
+
 message(STATUS "DW3: os=${DW3_OS} arch=${DW3_ARCH} vulkan=${DW3_RENDER_VULKAN} metal=${DW3_RENDER_METAL} d3d12=${DW3_RENDER_D3D12}")
 
 function(dw3_target_defaults target)

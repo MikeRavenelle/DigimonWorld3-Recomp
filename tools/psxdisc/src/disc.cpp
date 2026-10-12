@@ -63,7 +63,8 @@ std::optional<Disc> Disc::open(const std::filesystem::path& path) {
         ss << cf.rdbuf();
         auto cue = parse_cue(ss.str());
         if (!cue || cue->tracks.front().mode != "MODE2/2352") return std::nullopt;
-        bin = path.parent_path() / cue->bin_file;
+        // The file name in the cue sheet is UTF-8 (or plain ASCII); do not read it through the Windows ANSI code page.
+        bin = path.parent_path() / std::filesystem::path(std::u8string(cue->bin_file.begin(), cue->bin_file.end()));
     }
     std::error_code ec;
     auto size = std::filesystem::file_size(bin, ec);

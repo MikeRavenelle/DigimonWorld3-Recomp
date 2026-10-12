@@ -46,3 +46,9 @@ set(CMAKE_MSVC_RUNTIME_LIBRARY MultiThreaded)
 set(CMAKE_TRY_COMPILE_TARGET_TYPE STATIC_LIBRARY)
 
 set(CMAKE_FIND_ROOT_PATH_MODE_PROGRAM NEVER)
+
+# CTest runs the test executables through Wine. The script re-runs itself on the host when it is started inside a
+# container, so the build and `ctest` can both run in the build container (see docs/BUILDING.md).
+if(NOT DEFINED CMAKE_CROSSCOMPILING_EMULATOR AND CMAKE_HOST_UNIX)
+    set(CMAKE_CROSSCOMPILING_EMULATOR "${CMAKE_CURRENT_LIST_DIR}/../../tools/wine/run-wine.sh")
+endif()

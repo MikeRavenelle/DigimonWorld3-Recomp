@@ -17,6 +17,8 @@ set(ZSTD_BUILD_SHARED OFF CACHE BOOL "" FORCE)
 set(ZSTD_BUILD_STATIC ON CACHE BOOL "" FORCE)
 set(ZSTD_LEGACY_SUPPORT OFF CACHE BOOL "" FORCE)
 FetchContent_MakeAvailable(zstd)
+# Linked statically: its headers and library are not part of what gets installed or packaged.
+set_property(DIRECTORY "${zstd_SOURCE_DIR}/build/cmake" PROPERTY EXCLUDE_FROM_ALL TRUE)
 
 # GoogleTest: prefer system package, fall back to source.
 if(DW3_BUILD_TESTS OR NOT DEFINED DW3_BUILD_TESTS)
