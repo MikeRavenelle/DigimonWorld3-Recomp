@@ -1,0 +1,318 @@
+name = "card_battle"
+description = "From the mid-game save in the Seiryu Tower inn walk through Seiryu City East Sector, talk to Tamer Chris, accept his card battle (CARDGAME) and play a Program Card in the Load Phase."
+start_state = "midgame.state"   # written by midgame_state.toml
+start_frame = 1300
+frames = 6000
+memcard = "game:memcards/midgame.mcd"   # personal save data under the game directory; skipped when absent
+skip_intro = false
+
+# Maps (word 0x800554D4): 0x1E1 Seiryu Tower (the inn), 0x4E9 Seiryu City East Sector. The map id already reads 0x4E9
+# while the East Sector loads, so the waits below also require the field object pointer 0x8004ADC0 to be non-zero.
+# Game mode 0x800554D0: 2 field, 7 CARDGAME. The mode overlay slot at 0x80082448 starts with 0x800835F0 while the
+# CARDGAME overlay is loaded (0x8008315C for the field).
+#
+# Tamer Chris walks about on the stairs below the first tower in the East Sector and starts a card battle without a
+# question: the dialogue is the whole challenge. Nobody else in reach of the inn does this at this point of the save.
+# The legs are timed presses recorded from the state (the d-pad is turned against the map axes and a diagonal needs
+# both buttons). Chris moves on his own path, so the route depends on the exact timing: change a leg and he is
+# somewhere else.
+#
+# CARDGAME RAM: 0x800AB058 (half-word) is the number of cards left in the player's deck (34 after the opening draw).
+#
+# Card battle screens in order: Card Battle Challenge, Choose a folder (the first folder is taken), Start Phase (draw a
+# card to see who begins), then the board. The phase banners (Load Phase, Summon Phase) are text-only screens that wait
+# for CROSS. The Load Phase hand holds Program Cards; the sixth, Desire Access, trashes the hand and draws six cards.
+
+# Inn: out of the entrance room, down the stairs, through the door. CROSS is tapped on the way to open the door.
+[[press]]
+button = "UP"
+at = 1400
+hold = 40
+
+[[press]]
+button = "LEFT"
+at = 1400
+hold = 40
+
+[[press]]
+button = "LEFT"
+at = 1445
+hold = 100
+
+[[press]]
+button = "LEFT"
+at = 1550
+hold = 70
+
+[[press]]
+button = "DOWN"
+at = 1625
+hold = 100
+
+[[press]]
+button = "RIGHT"
+at = 1625
+hold = 100
+
+[[press]]
+button = "UP"
+at = 1730
+hold = 40
+
+[[press]]
+button = "LEFT"
+at = 1730
+hold = 40
+
+[[press]]
+button = "DOWN"
+at = 1775
+hold = 40
+
+[[press]]
+button = "LEFT"
+at = 1820
+hold = 140
+
+[[repeat]]
+button = "CROSS"
+from = 1700
+to = 1869
+every = 37
+
+[[wait]]
+at = 1870
+label = "Seiryu City East Sector"
+ram = [{ addr = 0x800554D4, size = 4, value = 0x4E9 }, { addr = 0x800554D0, size = 4, value = 2 },
+       { via = 0x8004ADC0, addr = 0x58, size = 4, value = 0, cmp = "ne" }]
+timeout = 2000
+
+# East Sector: east to the end of the walkway and back along the stairs towards Chris (he ends up on the left of the
+# party). The title card fades out while the first leg runs.
+[[press]]
+button = "DOWN"
+at = 2100
+hold = 140
+
+[[press]]
+button = "RIGHT"
+at = 2100
+hold = 140
+
+[[press]]
+button = "UP"
+at = 2245
+hold = 100
+
+[[press]]
+button = "LEFT"
+at = 2245
+hold = 100
+
+[[press]]
+button = "DOWN"
+at = 2350
+hold = 70
+
+[[press]]
+button = "LEFT"
+at = 2350
+hold = 70
+
+[[press]]
+button = "UP"
+at = 2425
+hold = 40
+
+[[press]]
+button = "LEFT"
+at = 2425
+hold = 40
+
+[[press]]
+button = "DOWN"
+at = 2470
+hold = 35
+
+[[press]]
+button = "LEFT"
+at = 2470
+hold = 35
+
+[[repeat]]
+button = "CROSS"
+from = 2000
+to = 2515
+every = 37
+
+[[check]]
+at = 2090
+label = "East Sector"
+ram = [{ addr = 0x800554D4, size = 4, value = 0x4E9 }, { addr = 0x800554D0, size = 4, value = 2 }]
+screen_hash = "fd227a6229e20de2f322390298027d02fffefffabfc2f7e200004000fd80ffc3"
+screenshot = true
+
+# Turn towards Chris (left of the player) and talk; CROSS keeps the dialogue going.
+[[press]]
+button = "LEFT"
+at = 2515
+hold = 6
+
+[[repeat]]
+button = "CROSS"
+from = 2523
+to = 2800
+every = 20
+
+[[check]]
+at = 2640
+label = "Chris challenges"
+ram = [{ addr = 0x800554D0, size = 4, value = 2 }]
+screen_hash = "f600f6001e4c0880ff6ff7ecff80ff000fd0dff07ff8fff8c1fb8170036007c0"
+screenshot = true
+
+[[wait]]
+at = 2810
+label = "CARDGAME loaded"
+ram = [{ addr = 0x800554D0, size = 4, value = 7 }, { addr = 0x80082448, size = 4, value = 0x800835F0 }]
+timeout = 1500
+press = "CROSS"
+every = 20
+
+# Challenge screen and folder choice: CROSS takes the first folder, then the opening draw.
+[[check]]
+at = 3020
+label = "Card Battle Challenge"
+ram = [{ addr = 0x800554D0, size = 4, value = 7 }, { addr = 0x80082448, size = 4, value = 0x800835F0 }]
+screen_hash = "ffffffffffffffff002e000607e007e0ffffffff0000007effffffffffffffff"
+screenshot = true
+
+[[repeat]]
+button = "CROSS"
+from = 3000
+to = 3380
+every = 37
+
+[[check]]
+at = 3100
+label = "Choose a folder"
+ram = [{ addr = 0x800554D0, size = 4, value = 7 }]
+screen_hash = "03c00000000000008526ee2e3ffe0000030e0626062e030e0000000004a6062e"
+screenshot = true
+
+# Load Phase banner, then the board; CROSS passes the banner and the hand appears for the Program Card choice.
+[[check]]
+at = 3650
+label = "Load Phase banner"
+ram = [{ addr = 0x800554D0, size = 4, value = 7 }, { addr = 0x800AB058, size = 2, value = 34 }]
+screen_hash = "ffffffffffffffff03fe03f603c00380ffffffff00000000ffffffffffffffff"
+screenshot = true
+
+[[press]]
+button = "CROSS"
+at = 3700
+hold = 4
+
+[[press]]
+button = "CROSS"
+at = 3800
+hold = 4
+
+[[press]]
+button = "CROSS"
+at = 3900
+hold = 4
+
+[[press]]
+button = "CROSS"
+at = 4000
+hold = 4
+
+# Summon Phase hand: cursor to the sixth card (Desire Access), then CROSS selects it and CROSS again plays it.
+[[check]]
+at = 4090
+label = "Your hand"
+ram = [{ addr = 0x800554D0, size = 4, value = 7 }, { addr = 0x800AB058, size = 2, value = 34 }]
+screen_hash = "00000000000000003abe1f9e00082c80068100010a063fbeffffffffffff1fff"
+screenshot = true
+
+[[press]]
+button = "RIGHT"
+at = 4100
+hold = 4
+
+[[press]]
+button = "RIGHT"
+at = 4160
+hold = 4
+
+[[press]]
+button = "RIGHT"
+at = 4220
+hold = 4
+
+[[press]]
+button = "RIGHT"
+at = 4280
+hold = 4
+
+[[press]]
+button = "RIGHT"
+at = 4340
+hold = 4
+
+[[press]]
+button = "RIGHT"
+at = 4400
+hold = 4
+
+[[check]]
+at = 4450
+label = "Desire Access chosen"
+ram = [{ addr = 0x800554D0, size = 4, value = 7 }, { addr = 0x800AB058, size = 2, value = 34 }]
+screen_hash = "00000000000000003abc3f9c00083500028100011a013fbcffffffffffff1fff"
+screenshot = true
+
+[[press]]
+button = "CROSS"
+at = 4460
+hold = 4
+
+[[press]]
+button = "CROSS"
+at = 4600
+hold = 4
+
+# The deck is down six cards and the hand is new.
+[[check]]
+at = 5000
+label = "six cards drawn"
+ram = [{ addr = 0x800554D0, size = 4, value = 7 }, { addr = 0x800AB058, size = 2, value = 28 }]
+screen_hash = "00000000000000003ffe1ffe00000000000100011efc3ffeffffffffffff3fff"
+screenshot = true
+
+# "Use a Program Card?" is asked again: No ends the Load Phase and the Summon Phase banner follows.
+[[check]]
+at = 5500
+label = "Use another Program Card"
+ram = [{ addr = 0x800554D0, size = 4, value = 7 }, { addr = 0x800AB058, size = 2, value = 28 }]
+screen_hash = "8001f0fbffffffffc000c000c0010001000000020000c000fffffffffffb0000"
+screenshot = true
+
+[[press]]
+button = "DOWN"
+at = 5500
+hold = 4
+
+[[press]]
+button = "CROSS"
+at = 5560
+hold = 4
+
+[[check]]
+at = 5800
+label = "Summon Phase"
+ram = [{ addr = 0x800554D0, size = 4, value = 7 }, { addr = 0x80082448, size = 4, value = 0x800835F0 },
+       { addr = 0x800AB058, size = 2, value = 28 }]
+screen_hash = "ffffffffffffffff007e007603c003c0ffffffff00000000ffffffffffffffff"
+screenshot = true
