@@ -1,0 +1,108 @@
+name = "endgame_gunslinger_battle"
+description = "Walk along the path of Gunslinger 1F until a random encounter starts, check the battle menu and win the battle."
+start_state = "gunslinger.state"   # written by endgame_gunslinger.toml
+start_frame = 9800
+frames = 12000
+memcard = "game:memcards/endgame.mcd"   # personal save data under the game directory; skipped when absent
+skip_intro = false
+
+# Game mode 0x800554D0: 2 field, 6 battle, 0x14 results. The arena is map 0x1FA (word 0x800554D4); the fight is in space in
+# front of the Earth. Encounters come after enough steps; the legs below walk back and forth on the first stretch of the path.
+
+[[press]]
+button = "UP"
+at = 9810
+hold = 40
+
+[[press]]
+button = "RIGHT"
+at = 9880
+hold = 40
+
+[[press]]
+button = "UP"
+at = 9950
+hold = 40
+[[press]]
+button = "RIGHT"
+at = 9950
+hold = 40
+
+[[press]]
+button = "UP"
+at = 10020
+hold = 40
+
+[[press]]
+button = "RIGHT"
+at = 10090
+hold = 40
+
+[[press]]
+button = "UP"
+at = 10160
+hold = 50
+[[press]]
+button = "RIGHT"
+at = 10160
+hold = 50
+
+[[press]]
+button = "UP"
+at = 10240
+hold = 50
+
+[[wait]]
+at = 10300
+label = "random encounter"
+ram = [{ addr = 0x800554D0, size = 4, value = 6 }]
+timeout = 3000
+hold = ["UP", "RIGHT"]
+
+# The battle intro runs, then the menu (Fight, Tech, DV, Tag, Item, Run) appears.
+[[wait]]
+at = 10310
+label = "battle menu"
+ram = [{ addr = 0x800554D4, size = 4, value = 0x1FA }, { addr = 0x800554D0, size = 4, value = 6 }]
+timeout = 1200
+
+[[check]]
+at = 10500
+label = "battle"
+display_enabled = true
+ram = [{ addr = 0x800554D0, size = 4, value = 6 }, { addr = 0x800554D4, size = 4, value = 0x1FA }]
+screenshot = true
+
+# CROSS picks Fight, the target and the attack; tapping it wins and leads to the results.
+[[wait]]
+at = 10550
+label = "battle won"
+ram = [{ addr = 0x800554D0, size = 4, value = 20 }]
+timeout = 8000
+press = "CROSS"
+every = 45
+press_hold = 3
+
+[[check]]
+at = 10600
+label = "victory"
+display_enabled = true
+ram = [{ addr = 0x800554D0, size = 4, value = 20 }]
+screenshot = true
+
+[[wait]]
+at = 10650
+label = "back in Gunslinger 1F"
+ram = [{ addr = 0x800554D0, size = 4, value = 2 }, { addr = 0x800554D4, size = 4, value = 0x663 },
+       { via = 0x8004ADC0, addr = 0x58, size = 4, value = 0, cmp = "ne" }]
+timeout = 3000
+press = "CROSS"
+every = 45
+press_hold = 3
+
+[[check]]
+at = 10900
+label = "field after the battle"
+display_enabled = true
+ram = [{ addr = 0x800554D0, size = 4, value = 2 }, { addr = 0x800554D4, size = 4, value = 0x663 }]
+screenshot = true

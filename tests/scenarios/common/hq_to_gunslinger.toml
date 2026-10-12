@@ -1,0 +1,90 @@
+# A.o.A Headquarters (0x399): up the stairs to the star platform, through the scene with Lord Megadeath and the movie that follows,
+# then onto the Warp Gate circle and into Gunslinger 1F (0x663). Script frames 7960..9660.
+#
+# Game mode 0x800554D0: 2 field, 0xE movie. The event flag 0x80099114 is 1 while a scripted scene runs.
+
+[[press]]
+button = "UP"
+at = 7960
+hold = 60
+
+[[press]]
+button = "UP"
+at = 8022
+hold = 60
+
+[[press]]
+button = "RIGHT"
+at = 8022
+hold = 60
+
+[[press]]
+button = "UP"
+at = 8084
+hold = 60
+
+[[repeat]]
+button = "CROSS"
+from = 7960
+to = 8144
+every = 12
+
+# The scene on the star platform ends in a movie; CROSS is tapped through the dialogue.
+[[wait]]
+at = 8150
+label = "Megadeath movie"
+ram = [{ addr = 0x800554D0, size = 4, value = 0xE }]
+timeout = 2400
+press = "CROSS"
+every = 20
+press_hold = 3
+
+[[wait]]
+at = 8152
+label = "back in Headquarters"
+ram = [{ addr = 0x800554D0, size = 4, value = 2 }, { addr = 0x800554D4, size = 4, value = 0x399 },
+       { via = 0x8004ADC0, addr = 0x58, size = 4, value = 0, cmp = "ne" }]
+timeout = 3000
+press = "CROSS"
+every = 20
+press_hold = 3
+
+# The rest of the scene (Lord Megadeath's speech and the Warp Gate appearing) runs for about 1100 frames while CROSS is tapped.
+[[repeat]]
+button = "CROSS"
+from = 8154
+to = 9600
+every = 12
+
+# The Warp Gate circle is one step up and to the right of the platform's west corner.
+[[press]]
+button = "UP"
+at = 9610
+hold = 20
+
+[[press]]
+button = "RIGHT"
+at = 9610
+hold = 20
+
+[[repeat]]
+button = "CROSS"
+from = 9610
+to = 9650
+every = 10
+
+[[wait]]
+at = 9655
+label = "Gunslinger 1F"
+ram = [{ addr = 0x800554D4, size = 4, value = 0x663 }, { addr = 0x800554D0, size = 4, value = 2 },
+       { via = 0x8004ADC0, addr = 0x58, size = 4, value = 0, cmp = "ne" }]
+timeout = 1500
+press = "CROSS"
+every = 20
+press_hold = 3
+
+[[wait]]
+at = 9657
+label = "Gunslinger 1F settled"
+ram = [{ addr = 0x80099114, size = 4, value = 0 }]
+timeout = 1500
