@@ -1,6 +1,6 @@
 #pragma once
 
-// GPU renderer built on the plume render hardware interface (Vulkan and Direct3D 12 backends). It implements the same Rasterizer
+// GPU renderer built on the plume render hardware interface (Vulkan, Direct3D 12 and Metal backends). It implements the same Rasterizer
 // interface as the software rasterizer and keeps the 1024x512 VRAM as a GPU texture, so primitives are drawn on
 // the GPU and the CLUT/texture lookups, blending, dithering and mask handling run in the fragment shader.
 //
@@ -45,10 +45,12 @@
 
 namespace dw3 {
 
-// A window to present to. On Windows the native handle is enough; elsewhere the windowing library supplies the Vulkan
-// surface through callbacks.
+// A window to present to. On Windows the native handle is enough; on macOS the NSWindow and its CAMetalLayer; elsewhere
+// the windowing library supplies the Vulkan surface through callbacks.
 struct NativeWindow {
     void* hwnd = nullptr;  // Windows: the HWND (used by both the Direct3D 12 and the Vulkan backend)
+    void* cocoa_window = nullptr;  // macOS: the NSWindow
+    void* metal_layer = nullptr;   // macOS: the CAMetalLayer to draw into
     void* user = nullptr;
     // Creates a VkSurfaceKHR for the given VkInstance and returns its handle (0 on failure).
     uint64_t (*create_surface)(void* user, void* vk_instance) = nullptr;
@@ -58,8 +60,8 @@ struct NativeWindow {
 
 enum class TextureFilter { Nearest, Bilinear, Xbr };
 
-// The graphics API the renderer runs on. Direct3D 12 exists on Windows builds only.
-enum class GraphicsApi { Vulkan, D3D12 };
+// The graphics API the renderer runs on. Direct3D 12 exists on Windows builds only, Metal on macOS builds only.
+enum class GraphicsApi { Vulkan, D3D12, Metal };
 
 // Display options that add precision or smoothing on top of the exact PS1 output. The defaults leave the output
 // untouched.

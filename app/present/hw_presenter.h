@@ -21,6 +21,7 @@ private:
     HwPresenter();
 
     SDL_Window* window_ = nullptr;
+    dw3::NativeWindow native_;
     std::string name_;
     PresentOptions options_;
     std::unique_ptr<dw3::HwRenderer> renderer_;

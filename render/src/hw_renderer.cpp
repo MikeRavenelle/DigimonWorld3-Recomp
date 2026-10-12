@@ -24,6 +24,17 @@
 #include "shaders/psx_draw.vert.h"
 #include "shaders/vram_copy.frag.h"
 #include "shaders/vram_copy.vert.h"
+#ifdef DW3_HAVE_METAL
+#include "shaders/osd.frag.msl.h"
+#include "shaders/osd.vert.msl.h"
+#include "shaders/present.frag.msl.h"
+#include "shaders/present.vert.msl.h"
+#include "shaders/psx_draw.frag.msl.h"
+#include "shaders/psx_draw_layer.frag.msl.h"
+#include "shaders/psx_draw.vert.msl.h"
+#include "shaders/vram_copy.frag.msl.h"
+#include "shaders/vram_copy.vert.msl.h"
+#endif
 #ifdef DW3_HAVE_D3D12
 #include "shaders/osd.frag.dxil.h"
 #include "shaders/osd.vert.dxil.h"
@@ -38,6 +49,9 @@
 
 namespace plume {
 extern std::unique_ptr<RenderInterface> CreateVulkanInterface();
+#ifdef DW3_HAVE_METAL
+extern std::unique_ptr<RenderInterface> CreateMetalInterface();
+#endif
 #ifdef DW3_HAVE_D3D12
 extern std::unique_ptr<RenderInterface> CreateD3D12Interface();
 #endif
@@ -268,7 +282,12 @@ bool HwRenderer::Impl::init(const NativeWindow* window, int internal_scale, cons
     layer = options.true_color || options.filter != TextureFilter::Nearest;
     draw_mode = (layer ? 1u : 0u) | (options.true_color ? 2u : 0u) | (static_cast<uint32_t>(options.filter) << 2);
     const char* api_name = "Vulkan";
-    if (options.api == GraphicsApi::D3D12) {
+    if (options.api == GraphicsApi::Metal) {
+        api_name = "Metal";
+#ifdef DW3_HAVE_METAL
+        iface = CreateMetalInterface();
+#endif
+    } else if (options.api == GraphicsApi::D3D12) {
         api_name = "Direct3D 12";
 #ifdef DW3_HAVE_D3D12
         iface = CreateD3D12Interface();
@@ -364,20 +383,30 @@ bool HwRenderer::Impl::init(const NativeWindow* window, int internal_scale, cons
 
 bool HwRenderer::Impl::create_pipelines() {
     const RenderShaderFormat fmt = iface->getCapabilities().shaderFormat;
-    // Each shader is embedded as SPIR-V (Vulkan) and, when the Direct3D 12 backend is built, as DXIL.
-    auto make = [&](const uint8_t* spv, size_t spv_size, const uint8_t* dxil, size_t dxil_size) -> std::unique_ptr<RenderShader> {
-        if (fmt == RenderShaderFormat::SPIRV) return device->createShader(spv, spv_size, "main", fmt);
-#ifdef DW3_HAVE_D3D12
-        if (fmt == RenderShaderFormat::DXIL) return device->createShader(dxil, dxil_size, "main", fmt);
-#endif
-        (void)dxil; (void)dxil_size;
+    // Each shader is embedded as SPIR-V (Vulkan) and, in builds that contain those backends, as DXIL (Direct3D 12) and
+    // as Metal Shading Language source (Metal).
+    struct Blob {
+        const uint8_t* data;
+        size_t size;
+    };
+    auto make = [&](Blob spv, Blob dxil, Blob msl) -> std::unique_ptr<RenderShader> {
+        if (fmt == RenderShaderFormat::SPIRV) return device->createShader(spv.data, spv.size, "main", fmt);
+        if (fmt == RenderShaderFormat::DXIL && dxil.data) return device->createShader(dxil.data, dxil.size, "main", fmt);
+        // SPIRV-Cross names the entry point main0, since main is reserved in Metal.
+        if (fmt == RenderShaderFormat::METAL && msl.data) return device->createShader(msl.data, msl.size, "main0", fmt);
         return nullptr;
     };
 #ifdef DW3_HAVE_D3D12
-#define DW3_SHADER(name) make(shaders::name##_spv, shaders::name##_spv_size, shaders::name##_dxil, shaders::name##_dxil_size)
+#define DW3_DXIL(name) Blob{shaders::name##_dxil, shaders::name##_dxil_size}
 #else
-#define DW3_SHADER(name) make(shaders::name##_spv, shaders::name##_spv_size, nullptr, 0)
+#define DW3_DXIL(name) Blob{nullptr, 0}
 #endif
+#ifdef DW3_HAVE_METAL
+#define DW3_MSL(name) Blob{shaders::name##_msl, shaders::name##_msl_size}
+#else
+#define DW3_MSL(name) Blob{nullptr, 0}
+#endif
+#define DW3_SHADER(name) make(Blob{shaders::name##_spv, shaders::name##_spv_size}, DW3_DXIL(name), DW3_MSL(name))
     draw_vs = DW3_SHADER(psx_draw_vert);
     draw_fs = layer ? DW3_SHADER(psx_draw_layer_frag) : DW3_SHADER(psx_draw_frag);
     present_vs = DW3_SHADER(present_vert);
@@ -387,6 +416,8 @@ bool HwRenderer::Impl::create_pipelines() {
     osd_vs = DW3_SHADER(osd_vert);
     osd_fs = DW3_SHADER(osd_frag);
 #undef DW3_SHADER
+#undef DW3_DXIL
+#undef DW3_MSL
     if (!draw_vs || !draw_fs || !present_vs || !present_fs || !copy_vs || !copy_fs || !osd_vs || !osd_fs) return false;
 
     const RenderDescriptorRange range(RenderDescriptorRangeType::TEXTURE, 0, 1);
@@ -514,8 +545,12 @@ bool HwRenderer::Impl::create_pipelines() {
 }
 
 bool HwRenderer::Impl::create_swapchain(const NativeWindow& window) {
-#ifdef _WIN32
+#if defined(_WIN32)
     RenderWindow w = static_cast<RenderWindow>(window.hwnd);
+#elif defined(__APPLE__)
+    RenderWindow w{};
+    w.window = window.cocoa_window;
+    w.view = window.metal_layer;
 #else
     RenderWindow w{};
     w.userData = window.user;
@@ -948,6 +983,16 @@ HwRenderer::~HwRenderer() {
 }
 
 bool HwRenderer::api_compiled_in(GraphicsApi api) {
+#ifdef __APPLE__
+    if (api == GraphicsApi::Vulkan) return false;  // would need MoltenVK
+#endif
+    if (api == GraphicsApi::Metal) {
+#ifdef DW3_HAVE_METAL
+        return true;
+#else
+        return false;
+#endif
+    }
     if (api == GraphicsApi::D3D12) {
 #ifdef DW3_HAVE_D3D12
         return true;
