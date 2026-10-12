@@ -49,5 +49,8 @@ function(dw3_target_defaults target)
         target_compile_options(${target} PRIVATE /W4)
     else()
         target_compile_options(${target} PRIVATE -Wall -Wextra -Wno-unused-parameter)
+        # aarch64 has fused multiply-add in the base ISA and x86-64 does not: without this the same floating point
+        # source can round differently between the two.
+        target_compile_options(${target} PRIVATE -ffp-contract=off)
     endif()
 endfunction()
