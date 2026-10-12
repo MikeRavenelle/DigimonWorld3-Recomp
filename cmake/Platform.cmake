@@ -37,6 +37,9 @@ function(dw3_target_defaults target)
     target_compile_definitions(${target} PUBLIC
         DW3_OS_${DW3_OS}=1
         DW3_ARCH_${DW3_ARCH}=1)
+    if(WIN32)
+        target_compile_definitions(${target} PUBLIC NOMINMAX WIN32_LEAN_AND_MEAN)
+    endif()
     if(MSVC)
         target_compile_options(${target} PRIVATE /W4)
     else()

@@ -13,6 +13,17 @@ if(DW3_HAVE_PLUME)
     file(MAKE_DIRECTORY ${SHADER_OUT})
     find_program(DW3_SPIRV_VAL spirv-val)
 
+    # Direct3D 12 takes DXIL: the SPIR-V is converted to HLSL with SPIRV-Cross and compiled with DXC.
+    set(DW3_D3D12_SHADERS OFF)
+    if(DW3_RENDER_D3D12)
+        include(D3D12Tools)
+        if(DW3_D3D12_TOOLS_FOUND)
+            set(DW3_D3D12_SHADERS ON)
+        else()
+            message(WARNING "DW3: spirv-cross or dxc not found; the Direct3D 12 backend is disabled")
+        endif()
+    endif()
+
     set(SHADER_HEADERS)
     # name|source|extra glslang options. The display layer variant of the draw shader writes a second target.
     foreach(entry psx_draw.vert|psx_draw.vert psx_draw.frag|psx_draw.frag psx_draw_layer.frag|psx_draw.frag|-DDISPLAY_LAYER
@@ -32,16 +43,37 @@ if(DW3_HAVE_PLUME)
         if(DW3_SPIRV_VAL)
             set(validate_cmd COMMAND ${DW3_SPIRV_VAL} --target-env vulkan1.2 ${spv})
         endif()
+        set(dxil_cmds)
+        set(dxil_hdr)
+        if(DW3_D3D12_SHADERS)
+            # Vulkan clip space is y-down and Direct3D's is y-up, so vertex shaders are flipped to draw the same image.
+            if(shader MATCHES "\\.vert$")
+                set(stage vs_6_0)
+                set(cross_opts --flip-vert-y)
+            else()
+                set(stage ps_6_0)
+                set(cross_opts)
+            endif()
+            set(hlsl ${SHADER_OUT}/${shader}.hlsl)
+            set(dxil ${SHADER_OUT}/${shader}.dxil)
+            set(dxil_hdr ${SHADER_OUT}/${shader}.dxil.h)
+            set(dxil_cmds
+                COMMAND ${DW3_SPIRV_CROSS} --hlsl --shader-model 60 ${cross_opts} --output ${hlsl} ${spv}
+                COMMAND ${DW3_DXC} -nologo -T ${stage} -E main -O3 -Fo ${dxil} ${hlsl}
+                COMMAND ${CMAKE_COMMAND} -DINPUT=${dxil} -DOUTPUT=${dxil_hdr} -DSYMBOL=${symbol}_dxil
+                        -P ${PROJECT_SOURCE_DIR}/cmake/EmbedBinary.cmake)
+        endif()
         add_custom_command(
-            OUTPUT ${hdr}
+            OUTPUT ${hdr} ${dxil_hdr}
             COMMAND ${DW3_GLSLANG} -V --target-env vulkan1.2 ${defs} -o ${spv} ${SHADER_DIR}/${source}
             ${validate_cmd}
             COMMAND ${CMAKE_COMMAND} -DINPUT=${spv} -DOUTPUT=${hdr} -DSYMBOL=${symbol}_spv
                     -P ${PROJECT_SOURCE_DIR}/cmake/EmbedBinary.cmake
-            DEPENDS ${SHADER_DIR}/${source} ${PROJECT_SOURCE_DIR}/cmake/EmbedBinary.cmake
+            ${dxil_cmds}
+            DEPENDS ${SHADER_DIR}/${source} ${PROJECT_SOURCE_DIR}/cmake/EmbedBinary.cmake ${DW3_SPIRV_CROSS_TARGET}
             COMMENT "Compiling shader ${shader}"
             VERBATIM)
-        list(APPEND SHADER_HEADERS ${hdr})
+        list(APPEND SHADER_HEADERS ${hdr} ${dxil_hdr})
     endforeach()
     add_custom_target(dw3_shaders DEPENDS ${SHADER_HEADERS})
 
@@ -49,7 +81,14 @@ if(DW3_HAVE_PLUME)
     add_dependencies(dw3render dw3_shaders)
     target_include_directories(dw3render PUBLIC ${CMAKE_CURRENT_BINARY_DIR})
    
-    target_link_libraries(dw3render PRIVATE plume ${X11_LIBRARIES} ${CMAKE_DL_LIBS})
-    target_include_directories(dw3render SYSTEM PRIVATE ${X11_INCLUDE_DIR})
+    target_link_libraries(dw3render PRIVATE plume ${CMAKE_DL_LIBS})
+    if(DW3_OS STREQUAL "linux")
+        target_link_libraries(dw3render PRIVATE ${X11_LIBRARIES})
+        target_include_directories(dw3render SYSTEM PRIVATE ${X11_INCLUDE_DIR})
+    endif()
     target_compile_definitions(dw3render PUBLIC DW3_HW_RENDERER=1)
+    if(DW3_D3D12_SHADERS)
+        target_compile_definitions(dw3render PUBLIC DW3_HAVE_D3D12=1)
+        target_link_libraries(dw3render PRIVATE d3d12 dxgi)
+    endif()
 endif()

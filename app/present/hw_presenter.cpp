@@ -10,23 +10,26 @@ namespace dw3app {
 HwPresenter::HwPresenter() = default;
 HwPresenter::~HwPresenter() = default;
 
-std::unique_ptr<HwPresenter> HwPresenter::create(SDL_Window* window, const PresentOptions& options, std::string& error) {
+std::unique_ptr<HwPresenter> HwPresenter::create(SDL_Window* window, dw3::GraphicsApi api, const PresentOptions& options, std::string& error) {
 #if DW3_HW_RENDERER
     const dw3::NativeWindow native = describe_window(window);
     std::unique_ptr<HwPresenter> p(new HwPresenter());
     p->window_ = window;
     p->options_ = options;
     dw3::HwOptions hw;
+    hw.api = api;
     hw.true_color = options.true_color;
     hw.filter = static_cast<dw3::TextureFilter>(options.texture_filter);
     hw.precise_geometry = options.precise_geometry;
     p->renderer_ = dw3::HwRenderer::create(&native, required_instance_extensions(), error, options.internal_res, hw);
     if (!p->renderer_) return nullptr;
+    p->name_ = api == dw3::GraphicsApi::D3D12 ? "GPU (plume/Direct3D 12)" : "GPU (plume/Vulkan)";
     p->renderer_->set_vsync(options.vsync);
-    SDL_Log("GPU device: %s", p->renderer_->device_name().c_str());
+    SDL_Log("GPU renderer: %s, device %s", p->name_.c_str(), p->renderer_->device_name().c_str());
     return p;
 #else
     (void)window;
+    (void)api;
     (void)options;
     error = "built without the GPU renderer";
     return nullptr;

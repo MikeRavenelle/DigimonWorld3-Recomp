@@ -11,6 +11,10 @@
 #include "dw3/vertex_builder.h"
 #include "dw3/vram_regions.h"
 #include "plume_render_interface.h"
+#ifdef _WIN32
+// <windows.h> (pulled in by the Direct3D 12 headers) renames DrawState to DrawStateA.
+#undef DrawState
+#endif
 #include "shaders/osd.frag.h"
 #include "shaders/osd.vert.h"
 #include "shaders/present.frag.h"
@@ -20,9 +24,23 @@
 #include "shaders/psx_draw.vert.h"
 #include "shaders/vram_copy.frag.h"
 #include "shaders/vram_copy.vert.h"
+#ifdef DW3_HAVE_D3D12
+#include "shaders/osd.frag.dxil.h"
+#include "shaders/osd.vert.dxil.h"
+#include "shaders/present.frag.dxil.h"
+#include "shaders/present.vert.dxil.h"
+#include "shaders/psx_draw.frag.dxil.h"
+#include "shaders/psx_draw_layer.frag.dxil.h"
+#include "shaders/psx_draw.vert.dxil.h"
+#include "shaders/vram_copy.frag.dxil.h"
+#include "shaders/vram_copy.vert.dxil.h"
+#endif
 
 namespace plume {
 extern std::unique_ptr<RenderInterface> CreateVulkanInterface();
+#ifdef DW3_HAVE_D3D12
+extern std::unique_ptr<RenderInterface> CreateD3D12Interface();
+#endif
 extern void SetVulkanExtraInstanceExtensions(const std::vector<std::string>& extensions);  // from the plume patch
 }
 
@@ -249,19 +267,27 @@ bool HwRenderer::Impl::init(const NativeWindow* window, int internal_scale, cons
     precise = options.precise_geometry;
     layer = options.true_color || options.filter != TextureFilter::Nearest;
     draw_mode = (layer ? 1u : 0u) | (options.true_color ? 2u : 0u) | (static_cast<uint32_t>(options.filter) << 2);
-    iface = CreateVulkanInterface();
+    const char* api_name = "Vulkan";
+    if (options.api == GraphicsApi::D3D12) {
+        api_name = "Direct3D 12";
+#ifdef DW3_HAVE_D3D12
+        iface = CreateD3D12Interface();
+#endif
+    } else {
+        iface = CreateVulkanInterface();
+    }
     if (!iface) {
-        error = "Vulkan is not available";
+        error = std::string(api_name) + " is not available";
         return false;
     }
     device = iface->createDevice();
     if (!device) {
-        error = "no usable Vulkan device";
+        error = std::string("no usable ") + api_name + " device";
         return false;
     }
     queue = device->createCommandQueue(RenderCommandListType::DIRECT);
     if (!queue) {
-        error = "Vulkan queue creation failed";
+        error = std::string(api_name) + " queue creation failed";
         return false;
     }
     for (Slot& sl : slots) {
@@ -270,7 +296,7 @@ bool HwRenderer::Impl::init(const NativeWindow* window, int internal_scale, cons
         sl.vertex_buf = device->createBuffer(RenderBufferDesc::VertexBuffer(kVertexBufferBytes, RenderHeapType::UPLOAD));
         sl.staging_buf = device->createBuffer(RenderBufferDesc::UploadBuffer(kStagingBytes));
         if (!sl.cmd || !sl.fence || !sl.vertex_buf || !sl.staging_buf) {
-            error = "Vulkan queue creation failed";
+            error = std::string(api_name) + " resource creation failed";
             return false;
         }
         sl.vertex_map = static_cast<uint8_t*>(sl.vertex_buf->map());
@@ -338,16 +364,29 @@ bool HwRenderer::Impl::init(const NativeWindow* window, int internal_scale, cons
 
 bool HwRenderer::Impl::create_pipelines() {
     const RenderShaderFormat fmt = iface->getCapabilities().shaderFormat;
-    if (fmt != RenderShaderFormat::SPIRV) return false;
-    draw_vs = device->createShader(shaders::psx_draw_vert_spv, shaders::psx_draw_vert_spv_size, "main", fmt);
-    draw_fs = layer ? device->createShader(shaders::psx_draw_layer_frag_spv, shaders::psx_draw_layer_frag_spv_size, "main", fmt)
-                    : device->createShader(shaders::psx_draw_frag_spv, shaders::psx_draw_frag_spv_size, "main", fmt);
-    present_vs = device->createShader(shaders::present_vert_spv, shaders::present_vert_spv_size, "main", fmt);
-    present_fs = device->createShader(shaders::present_frag_spv, shaders::present_frag_spv_size, "main", fmt);
-    copy_vs = device->createShader(shaders::vram_copy_vert_spv, shaders::vram_copy_vert_spv_size, "main", fmt);
-    copy_fs = device->createShader(shaders::vram_copy_frag_spv, shaders::vram_copy_frag_spv_size, "main", fmt);
-    osd_vs = device->createShader(shaders::osd_vert_spv, shaders::osd_vert_spv_size, "main", fmt);
-    osd_fs = device->createShader(shaders::osd_frag_spv, shaders::osd_frag_spv_size, "main", fmt);
+    // Each shader is embedded as SPIR-V (Vulkan) and, when the Direct3D 12 backend is built, as DXIL.
+    auto make = [&](const uint8_t* spv, size_t spv_size, const uint8_t* dxil, size_t dxil_size) -> std::unique_ptr<RenderShader> {
+        if (fmt == RenderShaderFormat::SPIRV) return device->createShader(spv, spv_size, "main", fmt);
+#ifdef DW3_HAVE_D3D12
+        if (fmt == RenderShaderFormat::DXIL) return device->createShader(dxil, dxil_size, "main", fmt);
+#endif
+        (void)dxil; (void)dxil_size;
+        return nullptr;
+    };
+#ifdef DW3_HAVE_D3D12
+#define DW3_SHADER(name) make(shaders::name##_spv, shaders::name##_spv_size, shaders::name##_dxil, shaders::name##_dxil_size)
+#else
+#define DW3_SHADER(name) make(shaders::name##_spv, shaders::name##_spv_size, nullptr, 0)
+#endif
+    draw_vs = DW3_SHADER(psx_draw_vert);
+    draw_fs = layer ? DW3_SHADER(psx_draw_layer_frag) : DW3_SHADER(psx_draw_frag);
+    present_vs = DW3_SHADER(present_vert);
+    present_fs = DW3_SHADER(present_frag);
+    copy_vs = DW3_SHADER(vram_copy_vert);
+    copy_fs = DW3_SHADER(vram_copy_frag);
+    osd_vs = DW3_SHADER(osd_vert);
+    osd_fs = DW3_SHADER(osd_frag);
+#undef DW3_SHADER
     if (!draw_vs || !draw_fs || !present_vs || !present_fs || !copy_vs || !copy_fs || !osd_vs || !osd_fs) return false;
 
     const RenderDescriptorRange range(RenderDescriptorRangeType::TEXTURE, 0, 1);
@@ -384,13 +423,13 @@ bool HwRenderer::Impl::create_pipelines() {
 
         input_slot = RenderInputSlot(0, sizeof(HwVertex));
         input_elements = {
-            RenderInputElement("POSITION", 0, 0, RenderFormat::R32G32_FLOAT, 0, offsetof(HwVertex, x)),
-            RenderInputElement("PLANES", 0, 1, RenderFormat::R32G32B32A32_SINT, 0, offsetof(HwVertex, plane)),
-            RenderInputElement("PLANES", 1, 2, RenderFormat::R32G32B32A32_SINT, 0, offsetof(HwVertex, plane) + 16),
-            RenderInputElement("PLANES", 2, 3, RenderFormat::R32G32B32A32_SINT, 0, offsetof(HwVertex, plane) + 32),
-            RenderInputElement("PLANES", 3, 4, RenderFormat::R32G32B32_SINT, 0, offsetof(HwVertex, plane) + 48),
-            RenderInputElement("STATE", 0, 5, RenderFormat::R32G32B32_UINT, 0, offsetof(HwVertex, state0)),
-            RenderInputElement("UVRECT", 0, 6, RenderFormat::R32_UINT, 0, offsetof(HwVertex, uv_rect)),
+            RenderInputElement("TEXCOORD", 0, 0, RenderFormat::R32G32_FLOAT, 0, offsetof(HwVertex, x)),
+            RenderInputElement("TEXCOORD", 1, 1, RenderFormat::R32G32B32A32_SINT, 0, offsetof(HwVertex, plane)),
+            RenderInputElement("TEXCOORD", 2, 2, RenderFormat::R32G32B32A32_SINT, 0, offsetof(HwVertex, plane) + 16),
+            RenderInputElement("TEXCOORD", 3, 3, RenderFormat::R32G32B32A32_SINT, 0, offsetof(HwVertex, plane) + 32),
+            RenderInputElement("TEXCOORD", 4, 4, RenderFormat::R32G32B32_SINT, 0, offsetof(HwVertex, plane) + 48),
+            RenderInputElement("TEXCOORD", 5, 5, RenderFormat::R32G32B32_UINT, 0, offsetof(HwVertex, state0)),
+            RenderInputElement("TEXCOORD", 6, 6, RenderFormat::R32_UINT, 0, offsetof(HwVertex, uv_rect)),
         };
         RenderGraphicsPipelineDesc pd;
         pd.pipelineLayout = draw_layout.get();
@@ -475,10 +514,14 @@ bool HwRenderer::Impl::create_pipelines() {
 }
 
 bool HwRenderer::Impl::create_swapchain(const NativeWindow& window) {
+#ifdef _WIN32
+    RenderWindow w = static_cast<RenderWindow>(window.hwnd);
+#else
     RenderWindow w{};
     w.userData = window.user;
     w.createSurface = window.create_surface;
     w.getSize = window.get_size;
+#endif
     swap = queue->createSwapChain(RenderSwapChainDesc(w, kSwapFormat, 2));
     if (!swap || !swap->resize()) return false;
     for (Slot& sl : slots) sl.acquire_sem = device->createCommandSemaphore();
@@ -904,6 +947,17 @@ HwRenderer::~HwRenderer() {
     }
 }
 
+bool HwRenderer::api_compiled_in(GraphicsApi api) {
+    if (api == GraphicsApi::D3D12) {
+#ifdef DW3_HAVE_D3D12
+        return true;
+#else
+        return false;
+#endif
+    }
+    return true;
+}
+
 std::unique_ptr<HwRenderer> HwRenderer::create(const NativeWindow* window, const std::vector<std::string>& instance_extensions,
                                                std::string& error, int internal_scale,
                                                const HwOptions& options) {
@@ -1031,7 +1085,7 @@ bool HwRenderer::read_display(const VramRect& r, std::vector<uint32_t>& rgba) {
     Impl& m = *impl_;
     const uint32_t w = static_cast<uint32_t>(r.w * m.scale), h = static_cast<uint32_t>(r.h * m.scale);
     const uint32_t pitch = upload_row_pixels(w);
-    const std::size_t rt_bytes = static_cast<std::size_t>(pitch) * h * 4, hi_bytes = static_cast<std::size_t>(pitch) * h * 8;
+    const std::size_t rt_bytes = align_up(static_cast<std::size_t>(pitch) * h * 4, 512), hi_bytes = static_cast<std::size_t>(pitch) * h * 8;
     if (rt_bytes + hi_bytes > kReadbackBytes) return false;
     m.record_draws();
     m.ensure_recording();

@@ -6,7 +6,13 @@ function(dw3_add_test name)
     target_link_libraries(${name} PRIVATE ${T_LIBS} GTest::gtest_main)
     target_compile_definitions(${name} PRIVATE DW3_GAME_DIR="${DW3_GAME_DIR}")
     dw3_target_defaults(${name})
-    gtest_discover_tests(${name} DISCOVERY_TIMEOUT 30)
+    if(CMAKE_CROSSCOMPILING)
+        # The executable cannot be run at build time to list its tests; register it as a single test.
+        add_test(NAME ${name} COMMAND ${name})
+        set_tests_properties(${name} PROPERTIES TIMEOUT 1800)
+    else()
+        gtest_discover_tests(${name} DISCOVERY_TIMEOUT 30)
+    endif()
 endfunction()
 
 dw3_add_test(test_psxdisc
@@ -35,13 +41,20 @@ add_executable(emit_testgen psxrecomp/emit_testgen.cpp)
 target_include_directories(emit_testgen PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/psxrecomp)
 target_link_libraries(emit_testgen PRIVATE psxrecomp_core)
 dw3_target_defaults(emit_testgen)
+# When cross-compiling, the generator cannot run here: use the one from a native build (its output is the same C).
+set(EMIT_TESTGEN_COMMAND emit_testgen)
+if(CMAKE_CROSSCOMPILING)
+    set(DW3_HOST_EMIT_TESTGEN "${PROJECT_SOURCE_DIR}/build/linux-x64-release/tests/emit_testgen" CACHE FILEPATH
+        "emit_testgen built for the build machine (used when cross-compiling)")
+    set(EMIT_TESTGEN_COMMAND ${DW3_HOST_EMIT_TESTGEN})
+endif()
 
 set(EMITTED_TESTS_DIR ${CMAKE_CURRENT_BINARY_DIR}/emitted_tests)
 set(EMITTED_TESTS_C ${EMITTED_TESTS_DIR}/emitted_funcs.c ${EMITTED_TESTS_DIR}/emitted_tables.c)
 add_custom_command(
     OUTPUT ${EMITTED_TESTS_C} ${EMITTED_TESTS_DIR}/emitted_tests.inc
-    COMMAND emit_testgen ${EMITTED_TESTS_DIR}
-    DEPENDS emit_testgen
+    COMMAND ${EMIT_TESTGEN_COMMAND} ${EMITTED_TESTS_DIR}
+    DEPENDS ${EMIT_TESTGEN_COMMAND}
     COMMENT "Recompiling emitter test programs")
 set_source_files_properties(${EMITTED_TESTS_C} PROPERTIES GENERATED TRUE
     COMPILE_OPTIONS "$<$<C_COMPILER_ID:Clang,GNU>:-w>;$<$<C_COMPILER_ID:MSVC>:/w>")
