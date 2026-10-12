@@ -37,6 +37,29 @@ jobs:
       - name: Unit tests
         run: ctest --preset linux-x64-debug -LE scenario -j4
 
+  linux-arm64:
+    name: Linux arm64 build and unit tests
+    runs-on: ubuntu-24.04-arm
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install packages
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends clang lld cmake ninja-build glslang-tools spirv-tools \
+            libx11-dev libxext-dev libxrandr-dev libxcursor-dev libxi-dev libxfixes-dev libxss-dev \
+            libxkbcommon-dev libwayland-dev libasound2-dev libpulse-dev libudev-dev libdrm-dev libgbm-dev \
+            libegl-dev libvulkan-dev
+
+      - name: Configure
+        run: cmake --preset linux-arm64-debug
+
+      - name: Build
+        run: cmake --build --preset linux-arm64-debug
+
+      - name: Unit tests
+        run: ctest --preset linux-arm64-debug -LE scenario -j4
+
   windows-cross:
     name: Windows x64 cross build, unit tests under Wine
     runs-on: ubuntu-24.04

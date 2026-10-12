@@ -4,6 +4,44 @@
 
 See the README. Presets: `linux-x64-debug`, `linux-x64-release`.
 
+## Linux arm64
+
+The `linux-arm64-debug` and `linux-arm64-release` presets build natively on an aarch64 Linux machine, exactly like the
+x64 presets (same packages, same steps). The `linux-arm64-cross-debug` and `linux-arm64-cross-release` presets
+cross-compile from an x86-64 Linux host and run the tests under qemu-user.
+
+### Cross toolchain
+
+Needs `clang`, `lld`, CMake, Ninja, glslang and `qemu-user` (`qemu-aarch64` or `qemu-aarch64-static` on the `PATH`),
+plus an aarch64 sysroot. On Fedora the sysroot can be created without an aarch64 machine:
+
+```sh
+sudo dnf install -y --forcearch=aarch64 --installroot=$HOME/.local/share/dw3-sysroot-aarch64 \
+    --use-host-config --releasever=$(rpm -E %fedora) --setopt=install_weak_deps=False \
+    glibc-devel libstdc++-devel gcc SDL3-devel libX11-devel libXext-devel libXrandr-devel libXcursor-devel \
+    libXi-devel libXfixes-devel libXScrnSaver-devel libxkbcommon-devel wayland-devel vulkan-loader-devel \
+    alsa-lib-devel pulseaudio-libs-devel systemd-devel libdrm-devel mesa-libgbm-devel mesa-libEGL-devel
+sudo chown -R $USER: $HOME/.local/share/dw3-sysroot-aarch64
+```
+
+`cmake/toolchains/linux-arm64.cmake` reads `DW3_ARM64_SYSROOT` (environment or `-DDW3_ARM64_SYSROOT=`;
+`~/.local/share/dw3-sysroot-aarch64` is the default). The sysroot supplies glibc, libstdc++ and SDL3; it is never part
+of the repository.
+
+```sh
+cmake --preset linux-arm64-cross-release
+cmake --build --preset linux-arm64-cross-release
+ctest --preset linux-arm64-cross-release -LE scenario -j4    # unit tests under qemu
+ctest --preset linux-arm64-cross-release -L scenario -j4     # in-game scenarios under qemu (needs the recompiled code and the disc)
+```
+
+The differential emitter test uses the generator from `build/linux-x64-release/tests/emit_testgen`
+(`-DDW3_HOST_EMIT_TESTGEN=` to change it), so build the x64 release preset first, as for the Windows cross build.
+Emulation is slow: allow a long `--timeout` for the scenarios. There is no GPU under qemu-user, so the renderer tests
+that need Vulkan skip themselves and the software rasterizer is what runs.
+
+On an aarch64 host, `cmake --preset linux-arm64-release` builds with the system compiler and libraries.
+
 ## Recompiled code
 
 The game executable and the in-game tests need the recompiled sources, which are generated from your own disc and
