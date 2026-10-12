@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.24)
-project(DW3Recomp LANGUAGES C CXX)
+project(DW3Recomp VERSION 0.1.0 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -66,4 +66,24 @@ endif()
 if(DW3_BUILD_TESTS)
     enable_testing()
     add_subdirectory(tests)
+endif()
+
+# Packaging: `cmake --install <build dir> --prefix <dir>` or `cpack --config <build dir>/CPackConfig.cmake`.
+# The Windows package is a ZIP with the executable (static CRT and SDL, no DLLs), the license and a note on
+# supplying the disc. It contains no game data and no SDK files.
+if(DW3_BUILD_APP)
+    if(WIN32)
+        set(CPACK_GENERATOR ZIP)
+        set(CPACK_PACKAGE_FILE_NAME "DW3Recomp-${PROJECT_VERSION}-windows-x64")
+    else()
+        set(CPACK_GENERATOR TGZ)
+        set(CPACK_PACKAGE_FILE_NAME "DW3Recomp-${PROJECT_VERSION}-${DW3_OS}-${DW3_ARCH}")
+    endif()
+    set(CPACK_PACKAGE_NAME "DW3Recomp")
+    set(CPACK_PACKAGE_VERSION "${PROJECT_VERSION}")
+    set(CPACK_PACKAGE_VENDOR "DW3Recomp")
+    set(CPACK_COMPONENTS_ALL app)  # dependencies install their own files; the package has only ours
+    set(CPACK_INCLUDE_TOPLEVEL_DIRECTORY ON)
+    set(CPACK_RESOURCE_FILE_LICENSE "${CMAKE_CURRENT_SOURCE_DIR}/LICENSE")
+    include(CPack)
 endif()

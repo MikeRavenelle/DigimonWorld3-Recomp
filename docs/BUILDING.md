@@ -75,3 +75,51 @@ with CTest as one test each (they cannot be run at build time to list their case
 fallback), `d3d12`, `vulkan` or `software`. The renderer tests (`test_render`) run each case on every backend the build
 contains, against the software rasterizer; select one with, for example,
 `--gtest_filter='*/D3D12_*'`.
+
+### Tests: build in the container, run on the host
+
+The cross toolchain sets `CMAKE_CROSSCOMPILING_EMULATOR` to `tools/wine/run-wine.sh`, so CTest runs every test
+executable under Wine. When the script is started inside a distrobox/toolbox container it runs itself again on the host
+with `distrobox-host-exec`, because Wine needs the host's GPU and audio. The build and `ctest` therefore both run in
+the build container:
+
+```sh
+distrobox enter dw3-build -- cmake --build --preset windows-x64-cross-release
+distrobox enter dw3-build -- ctest --preset windows-x64-cross-release -LE scenario -j4    # unit tests
+distrobox enter dw3-build -- ctest --preset windows-x64-cross-release -L scenario -j4     # in-game scenarios
+```
+
+Only Wine and a Proton build (see above) are needed on the host. Paths that CTest passes to the executables (the
+disc, the scenario files, the state directory) are given as `Z:/...` paths. On a machine without containers the same
+commands work directly.
+
+To use a different Wine, configure with `-DCMAKE_CROSSCOMPILING_EMULATOR=<command>`.
+
+### Native Windows host
+
+The `windows-x64-debug` and `windows-x64-release` presets build with clang-cl on Windows itself. Dependencies are the
+same: SDL3 and GoogleTest are always built from source on Windows, glslang must be on the `PATH`, and the DXC release
+for Windows is downloaded at configure time (SPIRV-Cross is built from source). The static CRT is selected for every
+Windows build.
+
+### Where files go on Windows
+
+Memory cards, save-state slots and the disc index cache are under `%APPDATA%\DW3Recomp` (`memcards`, `states`,
+`cache`). Command-line paths, including the disc, may contain spaces and non-ASCII characters; they are handled as
+UTF-8 and converted to wide paths at the file system boundary.
+
+### Window and audio checks
+
+`--window-size WxH`, `--fullscreen`, `--resize-at FRAME WxH` and `--fullscreen-at FRAME` exercise the window and the
+swap chain in audit runs. `--audio` with `--frames` plays audio in real time and logs the device buffer underruns and
+overrun drops when the run ends.
+
+### Packaging
+
+```sh
+distrobox enter dw3-build -- cmake --install build/windows-x64-cross-release --component app --prefix out/dw3recomp
+distrobox enter dw3-build -- cpack --config build/windows-x64-cross-release/CPackConfig.cmake
+```
+
+The ZIP holds `dw3recomp.exe` (static CRT and SDL, no DLLs), `LICENSE` and a `README.txt` that explains how to supply
+the disc. It contains no game data and no SDK files.
