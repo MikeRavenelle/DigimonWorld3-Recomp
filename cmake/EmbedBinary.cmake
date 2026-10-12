@@ -1,6 +1,10 @@
 # Script mode: cmake -DINPUT=<file> -DOUTPUT=<header> -DSYMBOL=<name> -P EmbedBinary.cmake
 # Writes the file as a 4-byte aligned byte array so that SPIR-V can be handed to the graphics API directly.
+# With -DTEXT=ON a terminating NUL is appended (and counted in the size), for shader source text.
 file(READ "${INPUT}" content HEX)
+if(TEXT)
+    string(APPEND content "00")
+endif()
 string(LENGTH "${content}" hex_len)
 math(EXPR size "${hex_len} / 2")
 string(REGEX REPLACE "([0-9a-f][0-9a-f])" "0x\\1," bytes "${content}")

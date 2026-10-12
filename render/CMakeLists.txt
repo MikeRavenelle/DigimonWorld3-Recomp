@@ -24,6 +24,13 @@ if(DW3_HAVE_PLUME)
         endif()
     endif()
 
+    # Metal takes Metal Shading Language: the SPIR-V is converted with SPIRV-Cross and the text is embedded.
+    set(DW3_METAL_SHADERS OFF)
+    if(DW3_RENDER_METAL)
+        include(MetalTools)
+        set(DW3_METAL_SHADERS ON)
+    endif()
+
     set(SHADER_HEADERS)
     # name|source|extra glslang options. The display layer variant of the draw shader writes a second target.
     foreach(entry psx_draw.vert|psx_draw.vert psx_draw.frag|psx_draw.frag psx_draw_layer.frag|psx_draw.frag|-DDISPLAY_LAYER
@@ -63,17 +70,29 @@ if(DW3_HAVE_PLUME)
                 COMMAND ${CMAKE_COMMAND} -DINPUT=${dxil} -DOUTPUT=${dxil_hdr} -DSYMBOL=${symbol}_dxil
                         -P ${PROJECT_SOURCE_DIR}/cmake/EmbedBinary.cmake)
         endif()
+        set(msl_cmds)
+        set(msl_hdr)
+        if(DW3_METAL_SHADERS)
+            set(msl ${SHADER_OUT}/${shader}.metal)
+            set(msl_hdr ${SHADER_OUT}/${shader}.msl.h)
+            set(msl_cmds
+                COMMAND ${DW3_SPIRV_MSL} ${spv} ${msl}
+                COMMAND ${CMAKE_COMMAND} -DINPUT=${msl} -DOUTPUT=${msl_hdr} -DSYMBOL=${symbol}_msl -DTEXT=ON
+                        -P ${PROJECT_SOURCE_DIR}/cmake/EmbedBinary.cmake)
+        endif()
         add_custom_command(
-            OUTPUT ${hdr} ${dxil_hdr}
+            OUTPUT ${hdr} ${dxil_hdr} ${msl_hdr}
             COMMAND ${DW3_GLSLANG} -V --target-env vulkan1.2 ${defs} -o ${spv} ${SHADER_DIR}/${source}
             ${validate_cmd}
             COMMAND ${CMAKE_COMMAND} -DINPUT=${spv} -DOUTPUT=${hdr} -DSYMBOL=${symbol}_spv
                     -P ${PROJECT_SOURCE_DIR}/cmake/EmbedBinary.cmake
             ${dxil_cmds}
+            ${msl_cmds}
             DEPENDS ${SHADER_DIR}/${source} ${PROJECT_SOURCE_DIR}/cmake/EmbedBinary.cmake ${DW3_SPIRV_CROSS_TARGET}
+                    ${DW3_SPIRV_MSL}
             COMMENT "Compiling shader ${shader}"
             VERBATIM)
-        list(APPEND SHADER_HEADERS ${hdr} ${dxil_hdr})
+        list(APPEND SHADER_HEADERS ${hdr} ${dxil_hdr} ${msl_hdr})
     endforeach()
     add_custom_target(dw3_shaders DEPENDS ${SHADER_HEADERS})
 
@@ -87,6 +106,11 @@ if(DW3_HAVE_PLUME)
         target_include_directories(dw3render SYSTEM PRIVATE ${X11_INCLUDE_DIR})
     endif()
     target_compile_definitions(dw3render PUBLIC DW3_HW_RENDERER=1)
+    if(DW3_METAL_SHADERS)
+        target_compile_definitions(dw3render PUBLIC DW3_HAVE_METAL=1)
+        target_link_libraries(dw3render PRIVATE "-framework Metal" "-framework QuartzCore" "-framework AppKit"
+                              "-framework Foundation" "-framework IOKit" "-framework CoreFoundation")
+    endif()
     if(DW3_D3D12_SHADERS)
         target_compile_definitions(dw3render PUBLIC DW3_HAVE_D3D12=1)
         target_link_libraries(dw3render PRIVATE d3d12 dxgi)
