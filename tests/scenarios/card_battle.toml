@@ -179,6 +179,11 @@ timeout = 1500
 press = "CROSS"
 every = 20
 
+# Fixture for the full duel scenario: the CARDGAME overlay is loaded and the challenge screen is up.
+[[savestate]]
+at = 3010
+path = "card_duel.state"
+
 # Challenge screen and folder choice: CROSS takes the first folder, then the opening draw.
 [[check]]
 at = 3020

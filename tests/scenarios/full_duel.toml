@@ -1,0 +1,243 @@
+name = "full_duel"
+description = "Play a whole card battle against Tamer Chris from the start of the duel: win the first set, lose the second and third, and end back in the field in Seiryu City East Sector."
+start_state = "card_duel.state"   # written by card_battle.toml, taken at the Card Battle Challenge screen
+start_frame = 3010
+frames = 17400
+memcard = "game:memcards/midgame.mcd"   # personal save data under the game directory; skipped when absent
+skip_intro = false
+
+# A card battle is a match of up to three sets ("Current score Win 1 Loss 0", "Next set."). Every set has the same
+# phases: Start (a card is drawn to see who begins), Draw ("6 cards will be drawn."), Load, Summon, Compile and the
+# battle itself. In the Load and Compile Phases "Use a Program Card?" is asked again after every card until the
+# player answers No (DOWN, CROSS); the opponent answers in between. The prompts wait for the player, so the inputs
+# below are taps that were recorded from the state; the run is deterministic.
+#
+# CARDGAME RAM (game mode 0x800554D0 is 7 while the duel runs, the overlay word 0x80082448 is 0x800835F0):
+#   0x800AB058 (half-word)  cards left in the player's deck
+#   0x800AB05C (5 bytes)    the player's resource cubes (white, blue, green, red, black)
+#   0x800AB062 (byte)       sets won by the player
+#   0x800AB12A (byte)       sets lost by the player
+# The score bytes change when the "You win!" / "You lose!" banner appears.
+#
+# Controls: CROSS selects and passes the banners, SQUARE summons the selected card in the Summon Phase, TRIANGLE goes
+# back. The Summon Phase hand holds Program Cards that bring Digimon to the field and, in some sets, one Digimon card.
+
+# Set 1. Start Phase, then the opening draw; CROSS goes through the banners and the folder choice (the first folder).
+[[repeat]]
+button = "CROSS"
+from = 3010
+to = 3380
+every = 37
+
+[[press]]
+button = "CROSS"
+at = 3700
+
+[[press]]
+button = "CROSS"
+at = 3800
+
+[[press]]
+button = "CROSS"
+at = 3900
+
+[[press]]
+button = "CROSS"
+at = 4000
+
+# Load Phase hand: Desire Access (the sixth card) trashes the hand and draws six cards; then No to another card.
+[[repeat]]
+button = "RIGHT"
+from = 4100
+to = 4401
+every = 60
+hold = 4
+
+[[press]]
+button = "CROSS"
+at = 4460
+
+[[press]]
+button = "CROSS"
+at = 4600
+
+[[press]]
+button = "DOWN"
+at = 5500
+
+[[press]]
+button = "CROSS"
+at = 5560
+
+# Summon Phase: the banner, then the first card (Summon Angemon) is summoned.
+[[press]]
+button = "CROSS"
+at = 5800
+
+[[press]]
+button = "CROSS"
+at = 5837
+
+[[press]]
+button = "SQUARE"
+at = 5950
+
+[[press]]
+button = "CROSS"
+at = 6050
+
+[[press]]
+button = "SQUARE"
+at = 6150
+
+# Compile Phase: Control Parts takes one of the opponent's Digimon, then the battle begins with a No.
+[[repeat]]
+button = "CROSS"
+from = 6250
+to = 8790
+every = 37
+
+[[press]]
+button = "DOWN"
+at = 8800
+
+[[press]]
+button = "CROSS"
+at = 8830
+
+[[repeat]]
+button = "CROSS"
+from = 8900
+to = 10200
+every = 37
+
+[[check]]
+at = 9430
+label = "set 1 won"
+ram = [{ addr = 0x800554D0, size = 4, value = 7 }, { addr = 0x800AB062, size = 1, value = 1 },
+       { addr = 0x800AB12A, size = 1, value = 0 }]
+screenshot = true
+screen_hash = "00019ffae777ffffc000c000c0010001007fc07fc038c000fffff776dffa9fff"
+
+# Set 2. Load Phase: No to the first prompt.
+[[press]]
+button = "DOWN"
+at = 10300
+
+[[press]]
+button = "CROSS"
+at = 10340
+
+[[repeat]]
+button = "CROSS"
+from = 10400
+to = 10800
+every = 37
+
+# Summon Phase: the sixth card is a Digimon (BK WarGreymon, 60/55); RIGHT to it, SQUARE and Yes.
+[[repeat]]
+button = "RIGHT"
+from = 10600
+to = 10780
+every = 40
+hold = 4
+
+[[press]]
+button = "SQUARE"
+at = 10900
+
+[[press]]
+button = "CROSS"
+at = 11000
+
+# Compile Phase and the Begin banner, then No to every Program Card prompt until the battle is over.
+[[press]]
+button = "CROSS"
+at = 12000
+
+[[press]]
+button = "CROSS"
+at = 12100
+
+[[repeat]]
+button = "DOWN"
+from = 12400
+to = 15350
+every = 70
+hold = 4
+
+[[repeat]]
+button = "CROSS"
+from = 12425
+to = 15390
+every = 70
+hold = 4
+
+[[check]]
+at = 14120
+label = "set 2 lost"
+ram = [{ addr = 0x800554D0, size = 4, value = 7 }, { addr = 0x800AB062, size = 1, value = 1 },
+       { addr = 0x800AB12A, size = 1, value = 1 }]
+screenshot = true
+screen_hash = "00ffdffaf777ffffc000c000c07f007b0001c001c000c000ffffe776dffa9fc9"
+
+# Set 3, the same way.
+[[repeat]]
+button = "RIGHT"
+from = 15450
+to = 15631
+every = 40
+hold = 4
+
+[[press]]
+button = "SQUARE"
+at = 15700
+
+[[press]]
+button = "CROSS"
+at = 15800
+
+[[press]]
+button = "CROSS"
+at = 15900
+
+[[press]]
+button = "CROSS"
+at = 16000
+
+[[repeat]]
+button = "DOWN"
+from = 16200
+to = 16900
+every = 70
+hold = 4
+
+[[repeat]]
+button = "CROSS"
+from = 16225
+to = 16900
+every = 70
+hold = 4
+
+[[check]]
+at = 16850
+label = "match lost"
+ram = [{ addr = 0x800554D0, size = 4, value = 7 }, { addr = 0x800AB062, size = 1, value = 1 },
+       { addr = 0x800AB12A, size = 1, value = 2 }]
+screenshot = true
+screen_hash = "03efdffee777ffff0000c000c1af00af0001c001c0000000fffff776dffa9fc9"
+
+# The duel ends and the game returns to the field where Chris stood.
+[[wait]]
+at = 16900
+label = "back in Seiryu City East Sector"
+ram = [{ addr = 0x800554D4, size = 4, value = 0x4E9 }, { addr = 0x800554D0, size = 4, value = 2 },
+       { via = 0x8004ADC0, addr = 0x58, size = 4, value = 0, cmp = "ne" }]
+timeout = 600
+
+[[check]]
+at = 17100
+label = "field again"
+ram = [{ addr = 0x800554D4, size = 4, value = 0x4E9 }, { addr = 0x800554D0, size = 4, value = 2 }]
+screenshot = true
+screen_hash = "d7e0f6001e000000ff2fffecffe0ffe00fc01ff07fb8ffb8c0b18150036007c0"
