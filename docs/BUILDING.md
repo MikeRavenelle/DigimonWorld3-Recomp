@@ -42,6 +42,37 @@ that need Vulkan skip themselves and the software rasterizer is what runs.
 
 On an aarch64 host, `cmake --preset linux-arm64-release` builds with the system compiler and libraries.
 
+## macOS (arm64)
+
+The `macos-arm64-debug` and `macos-arm64-release` presets build natively on an Apple silicon Mac with Xcode's Apple
+clang. Needs the Xcode command line tools, CMake, Ninja, glslang and SDL3 (Homebrew: `brew install cmake ninja glslang
+sdl3`; `spirv-tools` adds shader validation). GoogleTest, toml++, zstd, plume and SPIRV-Cross are fetched when CMake
+configures; SDL3 is fetched and built too when it is not installed.
+
+```sh
+cmake --preset macos-arm64-release -DDW3_GAME_DIR=$HOME/dw3/game    # directory with the disc image
+cmake --build --preset macos-arm64-release
+ctest --preset macos-arm64-debug -LE scenario -j8     # unit tests
+ctest --preset macos-arm64-release -L scenario -j4    # in-game scenarios (needs the recompiled code and the disc)
+```
+
+`DW3_GAME_DIR` defaults to `game` in the source tree. The recompiled code (see below) is architecture-neutral, so it can
+be generated on another machine and copied to `generated/`; configure again after it appears.
+
+The GPU renderer runs on plume's Metal backend (`--renderer metal`; `auto` and `gpu` select it too). The shaders are
+GLSL compiled to SPIR-V with glslang, converted to Metal Shading Language with SPIRV-Cross (`tools/shaders`) and
+embedded as text. Metal compiles them when the device is created, with fast math off, so the build needs no Metal
+toolchain from Xcode. The renderer tests (`test_render`) compare Metal against the software rasterizer at every internal
+resolution and option, as they do for Vulkan and Direct3D 12. plume is not built with MoltenVK, so `--renderer vulkan`
+is unavailable on macOS, and without a usable Metal device `auto` falls back to the software path.
+
+Exceptions thrown through the recompiled C (the stop request, a restored save state) rely on the C sources being built
+with `-fexceptions`, which `dw3_generated` does; the save-state scenarios exercise it.
+
+Memory cards, save states and the disc index cache are under `~/Library/Application Support/DW3Recomp`. The window is
+created at its logical size and the swap chain follows the Retina backing size. There is no app bundle, signing or
+notarization yet.
+
 ## Recompiled code
 
 The game executable and the in-game tests need the recompiled sources, which are generated from your own disc and
