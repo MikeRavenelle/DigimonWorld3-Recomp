@@ -10,7 +10,8 @@
 // --watch ADDR[:SIZE] (SIZE 1, 2 or 4, default 4; repeatable) prints every change of that RAM location with the
 // real and script frame, for finding the addresses that [[wait]] and [[check]] conditions use. --watch
 // *PTR+OFFSET[:SIZE] follows the pointer word at PTR first (like `via` in a ram condition). --dump FRAME:PATH
-// writes the 2 MiB of main RAM to PATH once the script reaches FRAME (repeatable), for diffing game states.
+// writes the 2 MiB of main RAM to PATH once the script reaches FRAME (repeatable), for diffing game states; a PATH ending
+// in .bmp writes the whole 1024x512 VRAM as an image instead.
 // [[savestate]] / [[loadstate]] / start_state entries (see scenario.h) read and write save states under --state-dir
 // (default game/audit/states); relative state paths are resolved against it.
 //
@@ -424,8 +425,14 @@ int main(int argc, char** argv) {
             const int64_t script = timeline.script_frame();
             while (dumps_done < opt.dumps.size() && script >= opt.dumps[dumps_done].first) {
                 const auto& d = opt.dumps[dumps_done++];
-                std::ofstream f(d.second, std::ios::binary);
-                f.write(reinterpret_cast<const char*>(host->machine().bus().ram()), 2 * 1024 * 1024);
+                if (std::filesystem::path(d.second).extension() == ".bmp") {
+                    std::vector<uint32_t> vram;
+                    host->machine().gpu().snapshot_vram(vram);
+                    write_bmp(d.second, vram, dw3::kVramWidth, dw3::kVramHeight);
+                } else {
+                    std::ofstream f(d.second, std::ios::binary);
+                    f.write(reinterpret_cast<const char*>(host->machine().bus().ram()), 2 * 1024 * 1024);
+                }
                 std::printf("  dump @%lld -> %s\n", static_cast<long long>(script), d.second.c_str());
             }
             for (std::size_t i = 0; i < opt.watches.size(); ++i) {
