@@ -38,6 +38,12 @@ TEST(ScenarioFormat, BadMemcardRejected) {
     EXPECT_THROW(parse("name = \"x\"\nframes = 1\nmemcard = \"floppy\"\n"), std::runtime_error);
 }
 
+TEST(ScenarioFormat, GameMemcardAccepted) {
+    auto s = parse("name = \"x\"\nframes = 1\nmemcard = \"game:memcards/a.mcd\"\n");
+    EXPECT_EQ(s.memcard, "game:memcards/a.mcd");
+    EXPECT_THROW(parse("name = \"x\"\nframes = 1\nmemcard = \"game:\"\n"), std::runtime_error);
+}
+
 TEST(ScenarioFormat, TomlSyntaxErrorReported) {
     try {
         parse("name = \n", "bad.toml");

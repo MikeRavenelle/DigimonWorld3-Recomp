@@ -5,7 +5,11 @@
 //   name = "newgame"
 //   frames = 3000
 //   skip_intro = true          # default; presses START at frame 300 to skip the intro FMV
-//   memcard = "none"           # "none" | "blank" (fresh formatted in-memory card)
+//   memcard = "none"           # "none" | "blank" (fresh formatted in-memory card) | "game:<file>" (a raw 128 KiB card
+//                              # image under the game directory, e.g. "game:memcards/endgame.mcd"; it is copied into
+//                              # an in-memory card, so the file is never written; a zero
+//                              # checksum in the header frame, as DexDrive conversions leave, is repaired. A missing file
+//                              # skips the scenario.)
 //
 //   [[reboot]]                 # power-cycle the machine at frame `at`: RAM, GPU and game state are lost, the
 //   at = 4000                  # memory card image is kept. Frames in the file stay global; the intro skip

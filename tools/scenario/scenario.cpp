@@ -192,7 +192,8 @@ Scenario parse(const std::string& text, const std::string& src) {
     s.memcard = root["memcard"].value_or(std::string("none"));
     if (s.name.empty()) fail(src, "missing `name`");
     if (s.frames <= 0) fail(src, "`frames` must be > 0");
-    if (s.memcard != "none" && s.memcard != "blank") fail(src, "`memcard` must be \"none\" or \"blank\"");
+    if (s.memcard != "none" && s.memcard != "blank" && !(s.memcard.rfind("game:", 0) == 0 && s.memcard.size() > 5))
+        fail(src, "`memcard` must be \"none\", \"blank\" or \"game:<file>\"");
 
     if (auto* arr = root["press"].as_array()) {
         for (auto& n : *arr) {
