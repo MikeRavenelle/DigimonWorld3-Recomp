@@ -1,0 +1,365 @@
+name = "endgame_field_battle"
+description = "From the late-game save walk around Amaterasu Central Sector until a random encounter starts and check the battle menu."
+start_state = "endgame.state"   # written by endgame_state.toml
+start_frame = 1300
+frames = 4500
+include = ["common/endgame_to_central.toml"]
+memcard = "game:memcards/endgame.mcd"   # personal save data under the game directory; skipped when absent
+skip_intro = false
+
+# Game mode 0x800554D0: 2 field, 6 battle, 0x14 results. The battle arena is map 0x1FA (word 0x800554D4); 0x800A3260 is the
+# first enemy's HP (half-word, see field_battle.toml).
+#
+# Encounters come after enough steps, and where they happen depends on the steps taken; the legs below wander
+# along the street (CROSS is tapped throughout, like the walk this was recorded from) and the encounter starts in the
+# last one.
+
+[[press]]
+button = "RIGHT"
+at = 2012
+hold = 90
+
+[[repeat]]
+button = "CROSS"
+from = 2012
+to = 2102
+every = 10
+
+[[press]]
+button = "DOWN"
+at = 2107
+hold = 70
+
+[[press]]
+button = "RIGHT"
+at = 2107
+hold = 70
+
+[[repeat]]
+button = "CROSS"
+from = 2107
+to = 2177
+every = 10
+
+[[press]]
+button = "DOWN"
+at = 2182
+hold = 30
+
+[[repeat]]
+button = "CROSS"
+from = 2182
+to = 2212
+every = 10
+
+[[press]]
+button = "LEFT"
+at = 2217
+hold = 90
+
+[[repeat]]
+button = "CROSS"
+from = 2217
+to = 2307
+every = 10
+
+[[press]]
+button = "LEFT"
+at = 2312
+hold = 50
+
+[[repeat]]
+button = "CROSS"
+from = 2312
+to = 2362
+every = 10
+
+[[press]]
+button = "UP"
+at = 2367
+hold = 30
+
+[[press]]
+button = "RIGHT"
+at = 2367
+hold = 30
+
+[[repeat]]
+button = "CROSS"
+from = 2367
+to = 2397
+every = 10
+
+[[press]]
+button = "DOWN"
+at = 2402
+hold = 30
+
+[[press]]
+button = "RIGHT"
+at = 2402
+hold = 30
+
+[[repeat]]
+button = "CROSS"
+from = 2402
+to = 2432
+every = 10
+
+[[press]]
+button = "UP"
+at = 2437
+hold = 90
+
+[[press]]
+button = "RIGHT"
+at = 2437
+hold = 90
+
+[[repeat]]
+button = "CROSS"
+from = 2437
+to = 2527
+every = 10
+
+[[press]]
+button = "UP"
+at = 2532
+hold = 90
+
+[[press]]
+button = "RIGHT"
+at = 2532
+hold = 90
+
+[[repeat]]
+button = "CROSS"
+from = 2532
+to = 2622
+every = 10
+
+[[press]]
+button = "DOWN"
+at = 2627
+hold = 90
+
+[[press]]
+button = "LEFT"
+at = 2627
+hold = 90
+
+[[repeat]]
+button = "CROSS"
+from = 2627
+to = 2717
+every = 10
+
+[[press]]
+button = "DOWN"
+at = 2722
+hold = 90
+
+[[press]]
+button = "LEFT"
+at = 2722
+hold = 90
+
+[[repeat]]
+button = "CROSS"
+from = 2722
+to = 2812
+every = 10
+
+[[press]]
+button = "UP"
+at = 2817
+hold = 70
+
+[[repeat]]
+button = "CROSS"
+from = 2817
+to = 2887
+every = 10
+
+[[press]]
+button = "UP"
+at = 2892
+hold = 90
+
+[[repeat]]
+button = "CROSS"
+from = 2892
+to = 2982
+every = 10
+
+[[press]]
+button = "RIGHT"
+at = 2987
+hold = 30
+
+[[repeat]]
+button = "CROSS"
+from = 2987
+to = 3017
+every = 10
+
+[[press]]
+button = "UP"
+at = 3022
+hold = 90
+
+[[press]]
+button = "RIGHT"
+at = 3022
+hold = 90
+
+[[repeat]]
+button = "CROSS"
+from = 3022
+to = 3112
+every = 10
+
+[[press]]
+button = "DOWN"
+at = 3117
+hold = 90
+
+[[press]]
+button = "RIGHT"
+at = 3117
+hold = 90
+
+[[repeat]]
+button = "CROSS"
+from = 3117
+to = 3207
+every = 10
+
+[[press]]
+button = "DOWN"
+at = 3212
+hold = 70
+
+[[repeat]]
+button = "CROSS"
+from = 3212
+to = 3282
+every = 10
+
+[[press]]
+button = "DOWN"
+at = 3287
+hold = 50
+
+[[press]]
+button = "LEFT"
+at = 3287
+hold = 50
+
+[[repeat]]
+button = "CROSS"
+from = 3287
+to = 3337
+every = 10
+
+[[press]]
+button = "DOWN"
+at = 3342
+hold = 50
+
+[[repeat]]
+button = "CROSS"
+from = 3342
+to = 3392
+every = 10
+
+[[press]]
+button = "UP"
+at = 3397
+hold = 90
+
+[[press]]
+button = "LEFT"
+at = 3397
+hold = 90
+
+[[repeat]]
+button = "CROSS"
+from = 3397
+to = 3487
+every = 10
+
+[[press]]
+button = "DOWN"
+at = 3492
+hold = 50
+
+[[press]]
+button = "RIGHT"
+at = 3492
+hold = 50
+
+[[repeat]]
+button = "CROSS"
+from = 3492
+to = 3542
+every = 10
+
+[[press]]
+button = "UP"
+at = 3547
+hold = 90
+
+[[repeat]]
+button = "CROSS"
+from = 3547
+to = 3637
+every = 10
+
+[[wait]]
+at = 3560
+label = "random encounter"
+ram = [{ addr = 0x800554D0, size = 4, value = 6 }]
+timeout = 600
+
+[[check]]
+at = 3900
+label = "battle menu"
+display_enabled = true
+screen_hash = "606f7e7f7707000379a671a4302f206f01a401a401a5f9e70000016401a40024"
+ram = [{ addr = 0x800554D0, size = 4, value = 6 }, { addr = 0x800554D4, size = 4, value = 0x1FA }]
+screenshot = true
+
+# CROSS picks Fight, the target and the attack; tapping it wins and leads through the results back to the field.
+[[wait]]
+at = 3950
+label = "battle won"
+ram = [{ addr = 0x800554D0, size = 4, value = 20 }]
+timeout = 6000
+press = "CROSS"
+every = 45
+press_hold = 3
+
+[[check]]
+at = 4050
+label = "victory"
+display_enabled = true
+screen_hash = "23ff00be001c00002fde239e27be27df21fe279e279e2ffe0000000000020100"
+screenshot = true
+
+[[wait]]
+at = 4100
+label = "back in the field"
+ram = [{ addr = 0x800554D0, size = 4, value = 2 }, { addr = 0x800554D4, size = 4, value = 0x1FE }]
+timeout = 3000
+press = "CROSS"
+every = 45
+press_hold = 3
+
+[[check]]
+at = 4400
+label = "field after the battle"
+display_enabled = true
+screen_hash = "fe00ff00fe00ff00e000f000f800e800cfd3bff06de3f180ffe0ffc0f7f0ff82"
+ram = [{ addr = 0x800554D0, size = 4, value = 2 }, { addr = 0x800554D4, size = 4, value = 0x1FE }]
+screenshot = true
