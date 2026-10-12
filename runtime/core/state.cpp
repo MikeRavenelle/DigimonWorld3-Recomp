@@ -1,5 +1,7 @@
 #include "dw3/state.h"
 
+#include "dw3/platform.h"
+
 #include <zstd.h>
 
 #include <array>
@@ -162,10 +164,12 @@ std::vector<uint8_t> unwrap(std::span<const uint8_t> file, uint64_t identity, In
 
 bool write_file(const std::string& path, std::span<const uint8_t> file, std::string& error) {
     std::error_code ec;
-    auto parent = std::filesystem::path(path).parent_path();
+    const std::filesystem::path target = platform::path_from_utf8(path);
+    auto parent = target.parent_path();
     if (!parent.empty()) std::filesystem::create_directories(parent, ec);
     // Written beside the target and renamed over it, so a reader never sees a half-written file.
-    const std::string temp = path + ".tmp";
+    std::filesystem::path temp = target;
+    temp += ".tmp";
     {
         std::ofstream f(temp, std::ios::binary | std::ios::trunc);
         if (f) f.write(reinterpret_cast<const char*>(file.data()), static_cast<std::streamsize>(file.size()));
@@ -176,7 +180,7 @@ bool write_file(const std::string& path, std::span<const uint8_t> file, std::str
             return false;
         }
     }
-    std::filesystem::rename(temp, path, ec);
+    std::filesystem::rename(temp, target, ec);
     if (ec) {
         error = "cannot write " + path + ": " + ec.message();
         std::filesystem::remove(temp, ec);
@@ -186,7 +190,7 @@ bool write_file(const std::string& path, std::span<const uint8_t> file, std::str
 }
 
 bool read_file(const std::string& path, std::vector<uint8_t>& file, std::string& error) {
-    std::ifstream f(path, std::ios::binary);
+    std::ifstream f(platform::path_from_utf8(path), std::ios::binary);
     if (!f) {
         error = "cannot open " + path;
         return false;

@@ -1,5 +1,7 @@
 #include "dw3/disc_ref.h"
 
+#include "dw3/platform.h"
+
 #include <algorithm>
 #include <array>
 #include <bit>
@@ -152,9 +154,10 @@ bool DiscIndex::build() {
 
 bool DiscIndex::load(const std::string& path, uint64_t sample) {
     std::error_code ec;
-    uint64_t file_size = std::filesystem::file_size(path, ec);
+    const std::filesystem::path file = platform::path_from_utf8(path);
+    uint64_t file_size = std::filesystem::file_size(file, ec);
     if (ec || file_size < kHeaderSize) return false;
-    std::ifstream f(path, std::ios::binary);
+    std::ifstream f(file, std::ios::binary);
     if (!f) return false;
     std::array<uint8_t, kHeaderSize> hdr{};
     if (!f.read(reinterpret_cast<char*>(hdr.data()), hdr.size())) return false;
@@ -193,7 +196,11 @@ void DiscIndex::save(const std::string& path, uint64_t sample) const {
 
     // Write next to the target and rename, so a concurrent reader never sees a partial file.
     std::random_device rd;
-    std::string tmp = path + ".tmp" + std::to_string(rd()) + std::to_string(rd());
+    const std::filesystem::path target = platform::path_from_utf8(path);
+    std::error_code dir_ec;
+    std::filesystem::create_directories(target.parent_path(), dir_ec);
+    std::filesystem::path tmp = target;
+    tmp += ".tmp" + std::to_string(rd()) + std::to_string(rd());
     bool ok;
     {
         std::ofstream f(tmp, std::ios::binary | std::ios::trunc);
@@ -205,7 +212,7 @@ void DiscIndex::save(const std::string& path, uint64_t sample) const {
         ok = static_cast<bool>(f);
     }
     std::error_code ec;
-    if (ok) std::filesystem::rename(tmp, path, ec);
+    if (ok) std::filesystem::rename(tmp, target, ec);
     if (!ok || ec) std::filesystem::remove(tmp, ec);
 }
 

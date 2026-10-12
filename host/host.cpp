@@ -140,7 +140,7 @@ struct Host::Impl {
             return true;
         }
         if (std::filesystem::exists(p, ec)) {
-            log("memory card " + p.string() + " is not a valid 128 KiB image; slot " + std::to_string(slot + 1) +
+            log("memory card " + platform::path_to_utf8(p) + " is not a valid 128 KiB image; slot " + std::to_string(slot + 1) +
                 " left empty");
             path[s].clear();
             return false;
@@ -157,7 +157,7 @@ struct Host::Impl {
     void flush(int slot) {
         auto s = static_cast<std::size_t>(slot);
         if (image[s].empty() || path[s].empty()) return;
-        if (!memcard::save_card_file(path[s], image[s])) log("cannot write memory card " + path[s].string());
+        if (!memcard::save_card_file(path[s], image[s])) log("cannot write memory card " + platform::path_to_utf8(path[s]));
         dirty[s] = false;
     }
     void touch(int slot) {
@@ -182,7 +182,7 @@ Host::~Host() {
 
 std::string Host::disc_index_cache_path() const {
     if (!impl_->cfg.disc_index_cache.empty()) return impl_->cfg.disc_index_cache;
-    return (platform::user_data_dir() / "cache" / "disc.index").string();
+    return platform::path_to_utf8(platform::user_data_dir() / "cache" / "disc.index");
 }
 
 void Host::start_worker() {
@@ -191,7 +191,7 @@ void Host::start_worker() {
     Worker* w = worker_.get();
     w->thread = std::thread([w] { w->run(); });
     w->post([this, w] {
-        w->disc = psxdisc::Disc::open(impl_->cfg.disc_path);
+        w->disc = psxdisc::Disc::open(platform::path_from_utf8(impl_->cfg.disc_path));
         if (!w->disc) return;
         w->stream = std::make_unique<DiscBytes>(*w->disc);
         auto t0 = std::chrono::steady_clock::now();
@@ -212,7 +212,7 @@ std::unique_ptr<Host> Host::create(const Config& cfg, std::string& error) {
     std::unique_ptr<Host> h(new Host());
     Impl& im = *h->impl_;
     im.cfg = cfg;
-    h->disc_ = psxdisc::Disc::open(cfg.disc_path);
+    h->disc_ = psxdisc::Disc::open(platform::path_from_utf8(cfg.disc_path));
     if (!h->disc_) {
         error = "cannot open disc image " + cfg.disc_path;
         return nullptr;
@@ -242,17 +242,17 @@ std::unique_ptr<Host> Host::create(const Config& cfg, std::string& error) {
         m.sio().attach_card(0, im.image[0]);
     } else if (cfg.card_mode == CardMode::Files) {
         auto dir = platform::user_data_dir() / "memcards";
-        std::filesystem::path p1 = cfg.card_path[0].empty() ? dir / "slot1.mcd" : std::filesystem::path(cfg.card_path[0]);
+        std::filesystem::path p1 = cfg.card_path[0].empty() ? dir / "slot1.mcd" : platform::path_from_utf8(cfg.card_path[0]);
         if (im.open_file(0, p1, true)) {
             m.sio().attach_card(0, im.image[0]);
-            im.log("memory card 1: " + p1.string());
+            im.log("memory card 1: " + platform::path_to_utf8(p1));
         }
         // Slot 2 is inserted only if its file exists, so "no card" stays available to the game.
-        std::filesystem::path p2 = cfg.card_path[1].empty() ? dir / "slot2.mcd" : std::filesystem::path(cfg.card_path[1]);
+        std::filesystem::path p2 = cfg.card_path[1].empty() ? dir / "slot2.mcd" : platform::path_from_utf8(cfg.card_path[1]);
         std::error_code ec;
         if (std::filesystem::exists(p2, ec) && im.open_file(1, p2, false)) {
             m.sio().attach_card(1, im.image[1]);
-            im.log("memory card 2: " + p2.string());
+            im.log("memory card 2: " + platform::path_to_utf8(p2));
         }
     }
     if (cfg.card_mode == CardMode::Files) {
