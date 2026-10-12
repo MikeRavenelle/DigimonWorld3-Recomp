@@ -1,6 +1,6 @@
 // Tests for the shader blobs and, when a GPU device is available, a comparison of the GPU renderer against the
 // software rasterizer on the same primitives. The comparison runs on every graphics API the build contains (Vulkan,
-// and Direct3D 12 on Windows); all of them must produce the software rasterizer's pixels.
+// Direct3D 12 on Windows and Metal on macOS); all of them must produce the software rasterizer's pixels.
 
 #include <gtest/gtest.h>
 
@@ -25,6 +25,17 @@
 #include "shaders/psx_draw.frag.h"
 #include "shaders/psx_draw_layer.frag.h"
 #include "shaders/psx_draw.vert.h"
+#ifdef DW3_HAVE_METAL
+#include "shaders/osd.frag.msl.h"
+#include "shaders/osd.vert.msl.h"
+#include "shaders/present.frag.msl.h"
+#include "shaders/present.vert.msl.h"
+#include "shaders/psx_draw.frag.msl.h"
+#include "shaders/psx_draw_layer.frag.msl.h"
+#include "shaders/psx_draw.vert.msl.h"
+#include "shaders/vram_copy.frag.msl.h"
+#include "shaders/vram_copy.vert.msl.h"
+#endif
 #ifdef DW3_HAVE_D3D12
 #include "shaders/osd.frag.dxil.h"
 #include "shaders/osd.vert.dxil.h"
@@ -78,6 +89,30 @@ TEST(Shaders, CompiledToDxil) {
 }
 #endif
 
+#ifdef DW3_HAVE_METAL
+namespace {
+// Source text with its terminating NUL, defining the entry point the renderer asks for.
+bool is_msl(const uint8_t* data, std::size_t size) {
+    if (size < 2 || data[size - 1] != 0) return false;
+    const std::string text(reinterpret_cast<const char*>(data), size - 1);
+    return text.find("#include <metal_stdlib>") != std::string::npos && text.find(" main0(") != std::string::npos;
+}
+}  // namespace
+
+TEST(Shaders, ConvertedToMsl) {
+    using namespace dw3::shaders;
+    EXPECT_TRUE(is_msl(osd_frag_msl, osd_frag_msl_size));
+    EXPECT_TRUE(is_msl(osd_vert_msl, osd_vert_msl_size));
+    EXPECT_TRUE(is_msl(present_frag_msl, present_frag_msl_size));
+    EXPECT_TRUE(is_msl(present_vert_msl, present_vert_msl_size));
+    EXPECT_TRUE(is_msl(psx_draw_frag_msl, psx_draw_frag_msl_size));
+    EXPECT_TRUE(is_msl(psx_draw_layer_frag_msl, psx_draw_layer_frag_msl_size));
+    EXPECT_TRUE(is_msl(psx_draw_vert_msl, psx_draw_vert_msl_size));
+    EXPECT_TRUE(is_msl(vram_copy_frag_msl, vram_copy_frag_msl_size));
+    EXPECT_TRUE(is_msl(vram_copy_vert_msl, vram_copy_vert_msl_size));
+}
+#endif
+
 namespace {
 
 using namespace dw3;
@@ -92,7 +127,9 @@ struct GpuParam {
     operator int() const { return scale; }
 };
 
-const char* api_name(GraphicsApi api) { return api == GraphicsApi::D3D12 ? "D3D12" : "Vulkan"; }
+const char* api_name(GraphicsApi api) {
+    return api == GraphicsApi::D3D12 ? "D3D12" : api == GraphicsApi::Metal ? "Metal" : "Vulkan";
+}
 
 void PrintTo(const GpuParam& p, std::ostream* os) { *os << api_name(p.api) << " " << p.scale << "x"; }
 
@@ -103,7 +140,7 @@ std::string gpu_param_name(const ::testing::TestParamInfo<GpuParam>& info) {
 // Every compiled-in graphics API at each of the given internal resolutions.
 std::vector<GpuParam> gpu_params(std::initializer_list<int> scales) {
     std::vector<GpuParam> out;
-    for (GraphicsApi api : {GraphicsApi::Vulkan, GraphicsApi::D3D12})
+    for (GraphicsApi api : {GraphicsApi::Vulkan, GraphicsApi::D3D12, GraphicsApi::Metal})
         if (HwRenderer::api_compiled_in(api))
             for (int scale : scales) out.push_back({api, scale});
     return out;

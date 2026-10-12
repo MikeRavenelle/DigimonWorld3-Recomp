@@ -20,9 +20,12 @@ std::unique_ptr<Presenter> create_presenter(const char* title, int width, int he
     const bool software_only = choice == RendererChoice::Software;
     if (choice == RendererChoice::Vulkan) apis = {dw3::GraphicsApi::Vulkan};
     else if (choice == RendererChoice::D3D12) apis = {dw3::GraphicsApi::D3D12};
+    else if (choice == RendererChoice::Metal) apis = {dw3::GraphicsApi::Metal};
     else if (!software_only) {
-#ifdef _WIN32
+#if defined(_WIN32)
         apis = {dw3::GraphicsApi::D3D12, dw3::GraphicsApi::Vulkan};
+#elif defined(__APPLE__)
+        apis = {dw3::GraphicsApi::Metal};
 #else
         apis = {dw3::GraphicsApi::Vulkan};
 #endif
@@ -30,7 +33,9 @@ std::unique_ptr<Presenter> create_presenter(const char* title, int width, int he
     for (const dw3::GraphicsApi api : apis) {
         // A window that has had a swap chain of one API cannot get one of another, so every attempt has its own.
         SDL_WindowFlags flags = SDL_WINDOW_RESIZABLE;
-#ifndef _WIN32
+#if defined(__APPLE__)
+        flags |= SDL_WINDOW_METAL;
+#elif !defined(_WIN32)
         flags |= SDL_WINDOW_VULKAN;
 #endif
         window = SDL_CreateWindow(title, width, height, flags);
@@ -41,7 +46,8 @@ std::unique_ptr<Presenter> create_presenter(const char* title, int width, int he
         } else {
             error = std::string("window creation failed: ") + SDL_GetError();
         }
-        log(std::string(api == dw3::GraphicsApi::D3D12 ? "Direct3D 12" : "Vulkan") + " renderer unavailable: " + error);
+        const char* api_name = api == dw3::GraphicsApi::D3D12 ? "Direct3D 12" : api == dw3::GraphicsApi::Metal ? "Metal" : "Vulkan";
+        log(std::string(api_name) + " renderer unavailable: " + error);
     }
     if (choice != RendererChoice::Auto && choice != RendererChoice::Software) return nullptr;
     if (!software_only) log("falling back to the software presentation path");

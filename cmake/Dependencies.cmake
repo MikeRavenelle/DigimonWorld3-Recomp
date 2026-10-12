@@ -68,13 +68,12 @@ if(NOT SDL3_FOUND)
 endif()
 
 # plume RHI (MIT): the GPU renderer's graphics API layer. The Vulkan backend is used on Linux, Vulkan and Direct3D 12
-# on Windows; the Metal backend (macOS) is part of plume itself and is switched on once the renderer has been
-# brought up on it (cmake/Platform.cmake).
+# on Windows, Metal on macOS (cmake/Platform.cmake).
 option(DW3_HW_RENDERER "Build the plume GPU renderer" ON)
 set(DW3_HAVE_PLUME OFF)
 if(DW3_HW_RENDERER)
-    if(NOT DW3_OS STREQUAL "linux" AND NOT DW3_OS STREQUAL "windows")
-        message(STATUS "DW3: GPU renderer disabled (only wired up on Linux and Windows)")
+    if(NOT DW3_OS STREQUAL "linux" AND NOT DW3_OS STREQUAL "windows" AND NOT DW3_OS STREQUAL "macos")
+        message(STATUS "DW3: GPU renderer disabled (not available on this platform)")
     else()
         find_program(DW3_GLSLANG NAMES glslang glslangValidator)
         if(DW3_OS STREQUAL "linux")
@@ -87,10 +86,14 @@ if(DW3_HW_RENDERER)
         else()
             # Pinned commit; plume has no release tags. The patch adds the texture-to-buffer copy the Vulkan
             # backend lacks (used to read VRAM back to the CPU), and lets a window be described by callbacks so that SDL
-            # can supply the surface (X11 and Wayland alike). The Direct3D 12 patch makes that readback work there too.
+            # can supply the surface (X11 and Wayland alike). The Direct3D 12 and Metal patches make that readback work
+            # there too; the Metal one also lets a shader be given as source text, compiled when the device loads it.
             set(DW3_PLUME_SUBMODULES contrib/volk contrib/VulkanMemoryAllocator contrib/Vulkan-Headers)
             if(DW3_RENDER_D3D12)
                 list(APPEND DW3_PLUME_SUBMODULES contrib/D3D12MemoryAllocator)
+            endif()
+            if(DW3_RENDER_METAL)
+                list(APPEND DW3_PLUME_SUBMODULES contrib/metal-cpp)
             endif()
             FetchContent_Declare(plume
                 GIT_REPOSITORY https://github.com/renderbag/plume.git
@@ -99,6 +102,8 @@ if(DW3_HW_RENDERER)
                 PATCH_COMMAND ${CMAKE_COMMAND} -DPATCH=${CMAKE_CURRENT_LIST_DIR}/patches/plume-vulkan.patch
                               -P ${CMAKE_CURRENT_LIST_DIR}/ApplyPatch.cmake
                       COMMAND ${CMAKE_COMMAND} -DPATCH=${CMAKE_CURRENT_LIST_DIR}/patches/plume-d3d12.patch
+                              -P ${CMAKE_CURRENT_LIST_DIR}/ApplyPatch.cmake
+                      COMMAND ${CMAKE_COMMAND} -DPATCH=${CMAKE_CURRENT_LIST_DIR}/patches/plume-metal.patch
                               -P ${CMAKE_CURRENT_LIST_DIR}/ApplyPatch.cmake)
             FetchContent_MakeAvailable(plume)
             # Third-party code: build quietly and treat its headers as system headers.

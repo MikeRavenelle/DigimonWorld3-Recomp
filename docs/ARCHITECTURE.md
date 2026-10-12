@@ -113,11 +113,15 @@ regions. `--precise-geometry` adds sub-pixel vertices and perspective-correct te
 (RTPS/RTPT): the GTE records the position it had before truncating to integer SX/SY, keyed by the packed word, and the
 Gpu attaches it to polygon vertices that still carry that word, falling back to the integer otherwise. No generated
 code is involved, and with the option off nothing is recorded. Linux builds use plume's Vulkan backend; Windows builds contain both Vulkan and Direct3D 12
-(`--renderer auto` prefers Direct3D 12 there). The shaders are written in GLSL and compiled to SPIR-V with glslang;
-for Direct3D 12 the SPIR-V is converted to HLSL with SPIRV-Cross and compiled to DXIL with DXC, and both forms are
-embedded and chosen by the backend at run time. Vertex inputs use `TEXCOORD<location>` semantics, which is what
-SPIRV-Cross emits, and vertex shaders are flipped in y for Direct3D's clip space. plume is fetched at a pinned commit
-with `cmake/patches/plume-vulkan.patch` and `cmake/patches/plume-d3d12.patch` applied. The renderer tests run against
+(`--renderer auto` prefers Direct3D 12 there); macOS builds use Metal. The shaders are written in GLSL and compiled to
+SPIR-V with glslang; for Direct3D 12 the SPIR-V is converted to HLSL with SPIRV-Cross and compiled to DXIL with DXC, for
+Metal it is converted to Metal Shading Language with SPIRV-Cross (`tools/shaders/spirv_to_msl.cpp`, which lays resources
+out the way plume's Metal backend binds them: descriptor sets as argument buffers at buffer(N), push constants at
+buffer(8)) and embedded as source that the device compiles with fast math off. All forms are embedded and chosen by the
+backend at run time. Vertex inputs use `TEXCOORD<location>` semantics, which is what
+SPIRV-Cross emits, and vertex shaders are flipped in y for Direct3D's and Metal's clip space. plume is fetched at a
+pinned commit with `cmake/patches/plume-vulkan.patch`, `cmake/patches/plume-d3d12.patch` and
+`cmake/patches/plume-metal.patch` applied (the last adds the texture-to-buffer copy and source-text shaders). The renderer tests run against
 the software rasterizer on every backend the build contains, so all backends are held to the same pixels.
 
 ## Platforms
@@ -125,8 +129,8 @@ the software rasterizer on every backend the build contains, so all backends are
 | Target | Status | Backend |
 |---|---|---|
 | Linux x86_64 | primary | Vulkan |
-| macOS arm64 | second | Metal |
-| Linux arm64 | planned | Vulkan |
+| macOS arm64 | builds and runs natively (see BUILDING.md) | Metal |
+| Linux arm64 | builds (native and cross; see BUILDING.md) | Vulkan |
 | Windows x64 | builds and runs (cross-compiled; see BUILDING.md) | D3D12 / Vulkan |
 
 Arch- and OS-specific code lives only in `runtime/platform` and `cmake/Platform.cmake`.

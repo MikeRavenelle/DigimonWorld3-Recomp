@@ -1,7 +1,9 @@
 #include "native_window.h"
 
 #include <SDL3/SDL.h>
-#ifndef _WIN32
+#if defined(__APPLE__)
+#include <SDL3/SDL_metal.h>
+#elif !defined(_WIN32)
 #include <SDL3/SDL_vulkan.h>
 #endif
 
@@ -15,6 +17,28 @@ dw3::NativeWindow describe_window(SDL_Window* window) {
     w.user = window;
     w.hwnd = SDL_GetPointerProperty(SDL_GetWindowProperties(window), SDL_PROP_WINDOW_WIN32_HWND_POINTER, nullptr);
     return w;
+}
+
+void release_window(dw3::NativeWindow&) {}
+
+std::vector<std::string> required_instance_extensions() { return {}; }
+
+#elif defined(__APPLE__)
+
+// Metal draws into the window's CAMetalLayer, which SDL provides through a view it creates for the window.
+dw3::NativeWindow describe_window(SDL_Window* window) {
+    dw3::NativeWindow w;
+    w.cocoa_window = SDL_GetPointerProperty(SDL_GetWindowProperties(window), SDL_PROP_WINDOW_COCOA_WINDOW_POINTER, nullptr);
+    SDL_MetalView view = SDL_Metal_CreateView(window);
+    w.user = view;
+    w.metal_layer = view ? SDL_Metal_GetLayer(view) : nullptr;
+    return w;
+}
+
+void release_window(dw3::NativeWindow& native) {
+    if (native.user) SDL_Metal_DestroyView(static_cast<SDL_MetalView>(native.user));
+    native.user = nullptr;
+    native.metal_layer = nullptr;
 }
 
 std::vector<std::string> required_instance_extensions() { return {}; }
@@ -48,6 +72,8 @@ dw3::NativeWindow describe_window(SDL_Window* window) {
     w.get_size = window_size;
     return w;
 }
+
+void release_window(dw3::NativeWindow&) {}
 
 std::vector<std::string> required_instance_extensions() {
     Uint32 count = 0;

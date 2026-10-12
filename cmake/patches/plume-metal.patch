@@ -1,0 +1,57 @@
+--- a/plume_metal.cpp
++++ b/plume_metal.cpp
+@@ -1342,6 +1342,19 @@
+         functionName->retain();
+ 
+         NS::Error *error = nullptr;
++        if (size >= 4 && memcmp(data, "MTLB", 4) != 0) {
++            // Metal source text rather than a compiled library: compile it here, with strict floating point so that
++            // results match other backends.
++            MTL::CompileOptions *options = MTL::CompileOptions::alloc()->init();
++            options->setFastMathEnabled(false);
++            NS::String *source = NS::String::string(static_cast<const char *>(data), NS::UTF8StringEncoding);
++            library = device->mtl->newLibrary(source, options, &error);
++            options->release();
++            if (library == nullptr && error != nullptr) {
++                fprintf(stderr, "MTLDevice newLibraryWithSource: failed with error %s.\n", error->localizedDescription()->utf8String());
++            }
++            return;
++        }
+         const dispatch_data_t dispatchData = dispatch_data_create(data, size, dispatch_get_main_queue(), ^{});
+         library = device->mtl->newLibrary(dispatchData, &error);
+ 
+@@ -3022,6 +3035,34 @@
+                 dstOrigin
+             );
+             activeBlitEncoder->popDebugGroup();
++        } else if (dstLocation.type == RenderTextureCopyType::PLACED_FOOTPRINT && srcLocation.type == RenderTextureCopyType::SUBRESOURCE) {
++            // Texture to buffer (read back).
++            assert(srcTexture != nullptr);
++            assert(dstBuffer != nullptr);
++
++            const uint32_t blockWidth = RenderFormatBlockWidth(srcTexture->desc.format);
++            const uint32_t horizontalBlocks = (dstLocation.placedFootprint.rowWidth + blockWidth - 1) / blockWidth;
++            const uint32_t verticalBlocks = (dstLocation.placedFootprint.height + blockWidth - 1) / blockWidth;
++            const uint32_t bytesPerRow = horizontalBlocks * RenderFormatSize(srcTexture->desc.format);
++            const uint32_t bytesPerImage = bytesPerRow * verticalBlocks;
++
++            MTL::Origin srcOrigin = { 0, 0, 0 };
++            MTL::Size size = { dstLocation.placedFootprint.width, dstLocation.placedFootprint.height, dstLocation.placedFootprint.depth };
++            if (srcBox != nullptr) {
++                srcOrigin = { NS::UInteger(srcBox->left), NS::UInteger(srcBox->top), NS::UInteger(srcBox->front) };
++            }
++
++            activeBlitEncoder->copyFromTexture(
++                srcTexture->mtl,
++                srcLocation.subresource.arrayIndex,
++                srcLocation.subresource.mipLevel,
++                srcOrigin,
++                size,
++                dstBuffer->mtl,
++                dstLocation.placedFootprint.offset,
++                bytesPerRow,
++                bytesPerImage
++            );
+         } else {
+             assert(dstTexture != nullptr);
+             assert(srcTexture != nullptr);
