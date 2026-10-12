@@ -1,0 +1,23 @@
+name = "endgame_master_room"
+description = "From the late-game save in Amaterasu Inn walk through Lamb Chop, Central Sector West, the Digimon Lab, the Main Lobby and the Admin Center to the Master Room, and save the state there."
+start_state = "endgame.state"   # written by endgame_state.toml
+start_frame = 1300
+frames = 6000
+include = ["common/endgame_to_master_room.toml"]
+memcard = "game:memcards/endgame.mcd"   # personal save data under the game directory; skipped when absent
+skip_intro = false
+
+# Map ids (word 0x800554D4) on the way: 0x270 Amaterasu Inn 1F, 0x283 Lamb Chop, 0x1FC Central Sector West, 0x241 Digimon Lab,
+# 0x209 Main Lobby, 0x32F Admin Center 1F, 0x35D Admin Center 2F, 0x398 Master Room. Game mode 0x800554D0 is 2 in the field.
+# The legs and waypoints are in common/endgame_to_master_room.toml.
+
+[[check]]
+at = 5900
+label = "Master Room"
+display_enabled = true
+ram = [{ addr = 0x800554D4, size = 4, value = 0x398 }, { addr = 0x800554D0, size = 4, value = 2 }]
+screenshot = true
+
+[[savestate]]
+at = 5902
+path = "master_room.state"

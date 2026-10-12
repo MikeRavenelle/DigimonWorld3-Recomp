@@ -1,0 +1,380 @@
+# Master Room: the pigs wander over the floor and block the way, so this is a recorded walk (CROSS is tapped throughout, which
+# also dismisses their chatter) that gets past them to the door at the east end. Script frames 5907..7939.
+
+[[press]]
+button = "LEFT"
+at = 5907
+hold = 40
+
+[[repeat]]
+button = "CROSS"
+from = 5907
+to = 5947
+every = 12
+
+[[press]]
+button = "UP"
+at = 5949
+hold = 40
+
+[[press]]
+button = "LEFT"
+at = 5949
+hold = 40
+
+[[repeat]]
+button = "CROSS"
+from = 5949
+to = 5989
+every = 12
+
+[[press]]
+button = "DOWN"
+at = 5991
+hold = 120
+
+[[press]]
+button = "RIGHT"
+at = 5991
+hold = 120
+
+[[repeat]]
+button = "CROSS"
+from = 5991
+to = 6111
+every = 12
+
+[[press]]
+button = "DOWN"
+at = 6113
+hold = 120
+
+[[press]]
+button = "RIGHT"
+at = 6113
+hold = 120
+
+[[repeat]]
+button = "CROSS"
+from = 6113
+to = 6233
+every = 12
+
+[[press]]
+button = "RIGHT"
+at = 6235
+hold = 40
+
+[[repeat]]
+button = "CROSS"
+from = 6235
+to = 6275
+every = 12
+
+[[press]]
+button = "DOWN"
+at = 6277
+hold = 40
+
+[[press]]
+button = "RIGHT"
+at = 6277
+hold = 40
+
+[[repeat]]
+button = "CROSS"
+from = 6277
+to = 6317
+every = 12
+
+[[press]]
+button = "DOWN"
+at = 6319
+hold = 120
+
+[[press]]
+button = "LEFT"
+at = 6319
+hold = 120
+
+[[repeat]]
+button = "CROSS"
+from = 6319
+to = 6439
+every = 12
+
+[[press]]
+button = "UP"
+at = 6441
+hold = 120
+
+[[repeat]]
+button = "CROSS"
+from = 6441
+to = 6561
+every = 12
+
+[[press]]
+button = "UP"
+at = 6563
+hold = 60
+
+[[press]]
+button = "LEFT"
+at = 6563
+hold = 60
+
+[[repeat]]
+button = "CROSS"
+from = 6563
+to = 6623
+every = 12
+
+[[press]]
+button = "DOWN"
+at = 6625
+hold = 90
+
+[[repeat]]
+button = "CROSS"
+from = 6625
+to = 6715
+every = 12
+
+[[press]]
+button = "UP"
+at = 6717
+hold = 40
+
+[[repeat]]
+button = "CROSS"
+from = 6717
+to = 6757
+every = 12
+
+[[press]]
+button = "UP"
+at = 6759
+hold = 40
+
+[[repeat]]
+button = "CROSS"
+from = 6759
+to = 6799
+every = 12
+
+[[press]]
+button = "DOWN"
+at = 6801
+hold = 60
+
+[[press]]
+button = "LEFT"
+at = 6801
+hold = 60
+
+[[repeat]]
+button = "CROSS"
+from = 6801
+to = 6861
+every = 12
+
+[[press]]
+button = "DOWN"
+at = 6863
+hold = 40
+
+[[press]]
+button = "LEFT"
+at = 6863
+hold = 40
+
+[[repeat]]
+button = "CROSS"
+from = 6863
+to = 6903
+every = 12
+
+[[press]]
+button = "RIGHT"
+at = 6905
+hold = 120
+
+[[repeat]]
+button = "CROSS"
+from = 6905
+to = 7025
+every = 12
+
+[[press]]
+button = "DOWN"
+at = 7027
+hold = 60
+
+[[press]]
+button = "RIGHT"
+at = 7027
+hold = 60
+
+[[repeat]]
+button = "CROSS"
+from = 7027
+to = 7087
+every = 12
+
+[[press]]
+button = "UP"
+at = 7089
+hold = 60
+
+[[press]]
+button = "RIGHT"
+at = 7089
+hold = 60
+
+[[repeat]]
+button = "CROSS"
+from = 7089
+to = 7149
+every = 12
+
+[[press]]
+button = "RIGHT"
+at = 7151
+hold = 120
+
+[[repeat]]
+button = "CROSS"
+from = 7151
+to = 7271
+every = 12
+
+[[press]]
+button = "UP"
+at = 7273
+hold = 40
+
+[[press]]
+button = "LEFT"
+at = 7273
+hold = 40
+
+[[repeat]]
+button = "CROSS"
+from = 7273
+to = 7313
+every = 12
+
+[[press]]
+button = "DOWN"
+at = 7315
+hold = 40
+
+[[press]]
+button = "LEFT"
+at = 7315
+hold = 40
+
+[[repeat]]
+button = "CROSS"
+from = 7315
+to = 7355
+every = 12
+
+[[press]]
+button = "LEFT"
+at = 7357
+hold = 90
+
+[[repeat]]
+button = "CROSS"
+from = 7357
+to = 7447
+every = 12
+
+[[press]]
+button = "DOWN"
+at = 7449
+hold = 90
+
+[[repeat]]
+button = "CROSS"
+from = 7449
+to = 7539
+every = 12
+
+[[press]]
+button = "DOWN"
+at = 7541
+hold = 60
+
+[[press]]
+button = "LEFT"
+at = 7541
+hold = 60
+
+[[repeat]]
+button = "CROSS"
+from = 7541
+to = 7601
+every = 12
+
+[[press]]
+button = "UP"
+at = 7603
+hold = 90
+
+[[press]]
+button = "LEFT"
+at = 7603
+hold = 90
+
+[[repeat]]
+button = "CROSS"
+from = 7603
+to = 7693
+every = 12
+
+[[press]]
+button = "DOWN"
+at = 7695
+hold = 120
+
+[[press]]
+button = "RIGHT"
+at = 7695
+hold = 120
+
+[[repeat]]
+button = "CROSS"
+from = 7695
+to = 7815
+every = 12
+
+[[press]]
+button = "UP"
+at = 7817
+hold = 120
+
+[[repeat]]
+button = "CROSS"
+from = 7817
+to = 7937
+every = 12
+
+[[wait]]
+at = 7939
+label = "A.o.A Headquarters"
+ram = [{ addr = 0x800554D4, size = 4, value = 0x399 }, { addr = 0x800554D0, size = 4, value = 2 },
+       { via = 0x8004ADC0, addr = 0x58, size = 4, value = 0, cmp = "ne" }]
+timeout = 900
+hold = ["RIGHT"]
+press = "CROSS"
+every = 12
+press_hold = 3
+
+[[wait]]
+at = 7941
+label = "A.o.A Headquarters settled"
+ram = [{ addr = 0x80099114, size = 4, value = 0 }]
+timeout = 900

@@ -1,0 +1,38 @@
+name = "endgame_gunslinger"
+description = "From the Master Room state go to A.o.A Headquarters, watch the scene with Lord Megadeath and its movie, step onto the Warp Gate and arrive in Gunslinger 1F, and save the state there."
+start_state = "master_room.state"   # written by endgame_master_room.toml
+start_frame = 5902
+frames = 9900
+include = ["common/master_room_to_hq.toml", "common/hq_to_gunslinger.toml"]
+memcard = "game:memcards/endgame.mcd"   # personal save data under the game directory; skipped when absent
+skip_intro = false
+
+# Map ids (word 0x800554D4): 0x398 Master Room, 0x399 A.o.A Headquarters, 0x663 Gunslinger 1F (the military satellite).
+# Game mode 0x800554D0: 2 field, 0xE movie (the movie after Lord Megadeath's speech).
+# The legs are in common/master_room_to_hq.toml and common/hq_to_gunslinger.toml.
+
+[[check]]
+at = 7960
+label = "A.o.A Headquarters"
+display_enabled = true
+ram = [{ addr = 0x800554D4, size = 4, value = 0x399 }, { addr = 0x800554D0, size = 4, value = 2 }]
+screenshot = true
+
+# The wait for the movie ends at script frame 8150, so the movie is playing at the next one.
+[[check]]
+at = 8151
+label = "movie after the scene"
+display_enabled = true
+ram = [{ addr = 0x800554D0, size = 4, value = 0xE }]
+screenshot = true
+
+[[check]]
+at = 9800
+label = "Gunslinger 1F"
+display_enabled = true
+ram = [{ addr = 0x800554D4, size = 4, value = 0x663 }, { addr = 0x800554D0, size = 4, value = 2 }]
+screenshot = true
+
+[[savestate]]
+at = 9800
+path = "gunslinger.state"
