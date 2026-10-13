@@ -25,6 +25,7 @@ std::unique_ptr<HwPresenter> HwPresenter::create(SDL_Window* window, dw3::Graphi
     hw.true_color = options.true_color;
     hw.filter = static_cast<dw3::TextureFilter>(options.texture_filter);
     hw.precise_geometry = options.precise_geometry;
+    hw.texture_pack = options.texture_pack;
     p->renderer_ = dw3::HwRenderer::create(&native, required_instance_extensions(), error, options.internal_res, hw);
     if (!p->renderer_) return nullptr;
     p->name_ = api == dw3::GraphicsApi::D3D12 ? "GPU (plume/Direct3D 12)"
@@ -50,17 +51,20 @@ void HwPresenter::set_vsync(bool on) {
 bool HwPresenter::update_options(const PresentOptions& options, dw3::Gpu& gpu) {
     bool ok = true;
     if (options.internal_res != options_.internal_res || options.true_color != options_.true_color ||
-        options.texture_filter != options_.texture_filter || options.precise_geometry != options_.precise_geometry) {
+        options.texture_filter != options_.texture_filter || options.precise_geometry != options_.precise_geometry ||
+        options.texture_pack != options_.texture_pack) {
         dw3::HwOptions hw;
         hw.true_color = options.true_color;
         hw.filter = static_cast<dw3::TextureFilter>(options.texture_filter);
         hw.precise_geometry = options.precise_geometry;
+        hw.texture_pack = options.texture_pack;
         std::string error;
         if (renderer_->reconfigure(options.internal_res, hw, gpu.vram(), error)) {
             options_.internal_res = renderer_->internal_scale();
             options_.true_color = options.true_color;
             options_.texture_filter = options.texture_filter;
             options_.precise_geometry = options.precise_geometry;
+            options_.texture_pack = options.texture_pack;
         } else {
             SDL_Log("renderer reconfiguration failed: %s", error.c_str());
             ok = false;
@@ -74,6 +78,13 @@ bool HwPresenter::update_options(const PresentOptions& options, dw3::Gpu& gpu) {
 }
 
 void HwPresenter::attach(dw3::Gpu& gpu) { gpu.set_rasterizer(renderer_.get()); }
+
+bool HwPresenter::set_texture_dump(const std::string& directory) {
+    renderer_->set_texture_dump(directory);
+    return true;
+}
+
+bool HwPresenter::write_texture_dump(std::string& error) { return renderer_->write_texture_dump(error); }
 
 bool HwPresenter::present(dw3::Gpu& gpu, Capture* capture) {
     int w = 0, h = 0;

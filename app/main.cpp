@@ -28,6 +28,10 @@
 //   --precise-geometry GPU renderer: sub-pixel 3D vertices and perspective-correct textures from the GTE's projections
 //                      (best with --internal-res > 1; off by default)
 //   --texture-filter F GPU renderer: nearest (default), bilinear (3D triangles) or xbr (sprites, needs --internal-res > 1)
+//   --hd-backgrounds   GPU renderer: show the replacement backgrounds of the texture pack (--texture-pack NAME, a folder
+//                      under <user data dir>/texture-packs)
+//   --dump-textures DIR  GPU renderer: record the background images the game draws and write them to DIR on exit
+//                      (input of tools/texpack, which builds a texture pack)
 //   --window-size WxH  initial window size in pixels (default 1280x960)
 //   --fullscreen       start in (borderless, desktop) fullscreen; F11 or Alt+Enter toggles it
 //   --resize-at F WxH  resize the window at frame F (repeatable; for checking swap chain resizing in audit runs)
@@ -80,6 +84,7 @@
 #include "settings/fastforward.h"
 #include "present/post_options.h"
 #include "present/presenter.h"
+#include "present/texture_packs.h"
 
 namespace {
 
@@ -89,6 +94,7 @@ struct Options {
     std::string screenshot;
     bool trace_bios = false;
     std::string vram_dump;
+    std::string dump_textures;
     uint32_t trace_lo = 0, trace_hi = 0;
     bool uncapped = false;
     bool audio = false;
@@ -239,6 +245,9 @@ Options parse(int argc, char** argv) {
         else if (a == "--precise-geometry") set("graphics.precise_geometry", "true");
         else if (a == "--texture-filter" && i + 1 < argc) set("graphics.texture_filter", argv[++i]);
         else if (a == "--no-vsync") set("graphics.vsync", "false");
+        else if (a == "--hd-backgrounds") set("graphics.hd_backgrounds", "true");
+        else if (a == "--texture-pack" && i + 1 < argc) set("graphics.texture_pack", argv[++i]);
+        else if (a == "--dump-textures" && i + 1 < argc) o.dump_textures = argv[++i];
         else if (a == "--fast-forward-speed" && i + 1 < argc) set("system.fast_forward_speed", argv[++i]);
         else if (a == "--encounters" && i + 1 < argc) set("gameplay.encounters", argv[++i]);
         else if (a == "--game-speed" && i + 1 < argc) set("gameplay.game_speed", argv[++i]);
@@ -353,6 +362,7 @@ int main(int argc, char** argv) {
     const bool unpaced = opt.uncapped || opt.max_frames >= 0;
     dw3app::FastForwardInput fast_forward;
     // What the presenter should do for a configuration; vsync is off whenever the run is not paced to the display.
+    dw3app::TexturePackCache texture_packs;
     auto present_options = [&](const dw3app::Settings& st) {
         dw3app::PresentOptions po;
         const auto& g = st.graphics;
@@ -363,6 +373,7 @@ int main(int argc, char** argv) {
         po.true_color = g.true_color;
         po.texture_filter = g.texture_filter;
         po.precise_geometry = g.precise_geometry;
+        po.texture_pack = texture_packs.get(g);
         const char* modes[] = {"fit", "integer", "stretch"};
         dw3::parse_scale_mode(modes[g.scale_mode], po.scale);
         return po;
@@ -380,6 +391,10 @@ int main(int argc, char** argv) {
     if (active.graphics.fullscreen) SDL_SetWindowFullscreen(window, true);
     presenter->attach(machine.gpu());
     const bool software_presenter = std::string(presenter->name()).find("software") != std::string::npos;
+    if (software_presenter && (active.graphics.hd_backgrounds || !opt.dump_textures.empty()))
+        SDL_Log("texture replacement and dumping need the GPU renderer; ignored");
+    if (!opt.dump_textures.empty() && presenter->set_texture_dump(opt.dump_textures))
+        SDL_Log("recording background images for %s", opt.dump_textures.c_str());
     bool precise_installed = false;
     // The GTE side of precise geometry is installed the first time it is wanted and then left in place; the renderer
     // decides per configuration whether to use it.
@@ -468,6 +483,11 @@ int main(int argc, char** argv) {
     host->on_tty = [](const std::string& s) { SDL_Log("[game] %s", s.c_str()); };
 
     auto shutdown = [&](int code) -> int {
+        if (!opt.dump_textures.empty()) {
+            std::string dump_error;
+            if (presenter->write_texture_dump(dump_error)) SDL_Log("wrote texture dump to %s", opt.dump_textures.c_str());
+            else SDL_Log("texture dump failed: %s", dump_error.c_str());
+        }
         if (!opt.vram_dump.empty()) {
             std::vector<uint32_t> v;
             machine.gpu().snapshot_vram(v);

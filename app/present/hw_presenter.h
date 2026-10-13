@@ -17,6 +17,8 @@ public:
     bool update_options(const PresentOptions& options, dw3::Gpu& gpu) override;
     bool present(dw3::Gpu& gpu, Capture* capture) override;
     void attach(dw3::Gpu& gpu) override;
+    bool set_texture_dump(const std::string& directory) override;
+    bool write_texture_dump(std::string& error) override;
 
 private:
     HwPresenter();

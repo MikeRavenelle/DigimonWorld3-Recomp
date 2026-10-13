@@ -23,6 +23,7 @@ struct GraphicsBundle {
     int antialiasing = 0;
     int sharpening = 0;
     int color_grade = 0;
+    bool hd_backgrounds = false;  // needs a texture pack (graphics.texture_pack); without one it changes nothing
     bool operator==(const GraphicsBundle&) const = default;
 };
 
@@ -30,8 +31,6 @@ struct Preset {
     std::string_view name;   // the value stored in settings.toml
     std::string_view label;  // for the screen
     GraphicsBundle graphics;
-    // Features still to come (replacement textures for the pre-rendered backgrounds) belong here as further
-    // members, set per preset next to `graphics`, and are applied by the same code that applies `graphics`.
 };
 
 const Preset& preset(int id);            // id 0..2

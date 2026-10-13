@@ -24,13 +24,24 @@
 // Precise primitives (state0 bit 11, GTE sub-pixel geometry) take colour and texel coordinates from the interpolated
 // float varyings instead of the planes: every subpixel samples its own position.
 //
+// Replacement textures (display layer only). A sprite that shows a known background image carries bit 12 of state0:
+// the texel colour of the display layer then comes from the replacement atlas (binding 2) instead of the CLUT
+// lookup, at (texel position * replacement scale + offset), where the scale is in bits 13-15 of state0 (minus one)
+// and the offset in the vertex's hd offset word (two signed 16-bit values). The colour keeps full precision (no
+// 5-bit quantisation, no dithering) and is modulated by the vertex colour like any texel. The exact PS1 state in the
+// first target is untouched: it still holds what the game drew, so read-backs and later draws see the original.
+//
 // state0: bit0 textured, 1 raw texture, 2 semi-transparent, 3 dither, 4 check mask, 5 set mask,
-//         6-7 blend mode, 8-9 texture depth (0: 4 bit, 1: 8 bit, 2: 15 bit), 10 texels map 1:1 to pixels, 11 precise (float attributes)
+//         6-7 blend mode, 8-9 texture depth (0: 4 bit, 1: 8 bit, 2: 15 bit), 10 texels map 1:1 to pixels, 11 precise (float attributes),
+//         12 replacement texture, 13-15 replacement scale - 1
 // state1: bits 0-15 CLUT attribute, 16-19 texture page x / 64, 20 texture page y / 256
 // state2: texture window: bits 0-4 mask x, 5-9 mask y, 10-14 offset x, 15-19 offset y (8-pixel units)
 
 layout(set = 0, binding = 0) uniform texture2D uVram;  // copy of VRAM as of the last synchronisation
 layout(set = 0, binding = 1) uniform texture2D uHi;    // copy of the display layer
+#ifdef DISPLAY_LAYER
+layout(set = 0, binding = 2) uniform texture2D uReplace;  // replacement texture atlas, RGBA8
+#endif
 
 layout(push_constant) uniform Params {
     int scale;    // internal resolution multiplier (1 = native)
@@ -45,6 +56,7 @@ layout(location = 4) flat in uvec3 vState;
 layout(location = 5) flat in uint vUvRect;
 layout(location = 6) noperspective in vec3 vColF;  // precise primitives: colour, floor() selects the 8-bit value
 layout(location = 7) in vec2 vUvF;                 // precise primitives: texel coordinates, floor() selects the texel
+layout(location = 8) flat in uint vHdOffset;       // replacement texture offset
 
 layout(location = 0) out vec4 outColor;
 #ifdef DISPLAY_LAYER
@@ -168,6 +180,23 @@ vec3 xbrTexel(vec2 t, vec3 fallback) {
     return mix(E, closer, w);
 }
 
+#ifdef DISPLAY_LAYER
+// Replacement colour (0..255) at continuous atlas position `a` (texel centres at half integers), bilinear, with every
+// tap kept inside [lo, hi]. When the internal resolution equals the replacement scale the samples fall on texel
+// centres and nothing is blended.
+vec3 replaceTexel(vec2 a, ivec2 lo, ivec2 hi) {
+    vec2 q = a - 0.5;
+    vec2 b = floor(q);
+    vec2 f = q - b;
+    ivec2 i = ivec2(b);
+    vec3 c00 = texelFetch(uReplace, clamp(i, lo, hi), 0).rgb;
+    vec3 c10 = texelFetch(uReplace, clamp(i + ivec2(1, 0), lo, hi), 0).rgb;
+    vec3 c01 = texelFetch(uReplace, clamp(i + ivec2(0, 1), lo, hi), 0).rgb;
+    vec3 c11 = texelFetch(uReplace, clamp(i + ivec2(1, 1), lo, hi), 0).rgb;
+    return mix(mix(c00, c10, f.x), mix(c01, c11, f.x), f.y) * 255.0;
+}
+#endif
+
 void main() {
     gPlane = int[15](vPlanes0.x, vPlanes0.y, vPlanes0.z, vPlanes0.w, vPlanes1.x, vPlanes1.y, vPlanes1.z, vPlanes1.w,
                      vPlanes2.x, vPlanes2.y, vPlanes2.z, vPlanes2.w, vPlanes3.x, vPlanes3.y, vPlanes3.z);
@@ -247,14 +276,25 @@ void main() {
     vec3 sh = isPrecise ? colL : vec3(planeF(0, p, off), planeF(3, p, off), planeF(6, p, off)) / 4096.0;
     vec3 cf = gTrueColor ? clamp(sh - 0.5, 0.0, 255.0) : vec3(clamp(ivec3(floor(sh)), 0, 255));
     vec3 hc = cf;
+    bool replaced = false;
     if (textured) {
         vec3 tcf = texColor(t);
         bool unit = (s0 & 1024u) != 0u;
         vec2 tuv = (isPrecise ? uvL : vec2(planeF(9, p, off), planeF(12, p, off)) / 4096.0) - 0.5;
         if (filterMode == 1u && !unit) tcf = bilinearTexel(tuv, tcf);
         else if (filterMode == 2u && params.scale > 1) tcf = unit ? xbrTexel(tuv, tcf) : bilinearTexel(tuv, tcf);
+        if ((s0 & 4096u) != 0u) {
+            const int rs = int((s0 >> 13) & 7u) + 1;
+            const ivec2 origin = ivec2(int(vHdOffset << 16) >> 16, int(vHdOffset) >> 16);
+            const ivec2 lo = ivec2(int(vUvRect & 255u), int((vUvRect >> 16) & 255u)) * rs + origin;
+            const ivec2 hi = ivec2(int((vUvRect >> 8) & 255u) + 1, int(vUvRect >> 24) + 1) * rs - 1 + origin;
+            vec2 cc = vec2(planeF(9, p, off), planeF(12, p, off)) / 4096.0;
+            tcf = replaceTexel(cc * float(rs) + vec2(origin), lo, hi);
+            replaced = true;
+        }
         // The small offset keeps a blend of equal texels (division by the weight sum) from rounding down a step.
-        if (raw) hc = gTrueColor ? tcf : floor(tcf + 0.002);
+        if (replaced) hc = raw ? tcf : min(tcf * cf / 128.0, 255.0);
+        else if (raw) hc = gTrueColor ? tcf : floor(tcf + 0.002);
         else hc = gTrueColor ? min(tcf * cf / 128.0, 255.0) : min(floor(tcf * cf / 128.0 + 0.002), 255.0);
     }
     vec3 hiDest = vec3(0.0);
@@ -264,7 +304,9 @@ void main() {
         hiDest = valid ? h.rgb * 255.0 : vec3(expand5(uint(b.r)), expand5(uint(b.g)), expand5(uint(b.b)));
     }
     vec3 shown;
-    if (gTrueColor) {
+    if (replaced) {
+        shown = clamp(hc, 0.0, 255.0);
+    } else if (gTrueColor) {
         shown = clamp(hc, 0.0, 255.0);
         if (blend) {
             if (mode == 0u) shown = (hiDest + shown) * 0.5;

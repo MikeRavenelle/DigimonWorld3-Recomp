@@ -35,6 +35,9 @@ struct Settings {
         int sharpening = 0;          // off, low, medium, high
         int color_grade = 0;         // neutral, vivid, warm, cool
         int crt = 0;                 // off, scanlines, crt (not part of any preset)
+        // Replacement background images (GPU renderer only; see docs/SETTINGS.md).
+        bool hd_backgrounds = false;
+        std::string texture_pack;    // name of a folder in <user data>/texture-packs; empty for none
         bool operator==(const Graphics&) const = default;
     } graphics;
     struct Audio {

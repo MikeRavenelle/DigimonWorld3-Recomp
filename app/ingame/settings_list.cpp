@@ -22,6 +22,7 @@ constexpr Labels kLabels[] = {
     {"graphics.true_color", "True Color", 1},
     {"graphics.texture_filter", "Texture", 1},
     {"graphics.precise_geometry", "Precise 3D", 1},
+    {"graphics.hd_backgrounds", "HD BG", 1},
     {"graphics.output_filter", "Output", 1},
     {"graphics.antialiasing", "AA", 1},
     {"graphics.sharpening", "Sharpen", 1},
