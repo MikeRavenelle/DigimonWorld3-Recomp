@@ -1,8 +1,9 @@
 #include "field_menu.h"
 
 #include <algorithm>
-#include <cstring>
+#include <initializer_list>
 #include <string>
+#include <string_view>
 
 #include "dw3/recomp.h"
 #include "game_text.h"
