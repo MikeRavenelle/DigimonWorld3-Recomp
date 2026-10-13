@@ -89,6 +89,7 @@ struct ScreenWindows {
     uint32_t header = 0;
     std::array<uint32_t, kMaxRows> rows{};
     uint32_t cursor = 0;
+    uint32_t cursor_x = kCursorX;
     uint32_t row_count = 0;
 };
 

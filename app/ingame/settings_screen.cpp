@@ -89,9 +89,9 @@ std::string select_name_of(const ScreenModel& model) {
 
 namespace {
 
-void move_cursor(Guest& g, uint32_t cursor, uint32_t row) {
+void move_cursor(Guest& g, uint32_t cursor, uint32_t x, uint32_t row) {
     const uint32_t y = kFirstRowY + kRowPitch * row;
-    if (g.r32(cursor + kCursorTargetY) != y) g.call(g.r32(cursor + kCursorMoveTo), cursor, kCursorX, y);
+    if (g.r32(cursor + kCursorTargetY) != y) g.call(g.r32(cursor + kCursorMoveTo), cursor, x, y);
 }
 
 }  // namespace
@@ -112,7 +112,7 @@ void draw_screen(Guest& g, const ScreenWindows& windows, uint32_t selected, cons
         const uint32_t at = top + i;
         g.show(windows.rows[i], at < count ? text_of({row_text(view, list[at], context)}) : text_of({""}));
     }
-    move_cursor(g, windows.cursor, selected - top);
+    move_cursor(g, windows.cursor, windows.cursor_x, selected - top);
 }
 
 bool step_screen(Guest& g, ScreenModel& model, uint32_t& selected) {
