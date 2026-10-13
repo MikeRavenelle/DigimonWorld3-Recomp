@@ -82,7 +82,7 @@ All of these default to the original game and apply immediately; they also appea
 - **God mode** makes the party take no damage and defeat enemies with the first hit that lands, in every battle. Items
   and status effects are untouched. It is off by default and not meant for a first playthrough.
 - **XP multiplier** (1x, 2x, 3x, 5x, 10x) scales the experience each Digimon receives when a won battle's results are
-  applied; the total stays capped at the game's 999,999. The results screen still lists the unscaled award.
+  applied; the results screen lists the scaled award, and the total stays capped at the game's 999,999.
 - **Text speed** sets how quickly message boxes print (dialogue, menu descriptions, battle text). `fast` prints three
   characters per frame instead of one every few frames; `instant` prints each box at once and still waits for the
   button to close it. Pauses written into the text and scripted timing are unchanged.

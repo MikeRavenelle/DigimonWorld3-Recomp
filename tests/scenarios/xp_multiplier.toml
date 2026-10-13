@@ -6,6 +6,9 @@ frames = 2964
 memcard = "blank"
 settings = ["gameplay.xp_multiplier=2x"]
 
+# The results screen prints the share it grants: the task of the results screen (0x800AAAB4) keeps it at +0x64, so the
+# word at 0x800AAB18 holds the 12 points shown as "12 EXP" while the lead's experience still reads 4 (the grant runs later).
+#
 # The lead Digimon's record starts at 0x80048C50: experience (word) at +0x18, level (half) at +0x1C. It holds 4 before the
 # fight; the encounter awards 6, so 1x leaves 10 (field_battle.toml checks that) and 2x leaves 16.
 #
@@ -185,7 +188,7 @@ press_hold = 3
 at = 2304
 label = "victory"
 display_enabled = true
-ram = [{ addr = 0x800A3260, size = 2, value = 0 }]
+ram = [{ addr = 0x800554D0, size = 4, value = 0x14 }, { addr = 0x800A3260, size = 2, value = 0 }, { addr = 0x800AAB18, size = 4, value = 12 }]
 screenshot = true
 
 [[wait]]
