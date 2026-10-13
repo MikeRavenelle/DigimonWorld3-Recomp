@@ -16,16 +16,18 @@ namespace {
 //   window pixel wide, and the output is linear rather than FSR because the 8x picture (2560x1920 and up) is nearly
 //   always larger than the window, so there is nothing for FSR to reconstruct.
 // Enhanced also gets the lowest sharpening level, to win back the crispness the linear scale takes off the 4x picture.
+// Remaster also turns on the replacement background images (HD BG); it only has an effect when a texture pack is selected.
 // The CRT look is a separate setting and no preset turns it on.
 constexpr Preset kPresets[kNamedPresets] = {
     {"original", "Original", {1, false, 0, false, 0, 0, 0, 0}},
     {"enhanced", "Enhanced", {4, true, 1, true, 1, 0, 1, 0}},
-    {"remaster", "Remaster", {8, true, 2, true, 1, 0, 2, 1}},
+    {"remaster", "Remaster", {8, true, 2, true, 1, 0, 2, 1, true}},
 };
 
 constexpr std::string_view kMembers[] = {"graphics.internal_res", "graphics.true_color", "graphics.texture_filter",
                                          "graphics.precise_geometry", "graphics.output_filter",
-                                         "graphics.antialiasing", "graphics.sharpening", "graphics.color_grade"};
+                                         "graphics.antialiasing", "graphics.sharpening", "graphics.color_grade",
+                                         "graphics.hd_backgrounds"};
 
 }  // namespace
 
@@ -36,7 +38,7 @@ std::string_view preset_label(int id) { return id >= 0 && id < kNamedPresets ? k
 GraphicsBundle bundle_of(const Settings& s) {
     const auto& g = s.graphics;
     return {g.internal_res, g.true_color, g.texture_filter, g.precise_geometry, g.output_filter,
-            g.antialiasing, g.sharpening, g.color_grade};
+            g.antialiasing, g.sharpening, g.color_grade, g.hd_backgrounds};
 }
 
 void apply_bundle(Settings& s, const GraphicsBundle& b) {
@@ -49,6 +51,7 @@ void apply_bundle(Settings& s, const GraphicsBundle& b) {
     g.antialiasing = b.antialiasing;
     g.sharpening = b.sharpening;
     g.color_grade = b.color_grade;
+    g.hd_backgrounds = b.hd_backgrounds;
 }
 
 int match_preset(const Settings& s) {

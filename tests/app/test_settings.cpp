@@ -374,3 +374,41 @@ TEST(Settings, PostProcessingRoundTripsThroughToml) {
     EXPECT_EQ(settings_from_toml(settings_to_toml(s), report), s);
     EXPECT_FALSE(set(s, "graphics.sharpening", "extreme"));
 }
+
+TEST(Settings, HdBackgroundsDefaultOffAndLive) {
+    const Settings s = defaults();
+    EXPECT_FALSE(s.graphics.hd_backgrounds);
+    EXPECT_TRUE(s.graphics.texture_pack.empty());
+    const SettingInfo* hd = find_setting("graphics.hd_backgrounds");
+    ASSERT_NE(hd, nullptr);
+    EXPECT_EQ(hd->type, Type::Bool);
+    EXPECT_EQ(hd->label, "HD BG");
+    EXPECT_FALSE(hd->is_restart());
+    EXPECT_FALSE(hd->hidden);
+}
+
+TEST(Settings, TexturePackIsAHiddenStringSetting) {
+    const SettingInfo* pack = find_setting("graphics.texture_pack");
+    ASSERT_NE(pack, nullptr);
+    EXPECT_EQ(pack->type, Type::String);
+    EXPECT_TRUE(pack->hidden);
+    Settings s = defaults();
+    ASSERT_TRUE(set(s, "graphics.texture_pack", "general-x4"));
+    LoadReport report;
+    const Settings back = settings_from_toml(settings_to_toml(s), report);
+    EXPECT_EQ(back.graphics.texture_pack, "general-x4");
+    EXPECT_EQ(back.graphics.preset, kPresetOriginal) << "the pack name is not part of any preset";
+}
+
+TEST(Presets, OnlyRemasterTurnsHdBackgroundsOn) {
+    for (int p = 0; p < kNamedPresets; ++p) {
+        Settings s = defaults();
+        ASSERT_TRUE(set(s, "graphics.preset", preset(p).name));
+        EXPECT_EQ(s.graphics.hd_backgrounds, p == kPresetRemaster) << preset(p).name;
+    }
+    Settings s = defaults();
+    ASSERT_TRUE(set(s, "graphics.preset", "remaster"));
+    ASSERT_TRUE(set(s, "graphics.hd_backgrounds", "false"));
+    EXPECT_EQ(s.graphics.preset, kPresetCustom);
+    EXPECT_EQ(s.graphics.preset_base, kPresetRemaster);
+}

@@ -7,7 +7,12 @@
 #include <cassert>
 #include <cstdio>
 #include <cstring>
+#include <map>
+#include <set>
 
+#include "dw3/texrep/blocks.h"
+#include "dw3/texrep/dump.h"
+#include "dw3/texrep/pack.h"
 #include "dw3/vertex_builder.h"
 #include "dw3/vram_regions.h"
 #include "plume_render_interface.h"
@@ -162,6 +167,24 @@ struct HwRenderer::Impl {
     // Display layer (see hw_renderer.h): `hi` is drawn next to `rt`, `hi_tex` is its sampled copy.
     bool layer = false;
     bool precise = false;  // sub-pixel triangles (HwOptions::precise_geometry)
+
+    // Texture replacement (see texrep/blocks.h). `pack` is set while replacements are active; the atlas holds the
+    // replacement images that sprites currently refer to.
+    static constexpr int kAtlasSize = 4096;
+    std::shared_ptr<const texrep::TexturePack> pack;
+    texrep::BlockRegistry blocks;
+    std::unique_ptr<texrep::TextureDump> dump;
+    std::string dump_dir;
+    std::unique_ptr<RenderTexture> atlas;
+    RenderTextureLayout atlas_layout = RenderTextureLayout::UNKNOWN;
+    texrep::ShelfAtlas atlas_alloc{kAtlasSize, kAtlasSize};
+    struct Resident {
+        int x = 0, y = 0;
+    };
+    std::map<std::pair<uint64_t, uint64_t>, Resident> resident;  // (block, palette) -> place in the atlas
+    std::set<std::pair<uint64_t, uint64_t>> unusable;            // entries whose image could not be loaded
+    int atlas_epoch = 0;  // incremented whenever the atlas is cleared
+    bool tracking() const { return pack || dump; }
     uint32_t draw_mode = 0;  // push constant of the draw shader: bit0 layer, bit1 true colour, bits 2-3 filter
 
     // VRAM: `rt` is drawn into; `tex` is the sampled copy. With scale > 1, `nat` is a native-resolution texture
@@ -267,6 +290,10 @@ struct HwRenderer::Impl {
 
     void queue_primitive(const DrawState& s, const Region& bounds, bool reads_dest, const Region* tex_src,
                          const Region* clut_src, std::size_t vertices_before);
+    bool draw_background_rect(std::span<uint16_t> vram, const DrawState& s, const PrimitiveFlags& f, const GpuVertex& v, int width,
+                              int height);
+    const Resident* make_resident(const texrep::PackEntry& e);
+    void upload_replacement(const texrep::Image& img, int x, int y);
     void upload(std::span<const uint16_t> vram, const Region& r);
     void readback(const std::vector<Region>& regions, std::span<uint16_t> vram);
 
@@ -288,7 +315,8 @@ struct HwRenderer::Impl {
 bool HwRenderer::Impl::init(const NativeWindow* window, int internal_scale, const HwOptions& options, std::string& error) {
     scale = std::clamp(internal_scale, 1, 8);
     precise = options.precise_geometry;
-    layer = options.true_color || options.filter != TextureFilter::Nearest;
+    pack = options.texture_pack;
+    layer = options.true_color || options.filter != TextureFilter::Nearest || pack;
     draw_mode = (layer ? 1u : 0u) | (options.true_color ? 2u : 0u) | (static_cast<uint32_t>(options.filter) << 2);
     const char* api_name = "Vulkan";
     if (options.api == GraphicsApi::Metal) {
@@ -366,6 +394,12 @@ bool HwRenderer::Impl::create_targets(std::string& error) {
     rt_fb.reset();
     nat_fb.reset();
     draw_fb.reset();
+    atlas.reset();
+    atlas_layout = RenderTextureLayout::UNKNOWN;
+    resident.clear();
+    unusable.clear();
+    atlas_alloc.reset();
+    ++atlas_epoch;
     rt_layout = tex_layout = nat_layout = hi_layout = hi_tex_layout = RenderTextureLayout::UNKNOWN;
     rt = device->createTexture(RenderTextureDesc::ColorTarget(1024 * scale, 512 * scale, kVramFormat));
     tex = device->createTexture(RenderTextureDesc::Texture2D(1024 * scale, 512 * scale, 1, kVramFormat));
@@ -384,6 +418,13 @@ bool HwRenderer::Impl::create_targets(std::string& error) {
         hi_tex = device->createTexture(RenderTextureDesc::Texture2D(1024 * scale, 512 * scale, 1, kLayerFormat));
         if (!hi || !hi_tex) {
             error = "display layer creation failed";
+            return false;
+        }
+        // The replacement atlas is only as large as it needs to be: a dummy texel unless a pack is active.
+        const int atlas_px = pack ? kAtlasSize : 1;
+        atlas = device->createTexture(RenderTextureDesc::Texture2D(atlas_px, atlas_px, 1, kVramFormat));
+        if (!atlas) {
+            error = "replacement atlas creation failed";
             return false;
         }
         const RenderTexture* both[2] = {rt.get(), hi.get()};
@@ -454,14 +495,20 @@ bool HwRenderer::Impl::create_pipelines() {
     const RenderDescriptorRange pair_ranges[2] = {RenderDescriptorRange(RenderDescriptorRangeType::TEXTURE, 0, 1),
                                                   RenderDescriptorRange(RenderDescriptorRangeType::TEXTURE, 1, 1)};
     const RenderDescriptorSetDesc pair_desc(pair_ranges, 2);
+    // The draw pass of the display layer variant also reads the replacement atlas.
+    const RenderDescriptorRange triple_ranges[3] = {RenderDescriptorRange(RenderDescriptorRangeType::TEXTURE, 0, 1),
+                                                    RenderDescriptorRange(RenderDescriptorRangeType::TEXTURE, 1, 1),
+                                                    RenderDescriptorRange(RenderDescriptorRangeType::TEXTURE, 2, 1)};
+    const RenderDescriptorSetDesc triple_desc(triple_ranges, 3);
     vram_set = device->createDescriptorSet(set_desc);
     present_set = device->createDescriptorSet(set_desc);
-    draw_set = device->createDescriptorSet(pair_desc);
+    draw_set = device->createDescriptorSet(layer ? triple_desc : pair_desc);
     display_set = device->createDescriptorSet(pair_desc);
     vram_set->setTexture(0, tex.get(), RenderTextureLayout::SHADER_READ);
     present_set->setTexture(0, rt.get(), RenderTextureLayout::SHADER_READ);
     draw_set->setTexture(0, tex.get(), RenderTextureLayout::SHADER_READ);
     draw_set->setTexture(1, layer ? hi_tex.get() : tex.get(), RenderTextureLayout::SHADER_READ);
+    if (layer) draw_set->setTexture(2, atlas.get(), RenderTextureLayout::SHADER_READ);
     display_set->setTexture(0, rt.get(), RenderTextureLayout::SHADER_READ);
     display_set->setTexture(1, layer ? hi.get() : rt.get(), RenderTextureLayout::SHADER_READ);
     if (nat) {
@@ -474,7 +521,7 @@ bool HwRenderer::Impl::create_pipelines() {
         RenderPipelineLayoutDesc ld;
         ld.pushConstantRanges = &pc;
         ld.pushConstantRangesCount = 1;
-        ld.descriptorSetDescs = &pair_desc;
+        ld.descriptorSetDescs = layer ? &triple_desc : &pair_desc;
         ld.descriptorSetDescsCount = 1;
         ld.allowInputLayout = true;
         draw_layout = device->createPipelineLayout(ld);
@@ -488,6 +535,7 @@ bool HwRenderer::Impl::create_pipelines() {
             RenderInputElement("TEXCOORD", 4, 4, RenderFormat::R32G32B32_SINT, 0, offsetof(HwVertex, plane) + 48),
             RenderInputElement("TEXCOORD", 5, 5, RenderFormat::R32G32B32_UINT, 0, offsetof(HwVertex, state0)),
             RenderInputElement("TEXCOORD", 6, 6, RenderFormat::R32_UINT, 0, offsetof(HwVertex, uv_rect)),
+            RenderInputElement("TEXCOORD", 7, 7, RenderFormat::R32_UINT, 0, offsetof(HwVertex, hd_offset)),
         };
         RenderGraphicsPipelineDesc pd;
         pd.pipelineLayout = draw_layout.get();
@@ -672,6 +720,7 @@ void HwRenderer::Impl::record_draws() {
     if (layer) {
         transition(hi.get(), hi_layout, RenderTextureLayout::COLOR_WRITE);
         transition(hi_tex.get(), hi_tex_layout, RenderTextureLayout::SHADER_READ);
+        transition(atlas.get(), atlas_layout, RenderTextureLayout::SHADER_READ);
     }
     cmd->setFramebuffer(layer ? draw_fb.get() : rt_fb.get());
     // The pipeline has one viewport and scissor per render target.
@@ -894,6 +943,125 @@ void HwRenderer::Impl::readback(const std::vector<Region>& in, std::span<uint16_
 }
 
 // -------------------------------------------------------------------------------------------------------
+// Texture replacement
+
+void HwRenderer::Impl::upload_replacement(const texrep::Image& img, int x, int y) {
+    const uint32_t w = static_cast<uint32_t>(img.w), h = static_cast<uint32_t>(img.h);
+    const uint32_t pitch = upload_row_pixels(w);
+    const std::size_t off = staging_alloc(static_cast<std::size_t>(pitch) * h * 4);
+    auto* dst = reinterpret_cast<uint32_t*>(staging_map + off);
+    for (uint32_t row = 0; row < h; ++row)
+        std::memcpy(dst + static_cast<std::size_t>(row) * pitch, img.rgba.data() + static_cast<std::size_t>(row) * w, w * 4);
+    ensure_recording();
+    transition(atlas.get(), atlas_layout, RenderTextureLayout::COPY_DEST, true);
+    cmd->copyTextureRegion(RenderTextureCopyLocation::Subresource(atlas.get()),
+                           RenderTextureCopyLocation::PlacedFootprint(staging_buf, kVramFormat, w, h, 1, pitch, off),
+                           static_cast<uint32_t>(x), static_cast<uint32_t>(y), 0);
+}
+
+// The place of a pack entry's image in the atlas, loading it on first use. When the atlas is full everything is
+// dropped and loaded again as needed (after the draws that still read the old contents have been recorded).
+const HwRenderer::Impl::Resident* HwRenderer::Impl::make_resident(const texrep::PackEntry& e) {
+    const std::pair<uint64_t, uint64_t> key{e.block, e.clut};
+    if (auto it = resident.find(key); it != resident.end()) return &it->second;
+    if (unusable.count(key)) return nullptr;
+    texrep::Image img;
+    std::string err;
+    if (!pack->load_image(e, img, err)) {
+        std::fprintf(stderr, "texture pack: %s\n", err.c_str());
+        unusable.insert(key);
+        return nullptr;
+    }
+    auto place = atlas_alloc.alloc(img.w, img.h);
+    if (!place) {
+        record_draws();
+        resident.clear();
+        atlas_alloc.reset();
+        ++atlas_epoch;
+        place = atlas_alloc.alloc(img.w, img.h);
+        if (!place) {
+            unusable.insert(key);
+            return nullptr;
+        }
+    }
+    upload_replacement(img, place->first, place->second);
+    return &(resident[key] = Resident{place->first, place->second});
+}
+
+// Handles a sprite that samples 8-bit texels: reports what it draws to the dump, and draws the parts that show a
+// block with a replacement from the atlas. Returns false when nothing is replaced, so the caller draws the sprite as
+// usual.
+bool HwRenderer::Impl::draw_background_rect(std::span<uint16_t> vram, const DrawState& s, const PrimitiveFlags& f,
+                                            const GpuVertex& v, int width, int height) {
+    const Region clut = clut_region(s, f);
+    if (clut.empty() || dirty.intersects(clut)) return false;  // the CPU copy of the palette may be stale
+    const int clut_x = (f.clut & 0x3F) * 16, clut_y = (f.clut >> 6) & 0x1FF;
+    std::vector<texrep::Piece> pieces = texrep::split_by_blocks(blocks, s.tex_base_x, s.tex_base_y, v.u, v.v, width, height, true);
+    bool any_block = false;
+    for (const texrep::Piece& p : pieces) any_block |= p.block != nullptr;
+    if (!any_block) return false;
+    const uint64_t clut_hash = texrep::hash_clut(vram, clut_x, clut_y);
+
+    struct Draw {
+        const texrep::Piece* piece;
+        Resident slot;
+    };
+    std::vector<Draw> replaced;
+    for (int attempt = 0; attempt < 2; ++attempt) {
+        replaced.clear();
+        const int epoch = atlas_epoch;
+        for (const texrep::Piece& p : pieces) {
+            if (!p.block) continue;
+            const uint64_t bh = blocks.hash_of(*p.block, vram);
+            if (dump && p.w * p.h >= 64) {
+                if (!dump->has_variant(bh, clut_hash)) {
+                    std::vector<uint32_t> rgba;
+                    texrep::decode_block_8bit(vram, p.block->rect, clut_x, clut_y, rgba);
+                    dump->add_variant(bh, clut_hash, p.block->width_texels(), p.block->height_texels(), std::move(rgba));
+                }
+                dump->observe(bh, clut_hash, (v.x - s.off_x) + (p.u - v.u) - (p.u - p.block_u0),
+                              (v.y - s.off_y) + (p.v - v.v) - (p.v - p.block_v0));
+            }
+            if (!pack) continue;
+            const texrep::PackEntry* e = pack->find(bh, clut_hash);
+            if (!e || e->width != p.block->width_texels() || e->height != p.block->height_texels()) continue;
+            if (const Resident* r = make_resident(*e)) replaced.push_back({&p, *r});
+        }
+        if (epoch == atlas_epoch) break;  // otherwise earlier pieces were evicted by a later one: resolve again
+    }
+    if (replaced.empty()) return false;
+
+    const int scale_hd = pack->scale();
+    auto is_replaced = [&](const texrep::Piece& p) {
+        for (const Draw& d : replaced)
+            if (d.piece == &p) return &d;
+        return static_cast<const Draw*>(nullptr);
+    };
+    for (const texrep::Piece& p : pieces) {
+        GpuVertex pv = v;
+        pv.x = v.x + (p.u - v.u);
+        pv.y = v.y + (p.v - v.v);
+        pv.u = static_cast<uint8_t>(p.u);
+        pv.v = static_cast<uint8_t>(p.v);
+        const Region bounds = rect_bounds(s, pv, p.w, p.h);
+        if (bounds.empty()) continue;
+        const std::size_t before = pending.size();
+        build_rect(pending, s, f, pv, p.w, p.h);
+        if (const Draw* d = is_replaced(p)) {
+            const texrep::ReplacementOffset o =
+                texrep::replacement_offset(p.block_u0, p.block_v0, d->slot.x, d->slot.y, scale_hd);
+            for (std::size_t i = before; i < pending.size(); ++i) {
+                pending[i].state0 |= state_bits::kHd | (static_cast<uint32_t>(scale_hd - 1) << state_bits::kHdScaleShift);
+                pending[i].hd_offset = (static_cast<uint32_t>(o.y) << 16) | (static_cast<uint32_t>(o.x) & 0xFFFFu);
+            }
+        }
+        const Region t = rect_texture_region(s, pv, p.w, p.h);
+        queue_primitive(s, bounds, f.semi_transparent || s.check_mask, &t, &clut, before);
+    }
+    return true;
+}
+
+// -------------------------------------------------------------------------------------------------------
 // Presentation
 
 void HwRenderer::Impl::draw_display(RenderFramebuffer* fb, uint32_t w, uint32_t h, const DisplayState& d, ScaleMode mode, bool linear,
@@ -1095,6 +1263,7 @@ void HwRenderer::triangle(std::span<uint16_t>, const DrawState& s, const Primiti
     Impl& m = *impl_;
     const Region bounds = triangle_bounds(s, v);
     if (bounds.empty()) return;
+    if (m.tracking()) m.blocks.invalidate(bounds);
     const std::size_t before = m.pending.size();
     if (m.precise && has_precise(v)) build_precise_triangle(m.pending, s, f, v, m.scale);
     else build_triangle(m.pending, s, f, v, m.scale);
@@ -1107,11 +1276,18 @@ void HwRenderer::triangle(std::span<uint16_t>, const DrawState& s, const Primiti
     m.queue_primitive(s, bounds, f.semi_transparent || s.check_mask, tex ? &t : nullptr, tex ? &c : nullptr, before);
 }
 
-void HwRenderer::rect(std::span<uint16_t>, const DrawState& s, const PrimitiveFlags& f, const GpuVertex& v, int width,
+void HwRenderer::rect(std::span<uint16_t> vram, const DrawState& s, const PrimitiveFlags& f, const GpuVertex& v, int width,
                       int height) {
     Impl& m = *impl_;
     const Region bounds = rect_bounds(s, v, width, height);
     if (bounds.empty()) return;
+    if (m.tracking()) {
+        m.blocks.invalidate(bounds);
+        // Opaque sprites that read 8-bit texels one to one: the candidates for background images.
+        if (s.depth == TexDepth::Bit8 && uses_texture(s, f) && !f.semi_transparent && !s.rect_flip_x && !s.rect_flip_y &&
+            s.win_mask_x == 0 && s.win_mask_y == 0 && m.draw_background_rect(vram, s, f, v, width, height))
+            return;
+    }
     const std::size_t before = m.pending.size();
     build_rect(m.pending, s, f, v, width, height);
     const bool tex = uses_texture(s, f);
@@ -1128,13 +1304,16 @@ void HwRenderer::line(std::span<uint16_t>, const DrawState& s, const PrimitiveFl
     Impl& m = *impl_;
     const Region bounds = line_bounds(s, a, b);
     if (bounds.empty()) return;
+    if (m.tracking()) m.blocks.invalidate(bounds);
     const std::size_t before = m.pending.size();
     if (build_line(m.pending, s, f, a, b) == 0) return;
     m.queue_primitive(s, bounds, f.semi_transparent || s.check_mask, nullptr, nullptr, before);
 }
 
 void HwRenderer::vram_written(std::span<const uint16_t> vram, const VramRect& r) {
-    impl_->upload(vram, region_from(r));
+    const Region region = region_from(r);
+    if (impl_->tracking()) impl_->blocks.add_upload(region);
+    impl_->upload(vram, region);
 }
 
 void HwRenderer::vram_read_begin(std::span<uint16_t> vram, const VramRect& r) {
@@ -1160,6 +1339,7 @@ bool HwRenderer::vram_fill(const VramRect& r, uint16_t color) {
         ++m.stats.draw_calls;
     }
     const Region b = region_from(r);
+    if (m.tracking()) m.blocks.invalidate(b);
     m.stale.add(b);
     m.dirty.add(b);
     ++m.stats.fills;
@@ -1168,6 +1348,7 @@ bool HwRenderer::vram_fill(const VramRect& r, uint16_t color) {
 
 bool HwRenderer::vram_copy(const VramRect& src, int dx, int dy, bool check_mask, bool set_mask) {
     Impl& m = *impl_;
+    if (m.tracking()) m.blocks.invalidate(region_from({dx, dy, src.w, src.h}));
     if (copy_has_row_hazard(src, dx, dy)) {
         // Rows are copied in order and later rows read what earlier ones wrote, so do them one at a time.
         for (int k = 0; k < src.h; ++k)
@@ -1247,6 +1428,7 @@ bool HwRenderer::read_display(const VramRect& r, std::vector<uint32_t>& rgba) {
 bool HwRenderer::present(const DisplayState& display, ScaleMode mode, bool linear, std::vector<uint32_t>* capture,
                          int* capture_w, int* capture_h, const HwOverlay* overlay, const PostFx* post) {
     Impl& m = *impl_;
+    if (m.dump) m.dump->end_frame();
     if (!m.swap) return false;
     m.record_draws();
     if (overlay && (!overlay->rgba || overlay->w <= 0 || overlay->h <= 0 || !m.upload_overlay(*overlay))) overlay = nullptr;
@@ -1341,11 +1523,20 @@ bool HwRenderer::render_to_image(const DisplayState& display, ScaleMode mode, bo
 bool HwRenderer::reconfigure(int internal_scale, const HwOptions& options, std::span<uint16_t> vram, std::string& error) {
     Impl& m = *impl_;
     const int new_scale = std::clamp(internal_scale, 1, 8);
-    const bool new_layer = options.true_color || options.filter != TextureFilter::Nearest;
+    const bool new_layer = options.true_color || options.filter != TextureFilter::Nearest || options.texture_pack;
     const uint32_t new_mode = (new_layer ? 1u : 0u) | (options.true_color ? 2u : 0u) | (static_cast<uint32_t>(options.filter) << 2);
     m.record_draws();
-    if (new_scale == m.scale && new_layer == m.layer) {
-        // Only the draw shader's mode word and the vertex path change: nothing to rebuild.
+    const bool pack_present_changed = static_cast<bool>(options.texture_pack) != static_cast<bool>(m.pack);
+    if (new_scale == m.scale && new_layer == m.layer && !pack_present_changed) {
+        // Only the draw shader's mode word and the vertex path change: nothing to rebuild. A different pack empties
+        // the atlas, which the new pack's images will fill again.
+        if (options.texture_pack != m.pack) {
+            m.resident.clear();
+            m.unusable.clear();
+            m.atlas_alloc.reset();
+            ++m.atlas_epoch;
+            m.pack = options.texture_pack;
+        }
         m.precise = options.precise_geometry;
         m.draw_mode = new_mode;
         return true;
@@ -1356,6 +1547,7 @@ bool HwRenderer::reconfigure(int internal_scale, const HwOptions& options, std::
     m.wait_all();
     const int old_scale = m.scale;
     const bool old_layer = m.layer;
+    const auto old_pack = m.pack;
     auto rebuild = [&](int s, bool l, std::string& err) {
         m.scale = s;
         m.layer = l;
@@ -1371,15 +1563,29 @@ bool HwRenderer::reconfigure(int internal_scale, const HwOptions& options, std::
         m.upload(vram, kWholeVram);
         return true;
     };
+    m.pack = options.texture_pack;
     if (!rebuild(new_scale, new_layer, error)) {
         std::string ignored;
         m.wait_all();
+        m.pack = old_pack;
         rebuild(old_scale, old_layer, ignored);
         return false;
     }
     m.precise = options.precise_geometry;
     m.draw_mode = new_mode;
     return true;
+}
+
+void HwRenderer::set_texture_dump(const std::string& directory) {
+    Impl& m = *impl_;
+    m.dump_dir = directory;
+    m.dump = directory.empty() ? nullptr : std::make_unique<texrep::TextureDump>();
+}
+
+bool HwRenderer::write_texture_dump(std::string& error) {
+    Impl& m = *impl_;
+    if (!m.dump) return true;
+    return m.dump->write(m.dump_dir, error);
 }
 
 void HwRenderer::set_vsync(bool enabled) {

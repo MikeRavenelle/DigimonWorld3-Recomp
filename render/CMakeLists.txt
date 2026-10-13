@@ -1,11 +1,25 @@
 # GPU renderer. The pure parts (primitive -> vertex conversion, dirty-region bookkeeping) have no GPU dependency and
 # are always built; the plume-backed renderer is added when plume is available (see cmake/Dependencies.cmake).
 add_library(dw3render STATIC
-    src/vram_regions.cpp
     src/vertex_builder.cpp)
 target_include_directories(dw3render PUBLIC include)
-target_link_libraries(dw3render PUBLIC dw3runtime)
+target_link_libraries(dw3render PUBLIC dw3runtime dw3texrep)
 dw3_target_defaults(dw3render)
+
+# Texture replacement: block hashing and registry, texture packs, dumping, and the image helpers of the pack generator.
+add_library(dw3texrep STATIC
+    src/vram_regions.cpp
+    src/texrep/blocks.cpp
+    src/texrep/pack.cpp
+    src/texrep/dump.cpp
+    src/texrep/generate.cpp
+    src/texrep/window.cpp
+    src/texrep/stb_impl.cpp)
+target_include_directories(dw3texrep PUBLIC include)
+target_include_directories(dw3texrep SYSTEM PRIVATE ${PROJECT_SOURCE_DIR}/third_party/stb)
+target_link_libraries(dw3texrep PUBLIC dw3runtime tomlplusplus::tomlplusplus)
+dw3_target_defaults(dw3texrep)
+set_source_files_properties(src/texrep/stb_impl.cpp PROPERTIES COMPILE_OPTIONS "-w")
 
 if(DW3_HAVE_PLUME)
     set(SHADER_DIR ${CMAKE_CURRENT_SOURCE_DIR}/shaders)

@@ -18,14 +18,15 @@ namespace dw3 {
 // (0x800) folded into the base and the terms taken modulo 2^32 (the sum of a pixel inside the primitive is small).
 enum PlaneIndex { kPlaneR = 0, kPlaneG = 3, kPlaneB = 6, kPlaneU = 9, kPlaneV = 12, kPlaneInts = 15 };
 
-// Vertex layout shared with psx_draw.vert (84 bytes).
+// Vertex layout shared with psx_draw.vert (88 bytes).
 struct HwVertex {
     float x = 0, y = 0;                // VRAM pixel coordinates
     int32_t plane[kPlaneInts] = {};    // colour r, g, b and texel coordinates u, v: base, dx, dy each
     uint32_t state0 = 0, state1 = 0, state2 = 0;
     uint32_t uv_rect = 0;              // texel coordinate bounds of the primitive: u min, u max, v min, v max (bytes)
+    uint32_t hd_offset = 0;            // replacement texture offset (two signed 16-bit values), with state_bits::kHd
 };
-static_assert(sizeof(HwVertex) == 84);
+static_assert(sizeof(HwVertex) == 88);
 
 // Packed per-primitive state (see the header comment of psx_draw.frag for the bit layout).
 struct HwState {
@@ -41,6 +42,10 @@ constexpr uint32_t kCheckMask = 1u << 4;
 constexpr uint32_t kSetMask = 1u << 5;
 constexpr uint32_t kUnitUv = 1u << 10;  // texels map 1:1 to pixels on the axes (sprites, tiles): not bilinear filtered
 constexpr uint32_t kPrecise = 1u << 11;  // float attributes instead of planes (see build_precise_triangle)
+// Replacement texture (texture_replace.h): the display layer takes the texel colour from the replacement atlas.
+// Bits 13-15 hold the replacement scale minus one; hd_offset places the texel at (u, v) in the atlas.
+constexpr uint32_t kHd = 1u << 12;
+constexpr int kHdScaleShift = 13;
 }  // namespace state_bits
 
 // True when textures are sampled for this primitive.

@@ -30,6 +30,13 @@
 // its pixels records the VRAM word it was produced with; presentation shows the enhanced colour only where that
 // word is still the one in VRAM, so uploads, fills and copies need no mirroring and stale pixels fall back to the
 // exact colour.
+// Texture replacement. Uploads of background images are tracked as blocks (texrep/blocks.h). A sprite that samples
+// 8-bit texels one to one and lies inside a block whose content and palette hashes are in the active texture pack
+// is split along block edges and drawn with state_bits::kHd: in the display layer its texel colour is fetched from
+// an atlas of replacement images at (texel position * pack scale), then modulated by the vertex colour as usual.
+// The exact PS1 target still receives the original texels, so what the game reads back never changes and the
+// replacement only exists where the display layer is shown. With no pack nothing is tracked and the output is
+// byte-identical to a build without this feature.
 // Precise geometry. With HwOptions::precise_geometry, triangles that have sub-pixel vertex positions are drawn from
 // interpolated float attributes instead of the fixed-point planes (see build_precise_triangle); everything else
 // is unchanged. At scale 1 the triangle covers the same pixels as the integer one.
@@ -43,6 +50,7 @@
 #include "dw3/gpu.h"
 #include "dw3/postfx.h"
 #include "dw3/present_layout.h"
+#include "dw3/texrep/pack.h"
 
 namespace dw3 {
 
@@ -74,6 +82,9 @@ struct HwOptions {
     // positions at sub-pixel precision when the internal resolution is above 1, and perspective-correct texel
     // coordinates. Other triangles keep the exact fixed-point path.
     bool precise_geometry = false;
+    // Replacement images for background blocks (texrep/blocks.h). When set, the display layer shows them in place of
+    // the matching original images; the exact picture underneath is unchanged. Implies the display layer.
+    std::shared_ptr<const texrep::TexturePack> texture_pack;
 };
 
 // A small RGBA8 image (red in the lowest byte, straight alpha) blended over the window at (x, y) in window pixels.
@@ -127,6 +138,11 @@ public:
     bool render_to_image(const DisplayState& display, ScaleMode mode, bool linear, const PostFx* post, int width, int height,
                          std::vector<uint32_t>& rgba);
     void set_vsync(bool enabled);
+
+    // Starts recording the background images the game draws (empty directory stops it). write_texture_dump() saves
+    // what was seen so far (see texrep/dump.h); the pack generator takes it from there.
+    void set_texture_dump(const std::string& directory);
+    bool write_texture_dump(std::string& error);
 
     // Changes the internal resolution and the display options of a running renderer. `vram` is the machine's VRAM
     // (1024x512 words): it is refreshed from the GPU side first and uploaded again afterwards, so the picture

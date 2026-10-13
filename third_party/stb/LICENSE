@@ -1,0 +1,3 @@
+stb_image.h (version 2.30) and stb_image_write.h (version 1.16) are by Sean Barrett and contributors, from the
+stb repository (https://github.com/nothings/stb). Both are available under the MIT licence or released into the
+public domain, at your option; the full notice is at the end of each header.

@@ -77,7 +77,7 @@ target_include_directories(test_emitter PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/psxr
     ${PROJECT_SOURCE_DIR}/tools/psxrecomp/include)  # header-only use of CodeSegment via mips_asm.h
 
 dw3_add_test(test_render
-    SOURCES render/test_vram_regions.cpp render/test_vertex_builder.cpp render/test_hw_renderer.cpp render/test_postfx.cpp
+    SOURCES render/test_vram_regions.cpp render/test_vertex_builder.cpp render/test_hw_renderer.cpp render/test_postfx.cpp render/test_texrep.cpp
     LIBS dw3render)
 
 dw3_add_test(test_scenario_format

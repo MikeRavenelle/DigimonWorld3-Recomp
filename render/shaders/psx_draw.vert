@@ -12,6 +12,7 @@ layout(location = 3) in ivec4 inPlanes2;
 layout(location = 4) in ivec3 inPlanes3;
 layout(location = 5) in uvec3 inState;  // packed draw state, constant per primitive
 layout(location = 6) in uint inUvRect;
+layout(location = 7) in uint inHdOffset;
 
 layout(location = 0) flat out ivec4 vPlanes0;
 layout(location = 1) flat out ivec4 vPlanes1;
@@ -21,6 +22,7 @@ layout(location = 4) flat out uvec3 vState;
 layout(location = 5) flat out uint vUvRect;
 layout(location = 6) noperspective out vec3 vColF;
 layout(location = 7) out vec2 vUvF;
+layout(location = 8) flat out uint vHdOffset;
 
 void main() {
     float w = 1.0;
@@ -40,4 +42,5 @@ void main() {
     vPlanes3 = inPlanes3;
     vState = inState;
     vUvRect = inUvRect;
+    vHdOffset = inHdOffset;
 }

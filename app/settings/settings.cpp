@@ -69,6 +69,11 @@ const SettingInfo kSettings[] = {
     {"graphics.crt", "CRT look", "Scanlines, or scanlines with a phosphor mask, slight curvature and vignette. Not part of any preset (GPU renderer only).",
      Group::Graphics, Type::Choice, Apply::Live, 0, 0, kCrt, false, DW3_FIELD(graphics.crt)},
 
+    {"graphics.hd_backgrounds", "HD BG", "Replace the pre-rendered field backgrounds with the images of the selected texture pack (GPU renderer only; a pack is made from your own disc, see docs/SETTINGS.md).",
+     Group::Graphics, Type::Bool, Apply::Live, 0, 0, {}, false, DW3_FIELD(graphics.hd_backgrounds)},
+    {"graphics.texture_pack", "Texture pack", "Name of the folder under <user data>/texture-packs that holds the replacement images; empty for none.",
+     Group::Graphics, Type::String, Apply::Live, 0, 0, {}, true, DW3_FIELD(graphics.texture_pack)},
+
     {"audio.mute", "Mute", "No sound output.",
      Group::Audio, Type::Bool, Apply::Live, 0, 0, {}, false, DW3_FIELD(audio.mute)},
     {"audio.volume", "Volume", "Output volume in percent.",

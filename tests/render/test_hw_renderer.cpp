@@ -8,12 +8,16 @@
 #include <cmath>
 #include <cstdint>
 #include <cstring>
+#include <filesystem>
+#include <memory>
 #include <ostream>
 #include <random>
 #include <string>
 #include <vector>
 
 #include "dw3/soft_rasterizer.h"
+#include "dw3/texrep/blocks.h"
+#include "dw3/texrep/pack.h"
 #include "dw3/vertex_builder.h"
 
 #if DW3_HW_RENDERER
@@ -1363,6 +1367,263 @@ TEST_P(HwPrecise, TexelCoordinatesStayAffineWhenAVertexHasNoDepth) {
 }
 
 INSTANTIATE_TEST_SUITE_P(InternalRes, HwPrecise, ::testing::ValuesIn(gpu_params({1, 4})), gpu_param_name);
+
+// ---- replacement textures ------------------------------------------------------------------------------------------
+
+// A 32x16 texel (16x16 word) 8-bit image at (640, 0) with its palette at (0, 480), and a pack that replaces it at
+// scale 2 with an image whose colour encodes the position.
+struct ReplacementScene {
+    static constexpr int kPackScale = 2;
+    static constexpr int kBlockX = 640, kBlockY = 0, kBlockWords = 16, kBlockRows = 16;
+    static void fill(std::vector<uint16_t>& vram) {
+        for (int y = 0; y < kBlockRows; ++y)
+            for (int x = 0; x < kBlockWords; ++x) {
+                const int t = x * 2 + y * 3;
+                vram[(kBlockY + y) * kVramWidth + kBlockX + x] = static_cast<uint16_t>((t & 255) | (((t + 1) & 255) << 8));
+            }
+        for (int i = 0; i < 256; ++i)
+            vram[480 * kVramWidth + i] = static_cast<uint16_t>((i & 31) | (((i >> 3) & 31) << 5) | (((i * 7) & 31) << 10) | 0x0400);
+    }
+    static uint32_t pixel(int x, int y) {
+        return 0xFF000000u | (static_cast<uint32_t>((x * 4) & 255)) | (static_cast<uint32_t>((y * 8) & 255) << 8) | (150u << 16);
+    }
+    static std::shared_ptr<const texrep::TexturePack> pack() {
+        std::vector<uint16_t> vram(kPixels, 0);
+        fill(vram);
+        const auto dir = std::filesystem::temp_directory_path() / "dw3_hw_replacement_pack";
+        std::filesystem::create_directories(dir);
+        texrep::Image img;
+        img.w = kBlockWords * 2 * kPackScale;
+        img.h = kBlockRows * kPackScale;
+        for (int y = 0; y < img.h; ++y)
+            for (int x = 0; x < img.w; ++x) img.rgba.push_back(pixel(x, y));
+        std::string error;
+        texrep::write_png(dir / "block.png", img, error);
+        texrep::PackManifest m;
+        m.scale = kPackScale;
+        m.entries.push_back({texrep::hash_vram_rect(vram, {kBlockX, kBlockY, kBlockX + kBlockWords, kBlockY + kBlockRows}),
+                             texrep::hash_clut(vram, 0, 480), kBlockWords * 2, kBlockRows, "block.png"});
+        return texrep::TexturePack::from_manifest(m, dir);
+    }
+};
+
+class HwReplacement : public HwLayerBase {
+protected:
+    HwOptions options() const override {
+        HwOptions o;
+        o.texture_pack = ReplacementScene::pack();
+        return o;
+    }
+    void upload_scene() {
+        ReplacementScene::fill(vram);
+        ref = vram;
+        hw->vram_written(vram, {ReplacementScene::kBlockX, ReplacementScene::kBlockY, ReplacementScene::kBlockWords,
+                                ReplacementScene::kBlockRows});
+        hw->vram_written(vram, {0, 480, 256, 1});
+        s.tex_base_x = 640;
+        s.tex_base_y = 0;
+        s.depth = TexDepth::Bit8;
+    }
+    PrimitiveFlags sprite_flags() const {
+        PrimitiveFlags f;
+        f.textured = true;
+        f.clut = static_cast<uint16_t>(480 << 6);
+        return f;
+    }
+    void draw_sprite(int x, int y, int w, int h, int tint = 128) {
+        const PrimitiveFlags f = sprite_flags();
+        draw([&](Rasterizer& r, std::vector<uint16_t>& v, DrawState& st) { r.rect(v, st, f, gv(x, y, tint, tint, tint, 0, 0), w, h); });
+    }
+    // Bilinear sample of the replacement image at the middle of subpixel (sx, sy) of the sprite drawn at (x, y).
+    static uint32_t expected(int sx, int sy, int n, int tint) {
+        const int rs = ReplacementScene::kPackScale, iw = ReplacementScene::kBlockWords * 2 * rs, ih = ReplacementScene::kBlockRows * rs;
+        const double px = (sx + 0.5) / n * rs - 0.5, py = (sy + 0.5) / n * rs - 0.5;
+        const int x0 = static_cast<int>(std::floor(px)), y0 = static_cast<int>(std::floor(py));
+        const double fx = px - x0, fy = py - y0;
+        auto at = [&](int x, int y) { return pixel_of(std::clamp(x, 0, iw - 1), std::clamp(y, 0, ih - 1)); };
+        uint32_t out = 0xFF000000u;
+        for (int c = 0; c < 3; ++c) {
+            auto ch = [&](int x, int y) { return static_cast<double>((at(x, y) >> (8 * c)) & 255); };
+            const double v = (ch(x0, y0) * (1 - fx) + ch(x0 + 1, y0) * fx) * (1 - fy) + (ch(x0, y0 + 1) * (1 - fx) + ch(x0 + 1, y0 + 1) * fx) * fy;
+            out |= static_cast<uint32_t>(std::min(255.0, v * tint / 128.0) + 0.5) << (8 * c);
+        }
+        return out;
+    }
+    static uint32_t pixel_of(int x, int y) { return ReplacementScene::pixel(x, y); }
+    int worst_channel_error(const VramRect& r, int tint, int first_col = 0) {
+        const auto img = shown(r);
+        int worst = 0;
+        for (int y = 0; y < r.h * scale(); ++y)
+            for (int x = first_col * scale(); x < r.w * scale(); ++x) {
+                const uint32_t want = expected(x, y, scale(), tint), got = at(img, r, x, y);
+                for (int c = 0; c < 3; ++c) worst = std::max(worst, std::abs(chan(want, c) - chan(got, c)));
+            }
+        return worst;
+    }
+};
+
+TEST_P(HwReplacement, KnownImageIsShownFromTheReplacement) {
+    upload_scene();
+    draw_sprite(20, 20, 32, 16);
+    const VramRect r{20, 20, 32, 16};
+    EXPECT_LE(worst_channel_error(r, 128), 2);
+    EXPECT_EQ(vram_mismatches(), 0) << "the exact picture is the original image";
+}
+
+TEST_P(HwReplacement, ReplacementIsModulatedByTheSpriteColourLikeTheOriginal) {
+    upload_scene();
+    draw_sprite(20, 20, 32, 16, 64);
+    EXPECT_LE(worst_channel_error({20, 20, 32, 16}, 64), 2);
+    EXPECT_EQ(vram_mismatches(), 0);
+}
+
+TEST_P(HwReplacement, PartialSpritesUseTheMatchingPartOfTheReplacement) {
+    upload_scene();
+    s.tex_base_x = 640;
+    const PrimitiveFlags f = sprite_flags();
+    draw([&](Rasterizer& r, std::vector<uint16_t>& v, DrawState& st) { r.rect(v, st, f, gv(60, 40, 128, 128, 128, 10, 4), 12, 8); });
+    const VramRect r{60, 40, 12, 8};
+    const auto img = shown(r);
+    // Replacement position of the sprite's first subpixel: texel (10, 4) of the original, scaled.
+    const int rs = ReplacementScene::kPackScale;
+    int worst = 0;
+    for (int y = 0; y < r.h * scale(); ++y)
+        for (int x = 0; x < r.w * scale(); ++x) {
+            const double px = (10.0 + (x + 0.5) / scale()) * rs - 0.5, py = (4.0 + (y + 0.5) / scale()) * rs - 0.5;
+            if (scale() != rs) continue;  // exact only where samples fall on replacement texel centres
+            const uint32_t want = ReplacementScene::pixel(static_cast<int>(std::lround(px)), static_cast<int>(std::lround(py)));
+            for (int c = 0; c < 3; ++c) worst = std::max(worst, std::abs(chan(want, c) - chan(at(img, r, x, y), c)));
+        }
+    EXPECT_LE(worst, 2);
+    EXPECT_EQ(vram_mismatches(), 0);
+}
+
+TEST_P(HwReplacement, SpriteLargerThanTheBlockIsReplacedOnlyOverTheBlock) {
+    upload_scene();
+    draw_sprite(20, 20, 48, 16);  // 16 texels beyond the block's right edge
+    const VramRect inside{20, 20, 32, 16}, outside{52, 20, 16, 16};
+    EXPECT_LE(worst_channel_error(inside, 128), 2);
+    EXPECT_EQ(differs_from_exact(outside), 0) << "what lies outside the block is drawn as the game drew it";
+    EXPECT_EQ(vram_mismatches(), 0);
+}
+
+TEST_P(HwReplacement, ChangedPaletteMeansNoReplacement) {
+    upload_scene();
+    vram[480 * kVramWidth + 5] ^= 0x0021;  // one palette entry: another variant of the image, not in the pack
+    ref = vram;
+    hw->vram_written(vram, {0, 480, 256, 1});
+    draw_sprite(20, 20, 32, 16);
+    EXPECT_EQ(differs_from_exact({20, 20, 32, 16}), 0);
+    EXPECT_EQ(vram_mismatches(), 0);
+}
+
+TEST_P(HwReplacement, ReuploadedBlockWithOtherContentIsNotReplaced) {
+    upload_scene();
+    for (int y = 0; y < ReplacementScene::kBlockRows; ++y) vram[(ReplacementScene::kBlockY + y) * kVramWidth + ReplacementScene::kBlockX + 3] ^= 0x0101;
+    ref = vram;
+    hw->vram_written(vram, {ReplacementScene::kBlockX, ReplacementScene::kBlockY, ReplacementScene::kBlockWords,
+                            ReplacementScene::kBlockRows});
+    draw_sprite(20, 20, 32, 16);
+    EXPECT_EQ(differs_from_exact({20, 20, 32, 16}), 0);
+}
+
+TEST_P(HwReplacement, DrawingOverTheBlockEndsItsReplacement) {
+    upload_scene();
+    draw_sprite(20, 20, 32, 16);
+    EXPECT_LE(worst_channel_error({20, 20, 32, 16}, 128), 2);
+    ASSERT_TRUE(hw->vram_fill({ReplacementScene::kBlockX, ReplacementScene::kBlockY, 4, 4}, 0x1234));
+    for (int y = 0; y < 4; ++y)
+        for (int x = 0; x < 4; ++x) ref[(ReplacementScene::kBlockY + y) * kVramWidth + ReplacementScene::kBlockX + x] = vram[(ReplacementScene::kBlockY + y) * kVramWidth + ReplacementScene::kBlockX + x] = 0x1234;
+    draw_sprite(80, 20, 32, 16);
+    EXPECT_EQ(differs_from_exact({80, 20, 32, 16}), 0);
+}
+
+TEST_P(HwReplacement, SemiTransparentAndFlippedSpritesAreNeverReplaced) {
+    upload_scene();
+    PrimitiveFlags f = sprite_flags();
+    f.semi_transparent = true;
+    draw([&](Rasterizer& r, std::vector<uint16_t>& v, DrawState& st) { r.rect(v, st, f, gv(20, 20, 128, 128, 128, 0, 0), 32, 16); });
+    EXPECT_EQ(differs_from_exact({20, 20, 32, 16}), 0);
+    f.semi_transparent = false;
+    s.rect_flip_x = true;
+    draw([&](Rasterizer& r, std::vector<uint16_t>& v, DrawState& st) { r.rect(v, st, f, gv(80, 20, 128, 128, 128, 31, 0), 32, 16); });
+    EXPECT_EQ(differs_from_exact({80, 20, 32, 16}), 0);
+}
+
+TEST_P(HwReplacement, OtherTexturesAndTrianglesAreUntouched) {
+    upload_scene();
+    s.depth = TexDepth::Bit15;
+    PrimitiveFlags f;
+    f.textured = true;
+    draw([&](Rasterizer& r, std::vector<uint16_t>& v, DrawState& st) { r.rect(v, st, f, gv(120, 20, 128, 128, 128, 0, 0), 32, 16); });
+    EXPECT_EQ(differs_from_exact({120, 20, 32, 16}), 0);
+    EXPECT_EQ(vram_mismatches(), 0);
+}
+
+TEST_P(HwReplacement, ManySpritesAndAtlasReuseKeepWorking) {
+    upload_scene();
+    for (int i = 0; i < 40; ++i) draw_sprite(10 + (i % 8) * 36, 10 + (i / 8) * 20, 32, 16);
+    EXPECT_LE(worst_channel_error({10, 10, 32, 16}, 128), 2);
+    EXPECT_EQ(vram_mismatches(), 0);
+}
+
+INSTANTIATE_TEST_SUITE_P(InternalRes, HwReplacement, ::testing::ValuesIn(gpu_params({2, 4})), gpu_param_name);
+
+// Without a pack nothing changes: the shown picture is the exact one even though the same blocks are uploaded.
+class HwReplacementOff : public HwLayerBase {
+protected:
+    HwOptions options() const override { return {}; }
+};
+
+TEST_P(HwReplacementOff, NoPackShowsTheOriginal) {
+    ReplacementScene::fill(vram);
+    ref = vram;
+    hw->vram_written(vram, {ReplacementScene::kBlockX, ReplacementScene::kBlockY, ReplacementScene::kBlockWords, ReplacementScene::kBlockRows});
+    hw->vram_written(vram, {0, 480, 256, 1});
+    s.tex_base_x = 640;
+    s.depth = TexDepth::Bit8;
+    PrimitiveFlags f;
+    f.textured = true;
+    f.clut = static_cast<uint16_t>(480 << 6);
+    draw([&](Rasterizer& r, std::vector<uint16_t>& v, DrawState& st) { r.rect(v, st, f, gv(20, 20, 128, 128, 128, 0, 0), 32, 16); });
+    EXPECT_EQ(differs_from_exact({20, 20, 32, 16}), 0);
+    EXPECT_EQ(vram_mismatches(), 0);
+}
+
+INSTANTIATE_TEST_SUITE_P(InternalRes, HwReplacementOff, ::testing::ValuesIn(gpu_params({1, 2})), gpu_param_name);
+
+// A texture pack can be switched on and off on a running renderer.
+TEST(HwReplacementReconfigure, PackCanBeEnabledAndDisabled) {
+    for (GraphicsApi api : {GraphicsApi::Vulkan, GraphicsApi::D3D12, GraphicsApi::Metal}) {
+        if (!HwRenderer::api_compiled_in(api)) continue;
+        std::string error;
+        HwOptions o;
+        o.api = api;
+        auto hw = HwRenderer::create(nullptr, {}, error, 2, o);
+        if (!hw) GTEST_SKIP() << "no GPU device: " << error;
+        std::vector<uint16_t> vram(kPixels, 0);
+        ReplacementScene::fill(vram);
+        hw->vram_written(vram, {});
+        o.texture_pack = ReplacementScene::pack();
+        ASSERT_TRUE(hw->reconfigure(2, o, vram, error)) << error;
+        hw->vram_written(vram, {ReplacementScene::kBlockX, ReplacementScene::kBlockY, ReplacementScene::kBlockWords, ReplacementScene::kBlockRows});
+        DrawState s;
+        s.area_x2 = 319;
+        s.area_y2 = 239;
+        s.tex_base_x = 640;
+        s.depth = TexDepth::Bit8;
+        PrimitiveFlags f;
+        f.textured = true;
+        f.clut = static_cast<uint16_t>(480 << 6);
+        hw->rect(vram, s, f, gv(20, 20, 128, 128, 128, 0, 0), 32, 16);
+        std::vector<uint32_t> img;
+        ASSERT_TRUE(hw->read_display({20, 20, 32, 16}, img));
+        EXPECT_EQ(img[0] & 0xFFFFFF, ReplacementScene::pixel(0, 0) & 0xFFFFFF) << "replacement on";
+        o.texture_pack = nullptr;
+        ASSERT_TRUE(hw->reconfigure(2, o, vram, error)) << error;
+        EXPECT_EQ(hw->internal_scale(), 2);
+    }
+}
 
 }  // namespace
 #endif  // DW3_HW_RENDERER
