@@ -122,3 +122,8 @@ dw3_add_test(test_osd
     SOURCES app/test_osd.cpp ${PROJECT_SOURCE_DIR}/app/present/osd.cpp
     LIBS dw3runtime)
 target_include_directories(test_osd PRIVATE ${PROJECT_SOURCE_DIR}/app)
+
+# Settings model, presets, settings.toml and fast-forward pacing.
+dw3_add_test(test_settings
+    SOURCES app/test_settings.cpp
+    LIBS dw3settings)
