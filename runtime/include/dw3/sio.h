@@ -48,6 +48,18 @@ struct SimplePads : PadSource {
     bool connected(int port) override { return plugged[port & 1]; }
 };
 
+// Vibration motors as the game last commanded them: the small one is on or off, the large one has a strength.
+struct PadRumble {
+    bool small_on = false;
+    uint8_t large = 0;
+    bool any() const { return small_on || large != 0; }
+    bool operator==(const PadRumble&) const = default;
+};
+
+// Decodes the six payload bytes the console sends in a poll (command 0x42) through the motor map set with 0x4D:
+// a map byte of 0x00 sends that payload byte to the small motor (bit 0), 0x01 to the large motor, 0xFF to nothing.
+PadRumble decode_rumble(const std::array<uint8_t, 6>& motor_map, const std::array<uint8_t, 6>& payload);
+
 class Sio {
 public:
     static constexpr uint32_t kBase = 0x1F801040u;
@@ -148,12 +160,16 @@ private:
         int payload = 2;                 // payload length of the current command
         uint8_t config_pending = 0xFF;   // 0x43 parameter, applied when the transfer ends
         bool polling = false;            // current command returns button/stick data
+        std::array<uint8_t, 6> tx_payload{};  // payload bytes the console sent in the current poll
+        PadRumble rumble;
     };
     std::array<DualShock, 2> ds_{};
 
 public:
     bool pad_analog(int port) const { return ds_[port & 1].analog; }
     bool pad_config_mode(int port) const { return ds_[port & 1].config; }
+    // The motors' last commanded state on this port (nothing until the game maps the motors with 0x4D).
+    PadRumble pad_rumble(int port) const { return ds_[port & 1].rumble; }
 
 private:
 

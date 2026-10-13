@@ -7,6 +7,7 @@ namespace {
 uint8_t symbol_code(char c) {
     switch (c) {
         case '.': return 0x05;
+        case '/': return 0x0F;
         case ':': return 0x07;
         case '\'': return 0x13;
         case '-': return 0x1A;

@@ -54,7 +54,7 @@
 // Hotkeys: F9 switches between the Original picture and the chosen enhanced preset (a quick comparison, not saved);
 // Tab (held) or F10 (latched) fast-forwards at system.fast_forward_speed; on a gamepad, pressing the right stick
 // fast-forwards while held and pressing the left stick latches it. F4 (the gamepad's Guide button) cycles
-// gameplay.game_speed through 1x to 4x.
+// gameplay.game_speed through 1x to 4x. These four hotkeys and every console button can be rebound ([controls]).
 //
 // Save states (keyboard): F5 saves and F7 loads the current slot, F6 / F8 select the previous / next slot (1 to 9).
 // Slots are <user data dir>/states/slotN.state. A state is written or restored within a frame or two of the key
@@ -80,6 +80,7 @@
 #include "audio_out.h"
 #include "dw3/host.h"
 #include "dw3/platform.h"
+#include "host_input.h"
 #include "ingame/field_menu.h"
 #include "ingame/gameplay.h"
 #include "present/native_window.h"
@@ -117,10 +118,7 @@ struct Options {
     int shot_every = 0;
     std::string shot_dir;
     std::string load_state;
-    struct Press {
-        uint16_t button;
-        int64_t from, to;
-    };
+    using Press = dw3app::input::HostInput::Press;
     std::vector<Press> presses;
     // Settings given as flags: (setting id, value text) in command-line order.
     std::vector<std::pair<std::string, std::string>> overrides;
@@ -139,61 +137,6 @@ uint16_t button_from_name(const std::string& n) {
     auto it = names.find(n);
     return it == names.end() ? 0 : it->second;
 }
-
-// Port 1 pad: keyboard + first SDL gamepad, plus scripted presses for audit runs.
-class HostPad final : public dw3::PadSource {
-public:
-    const std::vector<Options::Press>* script = nullptr;
-    int64_t frame = 0;
-    SDL_Gamepad* gamepad = nullptr;
-
-    bool connected(int port) override { return port == 0; }
-    uint16_t buttons(int port) override {
-        if (port != 0) return 0;
-        uint16_t b = 0;
-        const bool* k = SDL_GetKeyboardState(nullptr);
-        auto key = [&](SDL_Scancode sc, uint16_t bit) {
-            if (k[sc]) b |= bit;
-        };
-        key(SDL_SCANCODE_UP, dw3::kPadUp);
-        key(SDL_SCANCODE_DOWN, dw3::kPadDown);
-        key(SDL_SCANCODE_LEFT, dw3::kPadLeft);
-        key(SDL_SCANCODE_RIGHT, dw3::kPadRight);
-        key(SDL_SCANCODE_Z, dw3::kPadCross);
-        key(SDL_SCANCODE_X, dw3::kPadCircle);
-        key(SDL_SCANCODE_A, dw3::kPadSquare);
-        key(SDL_SCANCODE_S, dw3::kPadTriangle);
-        key(SDL_SCANCODE_RETURN, dw3::kPadStart);
-        key(SDL_SCANCODE_BACKSPACE, dw3::kPadSelect);
-        key(SDL_SCANCODE_Q, dw3::kPadL1);
-        key(SDL_SCANCODE_W, dw3::kPadR1);
-        key(SDL_SCANCODE_1, dw3::kPadL2);
-        key(SDL_SCANCODE_2, dw3::kPadR2);
-        if (gamepad) {
-            auto pad = [&](SDL_GamepadButton gb, uint16_t bit) {
-                if (SDL_GetGamepadButton(gamepad, gb)) b |= bit;
-            };
-            pad(SDL_GAMEPAD_BUTTON_DPAD_UP, dw3::kPadUp);
-            pad(SDL_GAMEPAD_BUTTON_DPAD_DOWN, dw3::kPadDown);
-            pad(SDL_GAMEPAD_BUTTON_DPAD_LEFT, dw3::kPadLeft);
-            pad(SDL_GAMEPAD_BUTTON_DPAD_RIGHT, dw3::kPadRight);
-            pad(SDL_GAMEPAD_BUTTON_SOUTH, dw3::kPadCross);
-            pad(SDL_GAMEPAD_BUTTON_EAST, dw3::kPadCircle);
-            pad(SDL_GAMEPAD_BUTTON_WEST, dw3::kPadSquare);
-            pad(SDL_GAMEPAD_BUTTON_NORTH, dw3::kPadTriangle);
-            pad(SDL_GAMEPAD_BUTTON_START, dw3::kPadStart);
-            pad(SDL_GAMEPAD_BUTTON_BACK, dw3::kPadSelect);
-            pad(SDL_GAMEPAD_BUTTON_LEFT_SHOULDER, dw3::kPadL1);
-            pad(SDL_GAMEPAD_BUTTON_RIGHT_SHOULDER, dw3::kPadR1);
-            if (SDL_GetGamepadAxis(gamepad, SDL_GAMEPAD_AXIS_LEFT_TRIGGER) > 16000) b |= dw3::kPadL2;
-            if (SDL_GetGamepadAxis(gamepad, SDL_GAMEPAD_AXIS_RIGHT_TRIGGER) > 16000) b |= dw3::kPadR2;
-        }
-        if (script)
-            for (const auto& p : *script)
-                if (frame >= p.from && frame < p.to) b |= p.button;
-        return b;
-    }
-};
 
 bool parse_size(const char* text, int& w, int& h) {
     char* end = nullptr;
@@ -463,7 +406,8 @@ int main(int argc, char** argv) {
         bool apply(const dw3app::Settings& now, std::span<const dw3app::SettingInfo* const> changed) override { return fn(now, changed); }
     } sink;
     dw3app::SettingsController settings(stored, active, &sink, config_file);
-    dw3app::ingame::FieldMenuSettings settings_screen(machine, settings);
+    dw3app::input::HostInput host_input(settings, [&](const std::string& message) { presenter->notify(message); });
+    dw3app::ingame::FieldMenuSettings settings_screen(machine, settings, &host_input);
     dw3app::ingame::GameplayHooks gameplay(machine, settings);
     sink.fn = [&](const dw3app::Settings& now, std::span<const dw3app::SettingInfo* const> changed) {
         bool ok = true, graphics = false, window_size = false;
@@ -478,6 +422,7 @@ int main(int argc, char** argv) {
             else if (id == "audio.mute") audio.set_muted(now.audio.mute);
             else if (id == "audio.volume") audio.set_volume(now.audio.volume);
             else if (id == "audio.device") audio.set_device(now.audio.device);
+            else if (id.starts_with("controls.")) host_input.settings_changed();
             else if (id.starts_with("graphics.")) graphics = true;  // presentation, filters and the presets built from them
         }
         if (window_size && !(SDL_GetWindowFlags(window) & SDL_WINDOW_FULLSCREEN))
@@ -511,15 +456,8 @@ int main(int argc, char** argv) {
         presenter->notify("Loaded " + dw3::platform::path_to_utf8(dw3::platform::path_from_utf8(opt.load_state).filename()));
     }
 
-    static HostPad host_pad;
-    host_pad.script = &opt.presses;
-    {
-        int n = 0;
-        SDL_JoystickID* ids = SDL_GetGamepads(&n);
-        if (ids && n > 0) host_pad.gamepad = SDL_OpenGamepad(ids[0]);
-        SDL_free(ids);
-    }
-    machine.sio().set_pad_source(0, &host_pad);
+    host_input.script = &opt.presses;
+    machine.sio().set_pad_source(0, &host_input);
     std::size_t funcs = 0;
     for (uint32_t i = 0; i < dw3_segment_count; ++i) funcs += dw3_segments[i].func_count;
     SDL_Log("recompiled code: %u segments, %zu functions", dw3_segment_count, funcs);
@@ -658,10 +596,15 @@ int main(int argc, char** argv) {
         settings.set("gameplay.game_speed", value);
         presenter->notify("Game speed " + value);
     };
+    host_input.hotkeys = {toggle_fast_forward_latch, cycle_game_speed, [&] {
+                              const std::string mode = settings.toggle_comparison();
+                              SDL_Log("visual preset: %s", mode.c_str());
+                              presenter->notify("Visual preset: " + mode);
+                          }};
     dw3app::Pacer pacer;
     bool pacer_started = false, fast_forwarding = false;
     auto on_frame = [&](uint64_t frame) {
-        host_pad.frame = static_cast<int64_t>(frame);
+        host_input.frame = static_cast<int64_t>(frame);
         settings_screen.apply_pending();
         for (const auto& act : opt.window_actions) {
             if (act.frame != static_cast<int64_t>(frame)) continue;
@@ -687,19 +630,12 @@ int main(int argc, char** argv) {
         SDL_Event e;
         while (SDL_PollEvent(&e)) {
             if (e.type == SDL_EVENT_QUIT) dw3::host::Host::stop();
+            if (host_input.handle_event(e)) continue;
             if (e.type == SDL_EVENT_KEY_DOWN && !e.key.repeat) {
                 switch (e.key.scancode) {
                     case SDL_SCANCODE_F5: save_slot(); break;
                     case SDL_SCANCODE_F7: load_slot(); break;
                     case SDL_SCANCODE_F6: state_slot = state_slot > 1 ? state_slot - 1 : 9; select_slot(); break;
-                    case SDL_SCANCODE_F9: {
-                        const std::string mode = settings.toggle_comparison();
-                        SDL_Log("visual preset: %s", mode.c_str());
-                        presenter->notify("Visual preset: " + mode);
-                        break;
-                    }
-                    case SDL_SCANCODE_F4: cycle_game_speed(); break;
-                    case SDL_SCANCODE_F10: toggle_fast_forward_latch(); break;
                     case SDL_SCANCODE_F11: toggle_fullscreen(); break;
                     case SDL_SCANCODE_RETURN:
                         if (e.key.mod & SDL_KMOD_ALT) toggle_fullscreen();
@@ -708,17 +644,9 @@ int main(int argc, char** argv) {
                     default: break;
                 }
             }
-            if (e.type == SDL_EVENT_GAMEPAD_BUTTON_DOWN && e.gbutton.button == SDL_GAMEPAD_BUTTON_LEFT_STICK)
-                toggle_fast_forward_latch();
-            if (e.type == SDL_EVENT_GAMEPAD_BUTTON_DOWN && e.gbutton.button == SDL_GAMEPAD_BUTTON_GUIDE) cycle_game_speed();
-            if (e.type == SDL_EVENT_GAMEPAD_ADDED && !host_pad.gamepad) host_pad.gamepad = SDL_OpenGamepad(e.gdevice.which);
         }
-        {
-            const bool* keys = SDL_GetKeyboardState(nullptr);
-            bool held = keys[SDL_SCANCODE_TAB];
-            if (host_pad.gamepad && SDL_GetGamepadButton(host_pad.gamepad, SDL_GAMEPAD_BUTTON_RIGHT_STICK)) held = true;
-            fast_forward.set_held(held);
-        }
+        host_input.update();
+        fast_forward.set_held(host_input.fast_forward_held());
         if (g_quit_requested) dw3::host::Host::stop();
         const bool last = opt.max_frames >= 0 && static_cast<int64_t>(frame) >= opt.max_frames;
         const bool periodic = opt.shot_every > 0 && frame % static_cast<uint64_t>(opt.shot_every) == 0;

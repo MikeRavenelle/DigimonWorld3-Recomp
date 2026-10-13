@@ -20,7 +20,7 @@ never written to the file.
 
 ## Options
 
-Keys are grouped in `[graphics]`, `[audio]`, `[system]` and `[gameplay]`. Settings marked "restart" take effect on the next start;
+Keys are grouped in `[graphics]`, `[audio]`, `[controls]`, `[system]` and `[gameplay]`. Settings marked "restart" take effect on the next start;
 everything else applies immediately.
 
 | Key | Values | Flag |
@@ -46,6 +46,11 @@ everything else applies immediately.
 | `audio.mute` | bool | `--mute` |
 | `audio.volume` | 0 to 100 | |
 | `audio.device` | device name, empty for the default | |
+| `controls.pad` | `auto`, `1` to `4` | |
+| `controls.left_stick` | bool | |
+| `controls.deadzone` | 10 to 50 (percent) | |
+| `controls.prompts` | `auto`, `xbox`, `playstation`, `nintendo` | |
+| `controls.<action>` | binding text, see Controls | |
 | `system.memcards` (restart) | bool | `--no-memcard` |
 | `system.memcard1`, `system.memcard2` (restart) | paths, empty for the defaults | `--memcard1`, `--memcard2` |
 | `system.disc_path` (restart) | path of the disc image (`.cue`); written by the first-run setup, not listed in the in-game screen | `--disc` |
@@ -164,7 +169,29 @@ feature. The order of the passes is described in [ARCHITECTURE.md](ARCHITECTURE.
   `crt` adds a phosphor mask, slight screen curvature with rounded corners and a vignette. Scanlines follow the
   console's lines, not the window's, so they look best at windows several times the console resolution.
 
+## Controls
+
+- **Gamepad hotplug**: pads can be plugged in and removed while playing. With `controls.pad = auto` the pad in use is
+  kept until it is removed, then the next connected one takes over. `1` to `4` pick a pad by its position among the
+  connected ones and fall back to auto when that pad is not connected.
+- **Left stick** moves like the D-pad (8 directions) once it leans past `controls.deadzone`, a round dead zone given as
+  a percentage of the stick's travel. Triggers are L2 and R2. The game reads a digital pad only, so the sticks carry
+  no analog information and the right stick is free (pressing it is the fast-forward hold).
+- **Vibration**: DW3 sets up the DualShock motors at start but never commands them, so there is no rumble setting.
+- **Bindings** are `[controls]` keys named after the action (`up`, `down`, `left`, `right`, `cross`, `circle`,
+  `square`, `triangle`, `l1`, `r1`, `l2`, `r2`, `l3`, `r3`, `start`, `select`, `fast_forward`, `fast_forward_latch`,
+  `game_speed`, `compare`), each `"<key>|<button>"`: for example `cross = "Z|South"`. Key names are SDL's
+  (`Return`, `Left Shift`, `F9`); buttons are `South`, `East`, `West`, `North`, `Back`, `Guide`, `Start`, `LeftStick`,
+  `RightStick`, `LeftShoulder`, `RightShoulder`, `DPadUp`, `DPadDown`, `DPadLeft`, `DPadRight`, `LeftTrigger`,
+  `RightTrigger`, named by position. Either half may be empty. Assigning a key or button takes it from the action that
+  had it. The arrow keys, Return, Backspace, Space and Escape always act as D-pad, Start, Select, Cross and Circle
+  and cannot be bound to another action, so the menu stays reachable whatever is bound.
+- **Button prompts** (`controls.prompts`) choose the names shown for gamepad buttons in hints: `auto` follows the
+  connected pad (Xbox names when there is none). South stays the console's Cross on every pad; only the names change.
+
 ## Hotkeys
+
+These are the defaults; F9, Tab, F10 and F4 can be rebound (see Controls).
 
 | Key | Action |
 |---|---|
@@ -175,18 +202,21 @@ feature. The order of the passes is described in [ARCHITECTURE.md](ARCHITECTURE.
 | F11, Alt+Enter | Fullscreen |
 | F5 / F7, F6 / F8 | Save state / load state, previous / next slot |
 
-On a gamepad, pressing the right stick (R3) fast-forwards while held and pressing the left stick (L3) latches it;
-the game does not use either.
+On a gamepad, pressing the right stick fast-forwards while held and pressing the left stick latches it; the Guide
+button cycles the game speed.
 
 ## Settings screen in the game
 
 With the START menu open in the field, SELECT turns its list into a settings list in the game's own windows (the
-header shows the hint). Up and down move the cursor, left and right change the value, and circle or triangle returns to
-the menu. Every change applies at once and is written to `settings.toml` (nothing is written with `--no-config`).
+header shows the hint, naming the gamepad's own button when a pad is connected). Up and down move the cursor, left and
+right change the value, L1 and R1 jump between the pages (Graphics, Audio, Controls, Gameplay; the header names the
+page and the row's position in it), and circle or triangle returns to the menu. Every change applies at once and is written to `settings.toml` (nothing is written with `--no-config`).
 
 It lists the options that take effect while playing: the visual preset first, then the graphics options (3D scale,
 true colour, texture filter, precise geometry, HD BG, output filter, scaling, window size, fullscreen, vsync), mute and
-volume, and the fast-forward speed. The options that need a restart (renderer, memory cards) stay in the file. Five
+volume, the controls (gamepad, left stick, deadzone, button prompts, then one row per binding such as `Cross: Z/A`,
+and a Reset Controls row) and the gameplay options. Cross on a binding row waits for the next key or gamepad button;
+Escape or five seconds cancel. The options that need a restart (renderer, memory cards) stay in the file. Five
 rows show at a time (six when the menu has CARD FOLDERS); the list scrolls.
 
 ## Fast-forward

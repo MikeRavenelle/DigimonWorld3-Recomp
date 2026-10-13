@@ -275,6 +275,15 @@ uint8_t Sio::device_byte(uint8_t tx, bool& ack) {
     return 0xFF;
 }
 
+PadRumble decode_rumble(const std::array<uint8_t, 6>& motor_map, const std::array<uint8_t, 6>& payload) {
+    PadRumble r;
+    for (std::size_t i = 0; i < payload.size(); ++i) {
+        if (motor_map[i] == 0x00) r.small_on = (payload[i] & 1) != 0;
+        else if (motor_map[i] == 0x01) r.large = payload[i];
+    }
+    return r;
+}
+
 // DualShock pad (psx-spx "Controllers and Memory Cards - Configuration Commands"). Byte s=1 is the
 // command (reply: ID low byte), s=2 the 0x5A marker, s>=3 the payload. ACK after every byte but the last.
 uint8_t Sio::pad_byte(uint8_t tx, bool& ack) {
@@ -296,6 +305,7 @@ uint8_t Sio::pad_byte(uint8_t tx, bool& ack) {
         d.payload = d.config ? 6 : d.analog ? 6 : 2;
         d.reply = {};
         d.polling = false;
+        d.tx_payload = {};
         bool config_cmd = d.config && tx >= 0x40 && tx <= 0x4F;
         if (tx == 0x42 || (tx == 0x43 && !d.config) || (!d.config && tx != 0x42 && tx != 0x43)) {
             d.reply = poll;  // poll (outside config mode every command behaves like 0x42)
@@ -317,6 +327,7 @@ uint8_t Sio::pad_byte(uint8_t tx, bool& ack) {
         d.reply[static_cast<std::size_t>(k)] = static_cast<uint8_t>(k == 0 ? wire : wire >> 8);
     }
     // Parameter-dependent replies and state changes.
+    if (d.polling && k < 6) d.tx_payload[static_cast<std::size_t>(k)] = tx;
     if (cmd_ == 0x43 && k == 0) d.config_pending = tx;
     if (d.config && cmd_ == 0x44) {
         if (k == 0 && !d.locked) d.analog = tx == 0x01;
@@ -330,6 +341,7 @@ uint8_t Sio::pad_byte(uint8_t tx, bool& ack) {
     uint8_t v = d.reply[static_cast<std::size_t>(std::min(k, 5))];
     if (d.config && cmd_ == 0x4D && k < 6) d.rumble_map[static_cast<std::size_t>(k)] = tx;
     if (k + 1 >= d.payload) {
+        if (cmd_ == 0x42) d.rumble = decode_rumble(d.rumble_map, d.tx_payload);
         if (cmd_ == 0x43 && d.config_pending <= 1) d.config = d.config_pending == 1;
         d.config_pending = 0xFF;
         return last(v);

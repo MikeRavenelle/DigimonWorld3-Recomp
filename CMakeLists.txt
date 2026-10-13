@@ -60,6 +60,7 @@ add_custom_target(recompile
     DEPENDS psxrecomp
     COMMENT "Recompiling game code with psxrecomp")
 
+add_subdirectory(app/input)
 add_subdirectory(app/settings)
 add_subdirectory(app/ingame)
 add_subdirectory(app/wizard)

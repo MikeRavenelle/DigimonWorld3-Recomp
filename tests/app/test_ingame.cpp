@@ -19,7 +19,7 @@ Settings defaults() {
 
 const Entry& entry(std::string_view id) {
     for (const Entry& e : entries())
-        if (e.info->id == id) return e;
+        if (e.kind == Kind::Setting && e.info->id == id) return e;
     ADD_FAILURE() << "no entry " << id;
     return entries().front();
 }
@@ -36,7 +36,8 @@ TEST(IngameList, ListsExactlyTheLiveVisibleNonTextSettings) {
     for (const SettingInfo& info : all_settings())
         if (!info.hidden && info.apply == Apply::Live && info.type != Type::String) expected.insert(info.id);
     std::set<std::string_view> listed;
-    for (const Entry& e : entries()) listed.insert(e.info->id);
+    for (const Entry& e : entries())
+        if (e.kind == Kind::Setting) listed.insert(e.info->id);
     EXPECT_EQ(listed, expected);
 }
 
@@ -44,6 +45,7 @@ TEST(IngameList, PresetComesFirstAndNothingNeedsARestart) {
     ASSERT_FALSE(entries().empty());
     EXPECT_EQ(entries().front().info->id, "graphics.preset");
     for (const Entry& e : entries()) {
+        if (e.kind != Kind::Setting) continue;
         EXPECT_FALSE(e.info->is_restart()) << e.info->id;
         EXPECT_FALSE(e.info->hidden) << e.info->id;
     }
@@ -53,9 +55,9 @@ TEST(IngameList, EveryRowFitsTheMenuWindow) {
     // The window holds about 20 characters of the game's proportional font.
     Settings s = defaults();
     for (const Entry& e : entries()) {
-        EXPECT_LE(row_text(s, e).size(), 20u) << e.info->id;
-        EXPECT_LE(e.label.size(), 12u) << e.info->id;
-        if (e.info->type == Type::Choice) {
+        EXPECT_LE(row_text(s, e).size(), 20u) << e.label;
+        EXPECT_LE(e.label.size(), 14u) << e.label;
+        if (e.kind == Kind::Setting && e.info->type == Type::Choice) {
             for (const std::string_view name : e.info->choices) {
                 apply(s, e, name);
                 EXPECT_LE(row_text(s, e).size(), 20u) << e.info->id << " " << name;

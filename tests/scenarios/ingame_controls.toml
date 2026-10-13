@@ -1,0 +1,158 @@
+name = "ingame_controls"
+description = "Settings screen pages: L1 and R1 jump between Graphics, Audio and Controls, the header names the page, the deadzone steps by 5, and a binding row reads as the key and button."
+start_state = "new_game.state"   # written by new_game_state.toml
+start_frame = 1473
+frames = 2400
+memcard = "blank"
+
+# RAM words (USA executable), see ingame_settings.toml for the menu task. The header window keeps a pointer to its text
+# at 0x800AB8B4; the five row windows keep theirs at 0x800ABA34, 0x800E6D30, 0x800F6700, 0x800F6880 and 0x800F7A4C.
+# The selected row is the third one (index 2) once the list has scrolled. Text is in the game's own encoding:
+# digits 4 + n, capitals 0x0E + (letter - A), lower case 0x28 + (letter - a); symbols are the pair 1, code.
+#   header: G = 0x14 (Graphics), A = 0x0E (Audio), C = 0x10 (Controls).
+#   settings cursor: 0x800AB75C. Controls start at row 19 (17 graphics rows, 2 audio rows).
+
+[[press]]
+button = "START"
+at = 1720
+
+[[wait]]
+at = 1730
+label = "menu rows drawn"
+ram = [{ via = 0x800ABA34, addr = 0, size = 1, value = 0x16 }]
+timeout = 600
+
+[[wait]]
+at = 1740
+label = "settings open"
+press = "SELECT"
+every = 40
+ram = [{ addr = 0x800AB760, size = 4, value = 0x53455453 }]
+timeout = 300
+
+[[check]]
+at = 1741
+label = "header names the first page: Graphics"
+ram = [
+    { addr = 0x800AB75C, size = 4, value = 0 },
+    { via = 0x800AB8B4, addr = 0, size = 1, value = 0x14 },
+]
+screenshot = true
+
+[[wait]]
+at = 1750
+label = "R1 jumps to the Audio page"
+press = "R1"
+every = 40
+ram = [{ via = 0x800AB8B4, addr = 0, size = 1, value = 0x0E }]
+timeout = 300
+
+[[check]]
+at = 1751
+label = "cursor on the first audio row (Mute)"
+ram = [{ addr = 0x800AB75C, size = 4, value = 17 }]
+
+[[wait]]
+at = 1760
+label = "R1 jumps to the Controls page"
+press = "R1"
+every = 40
+ram = [{ via = 0x800AB8B4, addr = 0, size = 1, value = 0x10 }]
+timeout = 300
+
+[[check]]
+at = 1761
+label = "cursor on the first controls row (Gamepad)"
+ram = [{ addr = 0x800AB75C, size = 4, value = 19 }]
+screenshot = true
+
+[[wait]]
+at = 1770
+label = "L1 goes back to Audio"
+press = "L1"
+every = 40
+ram = [{ via = 0x800AB8B4, addr = 0, size = 1, value = 0x0E }]
+timeout = 300
+
+[[wait]]
+at = 1780
+label = "R1 returns to Controls"
+press = "R1"
+every = 40
+ram = [{ via = 0x800AB8B4, addr = 0, size = 1, value = 0x10 }]
+timeout = 300
+
+# Two rows down is the deadzone (Controls row 3); RIGHT steps it from 25 to 30. The selected row is window row 2.
+[[wait]]
+at = 1790
+label = "cursor on Deadzone"
+press = "DOWN"
+every = 40
+ram = [{ addr = 0x800AB75C, size = 4, value = 21 }]
+timeout = 400
+
+[[wait]]
+at = 1800
+label = "deadzone steps to 30"
+press = "RIGHT"
+every = 40
+ram = [{ via = 0x800F6700, addr = 12, size = 1, value = 7 }]
+timeout = 300
+
+[[check]]
+at = 1801
+label = "deadzone row reads 30"
+ram = [
+    { via = 0x800F6700, addr = 0, size = 1, value = 0x11 },
+    { via = 0x800F6700, addr = 12, size = 1, value = 7 },
+    { via = 0x800F6700, addr = 13, size = 1, value = 4 },
+]
+screenshot = true
+
+# Six more rows down is the Cross binding: "Cross: Z/A" (the slash is the symbol pair 1, 0x0F).
+[[wait]]
+at = 1810
+label = "cursor on the Cross binding"
+press = "DOWN"
+every = 40
+ram = [{ addr = 0x800AB75C, size = 4, value = 27 }]
+timeout = 600
+
+[[check]]
+at = 1811
+label = "binding row reads Cross: Z/A"
+ram = [
+    { via = 0x800F6700, addr = 0, size = 1, value = 0x10 },
+    { via = 0x800F6700, addr = 9, size = 1, value = 0x27 },
+    { via = 0x800F6700, addr = 10, size = 1, value = 1 },
+    { via = 0x800F6700, addr = 11, size = 1, value = 0x0F },
+    { via = 0x800F6700, addr = 12, size = 1, value = 0x0E },
+]
+screenshot = true
+
+# Confirm on a binding row without a host to capture the key leaves the screen as it was; cancel returns to the menu.
+[[wait]]
+at = 1820
+label = "back in the menu"
+press = "CIRCLE"
+every = 40
+ram = [{ addr = 0x800AB760, size = 4, value = 0x53455453, cmp = "ne" }]
+timeout = 300
+
+[[check]]
+at = 1830
+label = "menu restored"
+ram = [
+    { addr = 0x800AB700, size = 4, value = 1 },
+    { addr = 0x800AB704, size = 4, value = 3 },
+    { via = 0x800ABA34, addr = 0, size = 1, value = 0x16 },
+]
+screenshot = true
+
+[[wait]]
+at = 1840
+label = "menu closed"
+press = "TRIANGLE"
+every = 60
+ram = [{ addr = 0x800AB700, size = 4, value = 1, cmp = "ne" }]
+timeout = 600

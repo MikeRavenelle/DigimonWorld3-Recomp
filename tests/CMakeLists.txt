@@ -125,12 +125,17 @@ target_include_directories(test_osd PRIVATE ${PROJECT_SOURCE_DIR}/app)
 
 # Settings model, presets, settings.toml and fast-forward pacing.
 dw3_add_test(test_settings
-    SOURCES app/test_settings.cpp
+    SOURCES app/test_settings.cpp app/test_controls_settings.cpp
     LIBS dw3settings)
+
+# Bindings, stick maths, pad selection and button prompts.
+dw3_add_test(test_input
+    SOURCES app/test_input.cpp app/test_capture.cpp
+    LIBS dw3input)
 
 # The settings list of the in-game screen and its text encoding.
 dw3_add_test(test_ingame
-    SOURCES app/test_ingame.cpp
+    SOURCES app/test_ingame.cpp app/test_ingame_controls.cpp
     LIBS dw3ingame)
 
 # First-run wizard logic: state machine, disc identification, hashes, download plan, unpacking and the install sequence.
