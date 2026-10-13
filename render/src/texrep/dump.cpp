@@ -145,6 +145,17 @@ bool parse_dump_manifest(std::string_view text, DumpManifest& out, std::string& 
             d.x = static_cast<int>((*t)["x"].value_or<int64_t>(0));
             d.y = static_cast<int>((*t)["y"].value_or<int64_t>(0));
             d.primary = (*t)["primary"].value_or<bool>(false);
+            if (const toml::array* pieces = (*t)["pieces"].as_array())
+                for (const toml::node& pn : *pieces) {
+                    const toml::array* v = pn.as_array();
+                    if (!v || v->size() != 6) {
+                        error = "texture entry with a bad piece";
+                        return false;
+                    }
+                    int f[6];
+                    for (std::size_t k = 0; k < 6; ++k) f[k] = static_cast<int>((*v)[k].value_or<int64_t>(0));
+                    d.pieces.push_back({f[0], f[1], f[2], f[3], f[4], f[5]});
+                }
             m.textures.push_back(std::move(d));
         }
     out = std::move(m);
@@ -177,6 +188,15 @@ std::string write_dump_manifest(const DumpManifest& m) {
         t.insert("x", static_cast<int64_t>(d.x));
         t.insert("y", static_cast<int64_t>(d.y));
         t.insert("primary", d.primary);
+        if (!d.pieces.empty()) {
+            toml::array pieces;
+            for (const DumpPiece& p : d.pieces) {
+                toml::array v;
+                for (int f : {p.ax, p.ay, p.w, p.h, p.cx, p.cy}) v.push_back(static_cast<int64_t>(f));
+                pieces.push_back(std::move(v));
+            }
+            t.insert("pieces", std::move(pieces));
+        }
         texs.push_back(std::move(t));
     }
     root.insert("texture", std::move(texs));

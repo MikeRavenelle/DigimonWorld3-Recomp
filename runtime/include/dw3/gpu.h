@@ -110,6 +110,7 @@ public:
     Gpu(Bus& bus, IrqController& irq, VideoTiming& video, Dma& dma);
 
     void set_rasterizer(Rasterizer* r) { raster_ = r; }
+    Rasterizer* rasterizer() const { return raster_; }
     // Source of sub-pixel vertex positions for polygon vertices (null: integer vertices only).
     void set_precise_source(const PreciseVertexCache* c) { precise_ = c; }
 

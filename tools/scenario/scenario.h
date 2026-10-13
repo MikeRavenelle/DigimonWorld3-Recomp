@@ -90,6 +90,9 @@
 //   min_primitives = 1000      # cumulative GPU primitives since boot
 //   min_commands = 1000        # cumulative GPU commands since boot
 //   tty_contains = "CD_init"   # game debug output seen so far
+//   disc_backgrounds = 8       # at least this many (image, palette) keys of field map backgrounds drawn since boot are
+//                              # also computed from the stage packs on the disc, and none of the images is drawn with
+//                              # a palette the file does not give it (the renderer's keys against the game files')
 //   screen_hash = "0123..."    # 256-bit perceptual hash of the displayed image (64 hex chars)
 //   max_hash_distance = 24     # allowed Hamming distance (default 24)
 //   ram = [{ addr = 0x800A0000, size = 4, value = 1 }]   # optional `mask` (AND before comparing, default all
@@ -169,6 +172,7 @@ struct Check {
     std::optional<int> display_width, display_height;
     std::optional<uint64_t> min_primitives, min_commands;
     std::optional<std::string> tty_contains;
+    std::optional<int> min_disc_backgrounds;
     std::optional<std::array<uint64_t, 4>> screen_hash;
     int max_hash_distance = 24;
     std::vector<RamCheck> ram;

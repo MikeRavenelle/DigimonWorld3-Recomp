@@ -16,6 +16,11 @@ inline uint64_t mix(uint64_t h, uint64_t w) {
     return h;
 }
 
+inline uint32_t rgba_of(uint16_t c) {
+    auto expand = [](uint32_t v) { return (v << 3) | (v >> 2); };
+    return c == 0 ? 0u : (expand(c & 31) | (expand((c >> 5) & 31) << 8) | (expand((c >> 10) & 31) << 16) | 0xFF000000u);
+}
+
 }  // namespace
 
 uint64_t hash_words(const uint16_t* p, std::size_t n, uint64_t seed) {
@@ -31,6 +36,13 @@ uint64_t hash_words(const uint16_t* p, std::size_t n, uint64_t seed) {
     return mix(h, tail);
 }
 
+uint64_t hash_image_words(const uint16_t* rows, std::size_t stride, int w, int h) {
+    uint64_t hash = mix(0x1234, (static_cast<uint64_t>(w) << 16) | static_cast<uint64_t>(h));
+    for (int y = 0; y < h; ++y)
+        hash = hash_words(rows + static_cast<std::size_t>(y) * stride, static_cast<std::size_t>(w), hash);
+    return hash;
+}
+
 uint64_t hash_vram_rect(std::span<const uint16_t> vram, const Region& r) {
     uint64_t h = mix(0x1234, (static_cast<uint64_t>(r.width()) << 16) | static_cast<uint64_t>(r.height()));
     for (int y = r.y0; y < r.y1; ++y)
@@ -39,28 +51,40 @@ uint64_t hash_vram_rect(std::span<const uint16_t> vram, const Region& r) {
     return h;
 }
 
+uint64_t hash_palette(const uint16_t* entries, int count) { return hash_words(entries, static_cast<std::size_t>(count), 0x77); }
+
 uint64_t hash_clut(std::span<const uint16_t> vram, int x, int y, int count) {
     const uint16_t* row = vram.data() + static_cast<std::size_t>(y & (kVramH - 1)) * kVramW;
-    if (x + count <= kVramW) return hash_words(row + x, static_cast<std::size_t>(count), 0x77);
+    if (x + count <= kVramW) return hash_palette(row + x, count);
     uint16_t tmp[512];
     count = std::min(count, 512);
     for (int i = 0; i < count; ++i) tmp[i] = row[(x + i) & (kVramW - 1)];
-    return hash_words(tmp, static_cast<std::size_t>(count), 0x77);
+    return hash_palette(tmp, count);
+}
+
+void decode_8bit_words(const uint16_t* rows, std::size_t stride, int width_words, int h, const uint16_t* clut, std::vector<uint32_t>& out) {
+    const int w = width_words * 2;
+    out.resize(static_cast<std::size_t>(w) * h);
+    for (int y = 0; y < h; ++y) {
+        const uint16_t* row = rows + static_cast<std::size_t>(y) * stride;
+        for (int x = 0; x < w; ++x) {
+            const uint16_t word = row[x >> 1];
+            out[static_cast<std::size_t>(y) * w + x] = rgba_of(clut[(x & 1) ? (word >> 8) : (word & 255)]);
+        }
+    }
 }
 
 void decode_block_8bit(std::span<const uint16_t> vram, const Region& block, int clut_x, int clut_y, std::vector<uint32_t>& out) {
+    const uint16_t* clut_row = vram.data() + static_cast<std::size_t>(clut_y & (kVramH - 1)) * kVramW;
+    uint16_t clut[256];
+    for (int i = 0; i < 256; ++i) clut[i] = clut_row[(clut_x + i) & (kVramW - 1)];
     const int w = block.width() * 2, h = block.height();
     out.resize(static_cast<std::size_t>(w) * h);
-    const uint16_t* clut = vram.data() + static_cast<std::size_t>(clut_y & (kVramH - 1)) * kVramW;
-    auto expand = [](uint32_t v) { return (v << 3) | (v >> 2); };
     for (int y = 0; y < h; ++y) {
         const uint16_t* row = vram.data() + static_cast<std::size_t>((block.y0 + y) & (kVramH - 1)) * kVramW + block.x0;
         for (int x = 0; x < w; ++x) {
             const uint16_t word = row[x >> 1];
-            const int index = (x & 1) ? (word >> 8) : (word & 255);
-            const uint16_t c = clut[(clut_x + index) & (kVramW - 1)];
-            out[static_cast<std::size_t>(y) * w + x] =
-                c == 0 ? 0u : (expand(c & 31) | (expand((c >> 5) & 31) << 8) | (expand((c >> 10) & 31) << 16) | 0xFF000000u);
+            out[static_cast<std::size_t>(y) * w + x] = rgba_of(clut[(x & 1) ? (word >> 8) : (word & 255)]);
         }
     }
 }

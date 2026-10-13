@@ -27,6 +27,10 @@ constexpr int kVramW = 1024, kVramH = 512;
 uint64_t hash_words(const uint16_t* p, std::size_t n, uint64_t seed = 0);
 // Hash of the words of a VRAM rectangle (dimensions included, so equal pixels in a different shape differ).
 uint64_t hash_vram_rect(std::span<const uint16_t> vram, const Region& r);
+// The same hash for an image kept outside VRAM: `w` words by `h` rows, `stride` words from one row to the next.
+uint64_t hash_image_words(const uint16_t* rows, std::size_t stride, int w, int h);
+// Hash of `count` palette entries kept outside VRAM; hash_clut of the same entries gives the same value.
+uint64_t hash_palette(const uint16_t* entries, int count = 256);
 // Hash of `count` palette entries starting at (x, y).
 uint64_t hash_clut(std::span<const uint16_t> vram, int x, int y, int count = 256);
 
@@ -34,6 +38,9 @@ uint64_t hash_clut(std::span<const uint16_t> vram, int x, int y, int count = 256
 // (clut_x, clut_y) to RGBA8 (red in the lowest byte). Colour channels are expanded from 5 to 8 bits the way the
 // renderer does; a texel whose palette word is zero is transparent (alpha 0), everything else opaque.
 void decode_block_8bit(std::span<const uint16_t> vram, const Region& block, int clut_x, int clut_y, std::vector<uint32_t>& out);
+
+// The same decoding for an image kept outside VRAM (`width_words` words by `h` rows) and a 256-entry palette.
+void decode_8bit_words(const uint16_t* rows, std::size_t stride, int width_words, int h, const uint16_t* clut, std::vector<uint32_t>& out);
 
 std::string hash_to_hex(uint64_t h);
 bool hash_from_hex(std::string_view text, uint64_t& out);

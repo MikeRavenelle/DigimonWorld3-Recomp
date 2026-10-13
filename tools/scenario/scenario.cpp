@@ -310,6 +310,10 @@ Scenario parse(const std::string& text, const std::string& src) {
             if (auto v = t["min_primitives"].value<int64_t>()) c.min_primitives = static_cast<uint64_t>(*v);
             if (auto v = t["min_commands"].value<int64_t>()) c.min_commands = static_cast<uint64_t>(*v);
             if (auto v = t["tty_contains"].value<std::string>()) c.tty_contains = *v;
+            if (auto v = t["disc_backgrounds"].value<int64_t>()) {
+                if (*v < 1) fail(src, "`disc_backgrounds` must be >= 1");
+                c.min_disc_backgrounds = static_cast<int>(*v);
+            }
             if (auto v = t["screen_hash"].value<std::string>()) {
                 c.screen_hash = hash_from_hex(*v);
                 if (!c.screen_hash) fail(src, "bad `screen_hash` (want 64 hex digits)");

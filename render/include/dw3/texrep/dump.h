@@ -53,6 +53,12 @@ struct Component {
 // earlier one, or that would make two blocks overlap, is ignored. Every block ends up in exactly one component.
 std::vector<Component> build_components(std::span<const BlockSize> blocks, std::span<const PairOffset> pairs);
 
+// A rectangle of a texture's image and where it lies in the component. Images of the maps stored on the disc are
+// atlases: the game draws several separate rectangles of one image, and each has its own surroundings.
+struct DumpPiece {
+    int ax = 0, ay = 0, w = 0, h = 0;  // in the image
+    int cx = 0, cy = 0;                // top-left corner in the component
+};
 struct DumpTexture {
     uint64_t block = 0, clut = 0;
     int width = 0, height = 0;
@@ -61,6 +67,8 @@ struct DumpTexture {
     int component = 0;
     int x = 0, y = 0;     // position in the component
     bool primary = false; // the palette used to draw the component image
+    // When not empty, only these rectangles of the image are drawn and (x, y) is unused.
+    std::vector<DumpPiece> pieces;
 };
 struct DumpComponent {
     int id = 0, width = 0, height = 0;

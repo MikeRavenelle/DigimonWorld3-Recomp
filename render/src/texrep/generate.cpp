@@ -105,15 +105,38 @@ bool generate_pack(const std::vector<std::filesystem::path>& dump_dirs, const st
         }
     }
 
+    // One job per rectangle that is drawn: a whole image, or each piece of an atlas image. A job's result is cropped
+    // from the upscaled context window and placed in the pack image at the rectangle's own position.
+    struct Job {
+        std::size_t item;
+        DumpPiece piece;
+    };
+    std::vector<Job> jobs;
+    std::vector<std::size_t> jobs_left(items.size(), 0);
+    for (std::size_t i = 0; i < items.size(); ++i) {
+        const DumpTexture& t = items[i].texture;
+        if (t.pieces.empty()) jobs.push_back({i, DumpPiece{0, 0, t.width, t.height, t.x, t.y}});
+        else
+            for (const DumpPiece& p : t.pieces) jobs.push_back({i, p});
+        jobs_left[i] = std::max<std::size_t>(t.pieces.size(), 1);
+    }
+
     const int shrink = options.model_scale / options.scale;
-    for (std::size_t start = 0; start < items.size(); start += static_cast<std::size_t>(options.batch)) {
-        const std::size_t end = std::min(items.size(), start + static_cast<std::size_t>(options.batch));
+    constexpr std::size_t kNone = static_cast<std::size_t>(-1);
+    std::size_t block_item = kNone, result_item = kNone;
+    Image block, result;
+    for (std::size_t start = 0; start < jobs.size(); start += static_cast<std::size_t>(options.batch)) {
+        const std::size_t end = std::min(jobs.size(), start + static_cast<std::size_t>(options.batch));
         std::vector<Image> windows;
-        for (std::size_t i = start; i < end; ++i) {
-            const Item& it = items[i];
-            Image block;
-            if (!read_png(it.dir / it.texture.file, block, error)) return false;
-            windows.push_back(context_window(components[it.component], it.texture.x, it.texture.y, block, options.pad));
+        for (std::size_t j = start; j < end; ++j) {
+            const Item& it = items[jobs[j].item];
+            if (block_item != jobs[j].item) {
+                if (!read_png(it.dir / it.texture.file, block, error)) return false;
+                block_item = jobs[j].item;
+            }
+            const DumpPiece& p = jobs[j].piece;
+            const Image part = crop_clamped(block, p.ax, p.ay, p.w, p.h);
+            windows.push_back(context_window(components[it.component], p.cx, p.cy, part, options.pad));
             bleed_transparent(windows.back(), options.pad);
         }
         std::vector<Image> up;
@@ -122,16 +145,25 @@ bool generate_pack(const std::vector<std::filesystem::path>& dump_dirs, const st
             error = "the upscaler returned the wrong number of images";
             return false;
         }
-        for (std::size_t i = start; i < end; ++i) {
-            const Item& it = items[i];
-            const Image& big = up[i - start];
-            const Image& src = windows[i - start];
+        for (std::size_t j = start; j < end; ++j) {
+            const std::size_t index = jobs[j].item;
+            const Item& it = items[index];
+            const DumpPiece& p = jobs[j].piece;
+            const Image& big = up[j - start];
+            const Image& src = windows[j - start];
             if (big.w != src.w * options.model_scale || big.h != src.h * options.model_scale) {
                 error = "the upscaler returned an image of the wrong size";
                 return false;
             }
-            const Image scaled = box_downscale(big, shrink);
-            const Image result = crop_block(scaled, options.pad, options.scale, it.texture.width, it.texture.height);
+            if (result_item != index) {
+                result.w = it.texture.width * options.scale;
+                result.h = it.texture.height * options.scale;
+                result.rgba.assign(static_cast<std::size_t>(result.w) * result.h, 0);
+                result_item = index;
+            }
+            paste(result, crop_block(box_downscale(big, shrink), options.pad, options.scale, p.w, p.h), p.ax * options.scale,
+                  p.ay * options.scale);
+            if (--jobs_left[index] != 0) continue;
             PackEntry e;
             e.block = it.texture.block;
             e.clut = it.texture.clut;
@@ -142,7 +174,7 @@ bool generate_pack(const std::vector<std::filesystem::path>& dump_dirs, const st
             manifest.entries.push_back(std::move(e));
             ++report.generated;
         }
-        if (options.progress) options.progress(end, items.size());
+        if (options.progress) options.progress(end, jobs.size());
     }
 
     const std::string text = write_pack_manifest(manifest);
