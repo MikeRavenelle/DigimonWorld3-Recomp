@@ -21,12 +21,15 @@ constexpr uint32_t kRecordSize = 32, kSideStride = 96, kHp = 8;
 constexpr uint32_t kPartySide = 0, kEnemySide = 1;
 constexpr uint16_t kLift = 0x4000;
 
-// STFGTREP (the battle results screen, game mode 0x14): gives one party member experience and runs the level-ups it
-// causes. a0 is the member's index, a1 the amount; the member's total (at +24 of its record) is capped at 999999.
-// The overlay's code overlaps other mode overlays at this address, so the override only acts in the results mode and
-// when the function's first instructions are the ones of this overlay.
-constexpr uint32_t kGrantExperience = 0x80085870;
-constexpr uint32_t kGrantExperienceSignature = 0x8c42ac2c, kGrantExperienceSignatureAt = 0x80085888;
+// STFGTREP (the battle results screen, game mode 0x14): each party member's row finalises its experience share in
+// the method at kFinaliseShare (a0 = row; the share is at +96, the done flag at +100, the share is returned). The
+// results screen prints that share and the grant adds it to the member's total (capped at 999999), so scaling it
+// there, once, keeps the printed figure equal to the amount granted. The overlay's code overlaps other mode overlays
+// at this address, so the override only acts in the results mode and when the function holds the instructions of this
+// overlay.
+constexpr uint32_t kFinaliseShare = 0x80084170;
+constexpr uint32_t kFinaliseShareSignature = 0x8e032744, kFinaliseShareSignatureAt = 0x800841AC;
+constexpr uint32_t kShare = 96, kShareFinalised = 100;
 constexpr uint32_t kGameMode = 0x800554D0, kResultsMode = 0x14;
 
 // Message windows (field dialogue, menus, battle text), MAIN, once per frame; a0 is the window. State +12 is 1 while the
@@ -65,12 +68,17 @@ struct GameplayHook {
         const bool defeated = target_side == kEnemySide && static_cast<int16_t>(after) <= 0;
         if (!defeated) dw3_write16(ctx, record + kHp, before);
     }
-    static void grant_experience(RecompContext* ctx) {
+    static void finalise_share(RecompContext* ctx) {
         GameplayHooks& self = *instance;
-        const bool in_results = dw3_read32(ctx, kGameMode) == kResultsMode &&
-                                dw3_read32(ctx, kGrantExperienceSignatureAt) == kGrantExperienceSignature;
-        if (in_results) ctx->r[5] = scaled_experience(ctx->r[5], xp_multiplier(self.controller_.active().gameplay.xp_multiplier));
-        self.machine_.lookup_original(kGrantExperience)(ctx);
+        const uint32_t row = ctx->r[4];
+        const bool scalable = dw3_read32(ctx, kGameMode) == kResultsMode &&
+                              dw3_read32(ctx, kFinaliseShareSignatureAt) == kFinaliseShareSignature &&
+                              dw3_read32(ctx, row + kShareFinalised) == 0;
+        self.machine_.lookup_original(kFinaliseShare)(ctx);
+        if (!scalable) return;
+        const uint32_t share = scaled_experience(dw3_read32(ctx, row + kShare), xp_multiplier(self.controller_.active().gameplay.xp_multiplier));
+        dw3_write32(ctx, row + kShare, share);
+        ctx->r[2] = share;
     }
     static void text_window_tick(RecompContext* ctx) {
         GameplayHooks& self = *instance;
@@ -114,14 +122,14 @@ GameplayHooks::GameplayHooks(dw3::Machine& machine, SettingsController& controll
     GameplayHook::instance = this;
     machine_.override_function(kEncounterTick, &GameplayHook::encounter_tick);
     machine_.override_function(kAttackTask, &GameplayHook::attack_task);
-    machine_.override_function(kGrantExperience, &GameplayHook::grant_experience);
+    machine_.override_function(kFinaliseShare, &GameplayHook::finalise_share);
     machine_.override_function(kTextWindowTick, &GameplayHook::text_window_tick);
 }
 
 GameplayHooks::~GameplayHooks() {
     machine_.override_function(kEncounterTick, nullptr);
     machine_.override_function(kAttackTask, nullptr);
-    machine_.override_function(kGrantExperience, nullptr);
+    machine_.override_function(kFinaliseShare, nullptr);
     machine_.override_function(kTextWindowTick, nullptr);
     GameplayHook::instance = nullptr;
 }

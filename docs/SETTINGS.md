@@ -82,7 +82,7 @@ All of these default to the original game and apply immediately; they also appea
 - **God mode** makes the party take no damage and defeat enemies with the first hit that lands, in every battle. Items
   and status effects are untouched. It is off by default and not meant for a first playthrough.
 - **XP multiplier** (1x, 2x, 3x, 5x, 10x) scales the experience each Digimon receives when a won battle's results are
-  applied; the total stays capped at the game's 999,999. The results screen still lists the unscaled award.
+  applied; the results screen lists the scaled award, and the total stays capped at the game's 999,999.
 - **Text speed** sets how quickly message boxes print (dialogue, menu descriptions, battle text). `fast` prints three
   characters per frame instead of one every few frames; `instant` prints each box at once and still waits for the
   button to close it. Pauses written into the text and scripted timing are unchanged.
@@ -242,6 +242,10 @@ volume, the controls (gamepad, left stick, deadzone, button prompts, then one ro
 and a Reset Controls row) and the gameplay options. Cross on a binding row waits for the next key or gamepad button;
 Escape or five seconds cancel. The options that need a restart (renderer, memory cards) stay in the file. Five
 rows show at a time (six when the menu has CARD FOLDERS); the list scrolls.
+
+The same screen opens from the title menu: while Start / Continue waits for input, SELECT (the hint is shown at the top)
+opens the list over the dimmed title. The menu stands still until circle or triangle closes it, and then waits as
+before. Options that only matter in the field, such as the encounter rate, can be set there and apply once playing.
 
 ## Display
 

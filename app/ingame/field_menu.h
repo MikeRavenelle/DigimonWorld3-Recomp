@@ -4,7 +4,7 @@
 // Controls, Gameplay), cross on a binding row waits for the next key or button, circle or triangle returns to the menu.
 //
 // The screen keeps no state of its own: whether it is open and where the cursor is live in the menu task's memory,
-// so a save state taken while it is open loads back into it.
+// so a save state taken while it is open loads back into it. The same instance also owns the title menu's screen.
 #pragma once
 
 #include <string>
@@ -14,6 +14,8 @@
 #include "controls_host.h"
 #include "display.h"
 #include "dw3/machine.h"
+#include "settings_screen.h"
+#include "title_menu.h"
 
 namespace dw3app::ingame {
 
@@ -33,21 +35,15 @@ public:
     // What the monitor and resolution rows choose from, and whether vertical sync can be adaptive. The list must
     // outlive the screen or be replaced before it is freed; null leaves those rows without choices.
     void set_display_context(const MonitorList* monitors, bool adaptive_vsync) {
-        monitors_ = monitors;
-        adaptive_vsync_ = adaptive_vsync;
+        model_.monitors = monitors;
+        model_.adaptive_vsync = adaptive_vsync;
     }
 
 private:
     friend struct MenuHook;
-    struct Change {
-        std::string id, value;
-    };
     dw3::Machine& machine_;
-    SettingsController& controller_;
-    input::ControlsHost* controls_;
-    std::vector<Change> pending_;
-    const MonitorList* monitors_ = nullptr;
-    bool adaptive_vsync_ = false;
+    ScreenModel model_;
+    TitleMenuSettings title_;
 };
 
 }  // namespace dw3app::ingame
