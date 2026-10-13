@@ -49,7 +49,6 @@ struct Settings {
     struct Gameplay {
         int encounters = 0;          // choice: normal, half, off, double
         int game_speed = 0;          // choice: 1x, 2x, 3x, 4x
-        int text_speed = 0;          // choice: normal, fast, instant
         bool god_mode = false;       // the party takes no damage and defeats enemies in one hit
         bool operator==(const Gameplay&) const = default;
     } gameplay;

@@ -348,7 +348,6 @@ TEST(GameplaySettings, DefaultsAreTheOriginalGame) {
     const Settings s = defaults();
     EXPECT_EQ(get_text(s, *find_setting("gameplay.encounters")), "normal");
     EXPECT_EQ(get_text(s, *find_setting("gameplay.game_speed")), "1x");
-    EXPECT_EQ(get_text(s, *find_setting("gameplay.text_speed")), "normal");
     EXPECT_EQ(get_text(s, *find_setting("gameplay.god_mode")), "false");
 }
 

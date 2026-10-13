@@ -24,7 +24,6 @@ constexpr std::string_view kScaleModes[] = {"fit", "integer", "stretch"};
 constexpr std::string_view kSpeeds[] = {"2x", "4x", "unlimited"};
 constexpr std::string_view kEncounters[] = {"normal", "half", "off", "double"};
 constexpr std::string_view kGameSpeeds[] = {"1x", "2x", "3x", "4x"};
-constexpr std::string_view kTextSpeeds[] = {"normal", "fast", "instant"};
 
 #define DW3_FIELD(path) +[](Settings& s) -> void* { return &s.path; }
 
@@ -79,8 +78,6 @@ const SettingInfo kSettings[] = {
      Group::Gameplay, Type::Choice, Apply::Live, 0, 0, kEncounters, false, DW3_FIELD(gameplay.encounters)},
     {"gameplay.game_speed", "Game speed", "Runs the whole game faster, with sound kept at its normal pitch (a hotkey toggles it).",
      Group::Gameplay, Type::Choice, Apply::Live, 0, 0, kGameSpeeds, false, DW3_FIELD(gameplay.game_speed)},
-    {"gameplay.text_speed", "Text speed", "How fast dialogue text is printed.",
-     Group::Gameplay, Type::Choice, Apply::Live, 0, 0, kTextSpeeds, false, DW3_FIELD(gameplay.text_speed)},
     {"gameplay.god_mode", "God mode", "The party takes no damage and its attacks defeat enemies in one hit.",
      Group::Gameplay, Type::Bool, Apply::Live, 0, 0, {}, false, DW3_FIELD(gameplay.god_mode)},
 };
