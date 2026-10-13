@@ -36,6 +36,11 @@ public:
     virtual ~Presenter() = default;
     virtual const char* name() const = 0;
     virtual void set_vsync(bool on) = 0;
+    // Applies changed display options to the running presenter: scaling, filtering, vsync and, on the GPU renderer,
+    // internal resolution, true colour, texture filter and precise geometry (the render targets are rebuilt and the
+    // current VRAM image carried over). Returns false if the renderer could not take the new configuration; it
+    // then keeps the old one. Must be called from the thread that presents.
+    virtual bool update_options(const PresentOptions& options, dw3::Gpu& gpu) = 0;
     // Draws and presents one frame. When capture is non-null it receives the window image of this frame.
     virtual bool present(dw3::Gpu& gpu, Capture* capture) = 0;
     // Called once with the machine's GPU before the game starts, so a presenter can install its rasterizer.

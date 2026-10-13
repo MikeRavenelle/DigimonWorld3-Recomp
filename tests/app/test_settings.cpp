@@ -1,0 +1,343 @@
+#include <gtest/gtest.h>
+
+#include <algorithm>
+#include <filesystem>
+#include <memory>
+#include <vector>
+
+#include "controller.h"
+#include "fastforward.h"
+
+using namespace dw3app;
+
+namespace {
+
+Settings defaults() {
+    LoadReport report;
+    return settings_from_toml("", report);
+}
+
+bool set(Settings& s, std::string_view id, std::string_view v) {
+    std::string err;
+    return set_text(s, *find_setting(id), v, err);
+}
+
+struct RecordingSink : SettingsSink {
+    std::vector<std::string> applied;
+    int calls = 0;
+    bool result = true;
+    bool apply(const Settings&, std::span<const SettingInfo* const> changed) override {
+        ++calls;
+        for (const SettingInfo* i : changed) applied.emplace_back(i->id);
+        return result;
+    }
+};
+
+}  // namespace
+
+TEST(Settings, DefaultsAreTheOriginalPicture) {
+    const Settings s = defaults();
+    EXPECT_EQ(s.graphics.preset, kPresetOriginal);
+    EXPECT_EQ(bundle_of(s), preset(kPresetOriginal).graphics);
+    EXPECT_EQ(s.graphics.internal_res, 1);
+    EXPECT_FALSE(s.graphics.true_color);
+    EXPECT_TRUE(s.graphics.vsync);
+}
+
+TEST(Settings, MetadataIsCompleteAndConsistent) {
+    for (const SettingInfo& i : all_settings()) {
+        EXPECT_FALSE(i.label.empty()) << i.id;
+        EXPECT_EQ(find_setting(i.id), &i);
+        EXPECT_NE(i.id.find(group_name(i.group)), std::string_view::npos) << i.id;
+        if (i.type == Type::Choice) EXPECT_FALSE(i.choices.empty()) << i.id;
+    }
+}
+
+TEST(Settings, TomlRoundTrip) {
+    Settings s = defaults();
+    EXPECT_TRUE(set(s, "graphics.preset", "remaster"));
+    EXPECT_TRUE(set(s, "graphics.internal_res", "6"));
+    EXPECT_TRUE(set(s, "graphics.renderer", "software"));
+    EXPECT_TRUE(set(s, "graphics.window_width", "1600"));
+    EXPECT_TRUE(set(s, "audio.volume", "40"));
+    EXPECT_TRUE(set(s, "audio.device", "Speakers \"A\""));
+    EXPECT_TRUE(set(s, "system.memcard1", "C:\\cards\\one.mcd"));
+    EXPECT_TRUE(set(s, "system.fast_forward_speed", "unlimited"));
+    EXPECT_TRUE(set(s, "graphics.comparison_preset", "remaster"));
+    LoadReport report;
+    const Settings back = settings_from_toml(settings_to_toml(s), report);
+    EXPECT_TRUE(report.messages.empty());
+    EXPECT_EQ(back, s);
+    EXPECT_EQ(back.graphics.preset, kPresetCustom);
+    EXPECT_EQ(back.graphics.preset_base, kPresetRemaster);
+}
+
+TEST(Settings, FileRoundTripAndMissingFile) {
+    const auto dir = std::filesystem::temp_directory_path() / "dw3_settings_test";
+    std::filesystem::remove_all(dir);
+    const auto path = dir / "sub" / "settings.toml";
+    LoadReport r1;
+    EXPECT_EQ(load_settings_file(path, r1), defaults());
+    EXPECT_FALSE(r1.file_found);
+    Settings s = defaults();
+    set(s, "audio.mute", "true");
+    std::string err;
+    ASSERT_TRUE(save_settings_file(path, s, err)) << err;
+    LoadReport r2;
+    EXPECT_EQ(load_settings_file(path, r2), s);
+    EXPECT_TRUE(r2.file_found);
+    std::filesystem::remove_all(dir);
+}
+
+TEST(Settings, MissingKeysTakeDefaultsAndUnknownKeysAreIgnored) {
+    LoadReport report;
+    const Settings s = settings_from_toml("[graphics]\ninternal_res = 3\nsome_future_key = 1\n[extra]\nx = 2\n", report);
+    EXPECT_TRUE(report.messages.empty());
+    EXPECT_EQ(s.graphics.internal_res, 3);
+    EXPECT_EQ(s.graphics.window_width, 1280);
+    EXPECT_FALSE(s.audio.mute);
+}
+
+TEST(Settings, InvalidValuesFallBackWithAMessage) {
+    LoadReport report;
+    const Settings s = settings_from_toml(
+        "[graphics]\ninternal_res = 99\ntexture_filter = \"sharp\"\ntrue_color = \"yes\"\nvsync = false\n"
+        "[audio]\nvolume = -5\n",
+        report);
+    EXPECT_EQ(report.messages.size(), 4u);
+    EXPECT_EQ(s.graphics.internal_res, 1);
+    EXPECT_EQ(s.graphics.texture_filter, 0);
+    EXPECT_FALSE(s.graphics.true_color);
+    EXPECT_EQ(s.audio.volume, 100);
+    EXPECT_FALSE(s.graphics.vsync);  // valid values next to bad ones still load
+}
+
+TEST(Settings, UnparsableFileGivesDefaults) {
+    LoadReport report;
+    EXPECT_EQ(settings_from_toml("[graphics\nbroken = =", report), defaults());
+    EXPECT_EQ(report.messages.size(), 1u);
+}
+
+TEST(Settings, SetTextRejectsBadInput) {
+    Settings s = defaults();
+    std::string err;
+    EXPECT_FALSE(set_text(s, *find_setting("graphics.internal_res"), "0", err));
+    EXPECT_FALSE(set_text(s, *find_setting("graphics.internal_res"), "four", err));
+    EXPECT_FALSE(set_text(s, *find_setting("graphics.scale_mode"), "zoom", err));
+    EXPECT_FALSE(set_text(s, *find_setting("audio.mute"), "maybe", err));
+    EXPECT_EQ(s, defaults());
+}
+
+TEST(Presets, EachPresetSetsItsBundle) {
+    for (int p = 0; p < kNamedPresets; ++p) {
+        Settings s = defaults();
+        ASSERT_TRUE(set(s, "graphics.preset", preset(p).name));
+        EXPECT_EQ(bundle_of(s), preset(p).graphics);
+        EXPECT_EQ(s.graphics.preset, p);
+    }
+    EXPECT_EQ(preset(kPresetOriginal).graphics, (GraphicsBundle{1, false, 0, false, 0}));
+    EXPECT_GT(preset(kPresetEnhanced).graphics.internal_res, 1);
+    EXPECT_GE(preset(kPresetRemaster).graphics.internal_res, preset(kPresetEnhanced).graphics.internal_res);
+}
+
+TEST(Presets, MembersAreAllLiveSettings) {
+    for (std::string_view id : preset_member_ids()) {
+        const SettingInfo* i = find_setting(id);
+        ASSERT_NE(i, nullptr) << id;
+        EXPECT_EQ(i->apply, Apply::Live) << id;
+        EXPECT_EQ(i->group, Group::Graphics) << id;
+    }
+}
+
+TEST(Presets, TweakingBecomesCustomAndKeepsTheBase) {
+    Settings s = defaults();
+    set(s, "graphics.preset", "enhanced");
+    set(s, "graphics.internal_res", "2");
+    EXPECT_EQ(s.graphics.preset, kPresetCustom);
+    EXPECT_EQ(s.graphics.preset_base, kPresetEnhanced);
+    set(s, "graphics.internal_res", "4");  // back onto the bundle
+    EXPECT_EQ(s.graphics.preset, kPresetEnhanced);
+}
+
+TEST(Presets, FileCanNamePresetAndOverrideMembers) {
+    LoadReport report;
+    const Settings s = settings_from_toml("[graphics]\npreset = \"remaster\"\ninternal_res = 2\n", report);
+    EXPECT_EQ(s.graphics.internal_res, 2);
+    EXPECT_TRUE(s.graphics.true_color);
+    EXPECT_EQ(s.graphics.preset, kPresetCustom);
+    EXPECT_EQ(s.graphics.preset_base, kPresetRemaster);
+}
+
+TEST(Controller, FlagsOverrideTheFileButAreNotStored) {
+    LoadReport report;
+    Settings stored = settings_from_toml("[graphics]\ninternal_res = 2\n", report);
+    Settings active = stored;
+    set(active, "graphics.internal_res", "8");  // as a command-line flag would
+    set(active, "audio.mute", "true");
+    RecordingSink sink;
+    const auto path = std::filesystem::temp_directory_path() / "dw3_controller_test.toml";
+    SettingsController c(stored, active, &sink, path);
+    EXPECT_EQ(c.active().graphics.internal_res, 8);
+    EXPECT_EQ(c.stored().graphics.internal_res, 2);
+    // A user change to one setting leaves the flag-set values of others out of the saved file.
+    ASSERT_TRUE(c.set("graphics.true_color", "true").ok);
+    std::string err;
+    ASSERT_TRUE(c.save(err)) << err;
+    LoadReport r2;
+    const Settings saved = load_settings_file(path, r2);
+    EXPECT_EQ(saved.graphics.internal_res, 2);
+    EXPECT_FALSE(saved.audio.mute);
+    EXPECT_TRUE(saved.graphics.true_color);
+    std::filesystem::remove(path);
+}
+
+TEST(Controller, LiveSettingsApplyAndRestartOnesAreMarked) {
+    RecordingSink sink;
+    SettingsController c(defaults(), defaults(), &sink, {});
+    ChangeResult r = c.set("graphics.true_color", "true");
+    EXPECT_TRUE(r.ok);
+    EXPECT_FALSE(r.restart_needed);
+    EXPECT_NE(std::find(sink.applied.begin(), sink.applied.end(), "graphics.true_color"), sink.applied.end());
+    sink.applied.clear();
+    r = c.set("graphics.renderer", "software");
+    EXPECT_TRUE(r.ok);
+    EXPECT_TRUE(r.restart_needed);
+    EXPECT_TRUE(sink.applied.empty());
+    EXPECT_EQ(c.pending_restart(), std::vector<std::string>{"graphics.renderer"});
+    c.set("graphics.renderer", "auto");
+    EXPECT_TRUE(c.pending_restart().empty());
+    EXPECT_FALSE(c.set("graphics.internal_res", "40").ok);
+    EXPECT_FALSE(c.set("nonsense", "1").ok);
+}
+
+TEST(Controller, FailedLiveApplyCountsAsRestartNeeded) {
+    RecordingSink sink;
+    sink.result = false;
+    SettingsController c(defaults(), defaults(), &sink, {});
+    EXPECT_TRUE(c.set("graphics.internal_res", "8").restart_needed);
+    EXPECT_FALSE(c.pending_restart().empty());  // the setting and the preset derived from it
+}
+
+TEST(Controller, PresetChangesApplyAsOneBatch) {
+    RecordingSink sink;
+    SettingsController c(defaults(), defaults(), &sink, {});
+    EXPECT_TRUE(c.select_preset(kPresetEnhanced).ok);
+    EXPECT_EQ(sink.calls, 1);
+    EXPECT_GE(sink.applied.size(), 4u);
+    EXPECT_EQ(c.active().graphics.preset, kPresetEnhanced);
+}
+
+TEST(Controller, ComparisonToggleRestoresExactlyThePreviousSettings) {
+    RecordingSink sink;
+    Settings s = defaults();
+    set(s, "graphics.preset", "remaster");
+    set(s, "graphics.internal_res", "5");
+    set(s, "graphics.scale_mode", "integer");
+    set(s, "graphics.window_width", "1000");
+    set(s, "audio.volume", "30");
+    SettingsController c(s, s, &sink, {});
+    EXPECT_EQ(c.toggle_comparison(), "Original");
+    EXPECT_EQ(c.active().graphics.preset, kPresetOriginal);
+    EXPECT_EQ(c.active().graphics.scale_mode, s.graphics.scale_mode);  // display preferences are not part of a preset
+    EXPECT_EQ(c.stored(), s);                                          // the file's view is untouched
+    EXPECT_EQ(c.toggle_comparison(), "Custom (Remaster)");
+    EXPECT_EQ(c.active(), s);
+    EXPECT_TRUE(c.pending_restart().empty());
+}
+
+TEST(Controller, ComparisonFromOriginalGoesToTheChosenPreset) {
+    RecordingSink sink;
+    Settings s = defaults();
+    set(s, "graphics.comparison_preset", "remaster");
+    SettingsController c(s, s, &sink, {});
+    EXPECT_EQ(c.toggle_comparison(), "Remaster");
+    EXPECT_EQ(bundle_of(c.active()), preset(kPresetRemaster).graphics);
+    EXPECT_EQ(c.toggle_comparison(), "Original");
+    EXPECT_EQ(c.toggle_comparison(), "Remaster");
+}
+
+TEST(Controller, ComparisonNeverTouchesRestartSettings) {
+    RecordingSink sink;
+    Settings s = defaults();
+    set(s, "graphics.preset", "enhanced");
+    SettingsController c(s, s, &sink, {});
+    c.toggle_comparison();
+    for (const std::string& id : sink.applied) EXPECT_EQ(find_setting(id)->apply, Apply::Live) << id;
+    EXPECT_TRUE(c.pending_restart().empty());
+}
+
+TEST(Controller, UserChangeDuringComparisonDropsTheStash) {
+    RecordingSink sink;
+    Settings s = defaults();
+    set(s, "graphics.preset", "enhanced");
+    SettingsController c(s, s, &sink, {});
+    c.toggle_comparison();
+    ASSERT_TRUE(c.set("graphics.internal_res", "2").ok);
+    EXPECT_FALSE(c.showing_original_for_comparison());
+    c.toggle_comparison();  // now a plain switch to Original from the tweaked state
+    EXPECT_EQ(c.active().graphics.preset, kPresetOriginal);
+}
+
+TEST(FastForward, Multipliers) {
+    EXPECT_EQ(fast_forward_multiplier(0), 2.0);
+    EXPECT_EQ(fast_forward_multiplier(1), 4.0);
+    EXPECT_EQ(fast_forward_multiplier(2), 0.0);
+}
+
+TEST(FastForward, HoldAndLatchCombine) {
+    FastForwardInput in;
+    EXPECT_FALSE(in.active());
+    in.set_held(true);
+    EXPECT_TRUE(in.active());
+    in.set_held(false);
+    EXPECT_FALSE(in.active());
+    in.toggle_latch();
+    EXPECT_TRUE(in.active());
+    in.set_held(true);
+    in.toggle_latch();
+    EXPECT_TRUE(in.active());  // still held
+    in.set_held(false);
+    EXPECT_FALSE(in.active());
+}
+
+TEST(Pacer, RealTimeWaitsForEmulatedTime) {
+    Pacer p;
+    p.set_speed(1.0, 0, 0);
+    const int64_t frame = static_cast<int64_t>(Pacer::kCpuHz / 60.0);
+    // One frame of emulated time, 1 ms of wall time used: wait for the rest of the 16.67 ms.
+    const uint64_t wait = p.delay_ns(1000000, frame);
+    EXPECT_NEAR(static_cast<double>(wait), 1e9 / 60.0 - 1e6, 2e3);
+    EXPECT_EQ(p.delay_ns(20000000, frame), 0u);  // already late
+}
+
+TEST(Pacer, SpeedDividesTheWait) {
+    Pacer p;
+    p.set_speed(4.0, 0, 0);
+    const int64_t frame = static_cast<int64_t>(Pacer::kCpuHz / 60.0);
+    EXPECT_NEAR(static_cast<double>(p.delay_ns(0, frame)), 1e9 / 60.0 / 4.0, 2e3);
+}
+
+TEST(Pacer, UnlimitedNeverWaits) {
+    Pacer p;
+    p.set_speed(0.0, 0, 0);
+    EXPECT_EQ(p.delay_ns(0, 100000000), 0u);
+}
+
+TEST(Pacer, ChangingSpeedReanchorsWithoutABurstOrStall) {
+    Pacer p;
+    p.set_speed(1.0, 0, 0);
+    const int64_t second = static_cast<int64_t>(Pacer::kCpuHz);
+    // After 10 emulated seconds run unlimited in 1 s of wall time, back to real time: no sleep to "catch up".
+    p.set_speed(0.0, 0, 0);
+    p.set_speed(1.0, 1000000000, 10 * second);
+    EXPECT_EQ(p.delay_ns(1000000000, 10 * second), 0u);
+    EXPECT_NEAR(static_cast<double>(p.delay_ns(1000000000, 11 * second)), 1e9, 1e4);
+}
+
+TEST(Pacer, LongStallDoesNotCauseASprint) {
+    Pacer p;
+    p.set_speed(1.0, 0, 0);
+    const int64_t second = static_cast<int64_t>(Pacer::kCpuHz);
+    EXPECT_EQ(p.delay_ns(5000000000ull, second), 0u);  // 4 s late: the anchor moves up
+    EXPECT_GT(p.delay_ns(5000000000ull, 2 * second), 900000000u);
+}

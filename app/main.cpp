@@ -1,5 +1,12 @@
 // DW3Recomp entry point: boots the recompiled game on the native kernel.
 //
+// Settings: user-facing options live in settings.toml in the user data dir (see docs/SETTINGS.md); defaults are
+// overridden by that file and the file by the flags below, which are never written back.
+//   --config PATH     read (and create, if missing) this settings file instead of <user data dir>/settings.toml
+//   --no-config       neither read nor write any settings file (defaults plus flags only)
+//   --preset P         original (default), enhanced or remaster: a bundle of the graphics options below; flags that
+//                      follow on the command line still override its members
+//
 // Options:
 //   --disc PATH        disc image (.cue); default game/Digimon World 3 (USA).cue
 //   --frames N         exit after N emulated frames (audit runs)
@@ -25,6 +32,7 @@
 //   --fullscreen       start in (borderless, desktop) fullscreen; F11 or Alt+Enter toggles it
 //   --resize-at F WxH  resize the window at frame F (repeatable; for checking swap chain resizing in audit runs)
 //   --fullscreen-at F  toggle fullscreen at frame F (repeatable)
+//   --compare-at F     press the Original/enhanced comparison hotkey at frame F (repeatable; for audit runs)
 //   --scale M          fit (default, 4:3 letterbox), integer or stretch
 //   --filter F         nearest (default) or linear
 //   --no-vsync         present without waiting for the display refresh (always on with --uncapped/--frames)
@@ -35,6 +43,10 @@
 //   --trace-io LO:HI   log bus accesses to the hex physical range LO..HI
 //   --load-state PATH  start from a save state file instead of booting (it must come from the same game; a load
 //                      warns when an inserted memory card differs from the one the state was taken with)
+//
+// Hotkeys: F9 switches between the Original picture and the chosen enhanced preset (a quick comparison, not saved);
+// Tab (held) or F10 (latched) fast-forwards at system.fast_forward_speed; on a gamepad, pressing the right stick
+// fast-forwards while held and pressing the left stick latches it.
 //
 // Save states (keyboard): F5 saves and F7 loads the current slot, F6 / F8 select the previous / next slot (1 to 9).
 // Slots are <user data dir>/states/slotN.state. A state is written or restored within a frame or two of the key
@@ -48,6 +60,9 @@
 #include <cstdio>
 #include <cstdlib>
 #include <filesystem>
+#include <functional>
+#include <span>
+#include <optional>
 #include <map>
 #include <mutex>
 #include <memory>
@@ -58,6 +73,8 @@
 #include "dw3/host.h"
 #include "dw3/platform.h"
 #include "present/native_window.h"
+#include "settings/controller.h"
+#include "settings/fastforward.h"
 #include "present/presenter.h"
 
 namespace {
@@ -67,32 +84,29 @@ struct Options {
     int max_frames = -1;
     std::string screenshot;
     bool trace_bios = false;
-    std::string memcard[2];
-    bool no_memcard = false;
     std::string vram_dump;
     uint32_t trace_lo = 0, trace_hi = 0;
     bool uncapped = false;
-    bool mute = false;
     bool audio = false;
-    int window_w = 1280, window_h = 960;
-    bool fullscreen = false;
     struct WindowAction {
         int64_t frame;
         int w, h;  // 0x0: toggle fullscreen
     };
     std::vector<WindowAction> window_actions;
+    std::vector<int64_t> compare_frames;
     bool intro = false;
     int shot_every = 0;
     std::string shot_dir;
-    dw3app::RendererChoice renderer = dw3app::RendererChoice::Auto;
-    dw3app::PresentOptions present;
-    bool no_vsync = false;
     std::string load_state;
     struct Press {
         uint16_t button;
         int64_t from, to;
     };
     std::vector<Press> presses;
+    // Settings given as flags: (setting id, value text) in command-line order.
+    std::vector<std::pair<std::string, std::string>> overrides;
+    std::string config_path;
+    bool no_config = false;
 };
 
 uint16_t button_from_name(const std::string& n) {
@@ -176,25 +190,31 @@ bool parse_size(const char* text, int& w, int& h) {
 
 Options parse(int argc, char** argv) {
     Options o;
+    auto set = [&](const char* id, std::string value) { o.overrides.emplace_back(id, std::move(value)); };
     for (int i = 1; i < argc; ++i) {
         std::string a = argv[i];
         if (a == "--disc" && i + 1 < argc) o.disc = argv[++i];
         else if (a == "--frames" && i + 1 < argc) o.max_frames = std::atoi(argv[++i]);
         else if (a == "--screenshot" && i + 1 < argc) o.screenshot = argv[++i];
         else if (a == "--trace-bios") o.trace_bios = true;
-        else if (a == "--memcard1" && i + 1 < argc) o.memcard[0] = argv[++i];
-        else if (a == "--memcard2" && i + 1 < argc) o.memcard[1] = argv[++i];
-        else if (a == "--no-memcard") o.no_memcard = true;
+        else if (a == "--config" && i + 1 < argc) o.config_path = argv[++i];
+        else if (a == "--no-config") o.no_config = true;
+        else if (a == "--memcard1" && i + 1 < argc) set("system.memcard1", argv[++i]);
+        else if (a == "--memcard2" && i + 1 < argc) set("system.memcard2", argv[++i]);
+        else if (a == "--no-memcard") set("system.memcards", "false");
         else if (a == "--uncapped") o.uncapped = true;
-        else if (a == "--mute") o.mute = true;
+        else if (a == "--mute") set("audio.mute", "true");
         else if (a == "--audio") o.audio = true;
         else if (a == "--window-size" && i + 1 < argc) {
-            if (!parse_size(argv[++i], o.window_w, o.window_h) || o.window_w < 160 || o.window_h < 120) {
+            int w = 0, h = 0;
+            if (!parse_size(argv[++i], w, h)) {
                 std::fprintf(stderr, "bad --window-size %s (WxH)\n", argv[i]);
                 std::exit(2);
             }
+            set("graphics.window_width", std::to_string(w));
+            set("graphics.window_height", std::to_string(h));
         }
-        else if (a == "--fullscreen") o.fullscreen = true;
+        else if (a == "--fullscreen") set("graphics.fullscreen", "true");
         else if (a == "--resize-at" && i + 2 < argc) {
             Options::WindowAction act{std::atoll(argv[++i]), 0, 0};
             if (!parse_size(argv[++i], act.w, act.h) || act.w < 160 || act.h < 120) {
@@ -204,54 +224,18 @@ Options parse(int argc, char** argv) {
             o.window_actions.push_back(act);
         }
         else if (a == "--fullscreen-at" && i + 1 < argc) o.window_actions.push_back({std::atoll(argv[++i]), 0, 0});
+        else if (a == "--compare-at" && i + 1 < argc) o.compare_frames.push_back(std::atoll(argv[++i]));
         else if (a == "--intro") o.intro = true;
-        else if (a == "--renderer" && i + 1 < argc) {
-            std::string v = argv[++i];
-            if (v == "auto") o.renderer = dw3app::RendererChoice::Auto;
-            else if (v == "gpu") o.renderer = dw3app::RendererChoice::Gpu;
-            else if (v == "vulkan") o.renderer = dw3app::RendererChoice::Vulkan;
-            else if (v == "d3d12") o.renderer = dw3app::RendererChoice::D3D12;
-            else if (v == "metal") o.renderer = dw3app::RendererChoice::Metal;
-            else if (v == "software") o.renderer = dw3app::RendererChoice::Software;
-            else {
-                std::fprintf(stderr, "bad --renderer %s\n", v.c_str());
-                std::exit(2);
-            }
-        }
-        else if (a == "--scale" && i + 1 < argc) {
-            if (!dw3::parse_scale_mode(argv[++i], o.present.scale)) {
-                std::fprintf(stderr, "bad --scale %s\n", argv[i]);
-                std::exit(2);
-            }
-        }
-        else if (a == "--filter" && i + 1 < argc) {
-            std::string v = argv[++i];
-            if (v != "nearest" && v != "linear") {
-                std::fprintf(stderr, "bad --filter %s\n", v.c_str());
-                std::exit(2);
-            }
-            o.present.linear = v == "linear";
-        }
-        else if (a == "--internal-res" && i + 1 < argc) {
-            o.present.internal_res = std::atoi(argv[++i]);
-            if (o.present.internal_res < 1 || o.present.internal_res > 8) {
-                std::fprintf(stderr, "bad --internal-res %s (1..8)\n", argv[i]);
-                std::exit(2);
-            }
-        }
-        else if (a == "--true-color") o.present.true_color = true;
-        else if (a == "--precise-geometry") o.present.precise_geometry = true;
-        else if (a == "--texture-filter" && i + 1 < argc) {
-            std::string v = argv[++i];
-            if (v == "nearest") o.present.texture_filter = 0;
-            else if (v == "bilinear") o.present.texture_filter = 1;
-            else if (v == "xbr") o.present.texture_filter = 2;
-            else {
-                std::fprintf(stderr, "bad --texture-filter %s (nearest, bilinear or xbr)\n", v.c_str());
-                std::exit(2);
-            }
-        }
-        else if (a == "--no-vsync") o.no_vsync = true;
+        else if (a == "--renderer" && i + 1 < argc) set("graphics.renderer", argv[++i]);
+        else if (a == "--preset" && i + 1 < argc) set("graphics.preset", argv[++i]);
+        else if (a == "--scale" && i + 1 < argc) set("graphics.scale_mode", argv[++i]);
+        else if (a == "--filter" && i + 1 < argc) set("graphics.output_filter", argv[++i]);
+        else if (a == "--internal-res" && i + 1 < argc) set("graphics.internal_res", argv[++i]);
+        else if (a == "--true-color") set("graphics.true_color", "true");
+        else if (a == "--precise-geometry") set("graphics.precise_geometry", "true");
+        else if (a == "--texture-filter" && i + 1 < argc) set("graphics.texture_filter", argv[++i]);
+        else if (a == "--no-vsync") set("graphics.vsync", "false");
+        else if (a == "--fast-forward-speed" && i + 1 < argc) set("system.fast_forward_speed", argv[++i]);
         else if (a == "--screenshot-every" && i + 2 < argc) {
             o.shot_every = std::atoi(argv[++i]);
             o.shot_dir = argv[++i];
@@ -296,6 +280,36 @@ int main(int argc, char** argv) {
     std::vector<char*> arg_ptrs;
     for (std::string& a : args) arg_ptrs.push_back(a.data());
     Options opt = parse(static_cast<int>(arg_ptrs.size()), arg_ptrs.data());
+    // Settings: defaults, then the file, then flags. Audit runs and --no-config never touch the user's file.
+    std::filesystem::path config_file;
+    dw3app::Settings stored;
+    if (!opt.no_config && (opt.config_path.empty() ? opt.max_frames < 0 : true)) {
+        config_file = opt.config_path.empty() ? dw3app::default_settings_path() : dw3::platform::path_from_utf8(opt.config_path);
+        dw3app::LoadReport report;
+        stored = dw3app::load_settings_file(config_file, report);
+        for (const std::string& m : report.messages) SDL_Log("settings: %s", m.c_str());
+        if (!report.file_found) {
+            std::string err;
+            if (dw3app::save_settings_file(config_file, stored, err)) SDL_Log("created %s", dw3::platform::path_to_utf8(config_file).c_str());
+            else SDL_Log("settings: %s", err.c_str());
+        }
+    }
+    dw3app::Settings active = stored;
+    {
+        // The preset first, so that the other flags override its members whatever their order.
+        auto apply_flag = [&](const std::pair<std::string, std::string>& f) {
+            const dw3app::SettingInfo* info = dw3app::find_setting(f.first);
+            std::string err;
+            if (!info || !dw3app::set_text(active, *info, f.second, err)) {
+                std::fprintf(stderr, "bad value for %s: %s\n", f.first.c_str(), err.c_str());
+                std::exit(2);
+            }
+        };
+        for (const auto& f : opt.overrides)
+            if (f.first == "graphics.preset") apply_flag(f);
+        for (const auto& f : opt.overrides)
+            if (f.first != "graphics.preset") apply_flag(f);
+    }
     SDL_Log("DW3Recomp starting (os=%s arch=%s)", dw3::platform::os_name(dw3::platform::host_os()).data(),
             dw3::platform::arch_name(dw3::platform::host_arch()).data());
 
@@ -305,8 +319,8 @@ int main(int argc, char** argv) {
 #else
     dw3::host::Config cfg;
     cfg.disc_path = opt.disc;
-    cfg.card_mode = opt.no_memcard ? dw3::host::CardMode::None : dw3::host::CardMode::Files;
-    cfg.card_path = {opt.memcard[0], opt.memcard[1]};
+    cfg.card_mode = active.system.memcards ? dw3::host::CardMode::Files : dw3::host::CardMode::None;
+    cfg.card_path = {active.system.memcard1, active.system.memcard2};
     cfg.trace_bios = opt.trace_bios;
     cfg.trace_lo = opt.trace_lo;
     cfg.trace_hi = opt.trace_hi;
@@ -329,27 +343,78 @@ int main(int argc, char** argv) {
         SDL_Log("SDL_Init failed: %s", SDL_GetError());
         return 1;
     }
-    opt.present.vsync = !(opt.no_vsync || opt.uncapped || opt.max_frames >= 0);
+    const bool unpaced = opt.uncapped || opt.max_frames >= 0;
+    dw3app::FastForwardInput fast_forward;
+    // What the presenter should do for a configuration; vsync is off whenever the run is not paced to the display.
+    auto present_options = [&](const dw3app::Settings& st) {
+        dw3app::PresentOptions po;
+        const auto& g = st.graphics;
+        po.vsync = g.vsync && !unpaced && !fast_forward.active();
+        po.linear = g.output_filter == 1;
+        po.internal_res = g.internal_res;
+        po.true_color = g.true_color;
+        po.texture_filter = g.texture_filter;
+        po.precise_geometry = g.precise_geometry;
+        const char* modes[] = {"fit", "integer", "stretch"};
+        dw3::parse_scale_mode(modes[g.scale_mode], po.scale);
+        return po;
+    };
     SDL_Window* window = nullptr;
     std::unique_ptr<dw3app::Presenter> presenter = dw3app::create_presenter(
-        "Digimon World 3 Recomp", opt.window_w, opt.window_h, opt.renderer, opt.present, [](const std::string& s) { SDL_Log("%s", s.c_str()); },
+        "Digimon World 3 Recomp", active.graphics.window_width, active.graphics.window_height,
+        static_cast<dw3app::RendererChoice>(active.graphics.renderer), present_options(active), [](const std::string& s) { SDL_Log("%s", s.c_str()); },
         window);
     if (!presenter) {
         SDL_Log("no presentation path available");
         return 1;
     }
     SDL_Log("presenting with %s", presenter->name());
-    if (opt.fullscreen) SDL_SetWindowFullscreen(window, true);
+    if (active.graphics.fullscreen) SDL_SetWindowFullscreen(window, true);
     presenter->attach(machine.gpu());
-    if (opt.present.precise_geometry) {
-        if (std::string(presenter->name()).find("software") != std::string::npos)
-            SDL_Log("--precise-geometry needs the GPU renderer; ignored");
-        else
-            machine.enable_precise_geometry();
-    }
+    const bool software_presenter = std::string(presenter->name()).find("software") != std::string::npos;
+    bool precise_installed = false;
+    // The GTE side of precise geometry is installed the first time it is wanted and then left in place; the renderer
+    // decides per configuration whether to use it.
+    auto ensure_precise = [&](const dw3app::Settings& st) {
+        if (!st.graphics.precise_geometry || precise_installed) return;
+        if (software_presenter) {
+            SDL_Log("precise geometry needs the GPU renderer; ignored");
+            return;
+        }
+        machine.enable_precise_geometry();
+        precise_installed = true;
+    };
+    ensure_precise(active);
 
     dw3app::AudioOutput audio;
-    audio.open(opt.mute || opt.uncapped || (opt.max_frames >= 0 && !opt.audio));
+    audio.open(opt.uncapped || (opt.max_frames >= 0 && !opt.audio), active.audio.mute, active.audio.device,
+               active.audio.volume);
+
+    // Live changes of settings: one function applies whatever changed.
+    struct LiveSink final : dw3app::SettingsSink {
+        std::function<bool(const dw3app::Settings&, std::span<const dw3app::SettingInfo* const>)> fn;
+        bool apply(const dw3app::Settings& now, std::span<const dw3app::SettingInfo* const> changed) override { return fn(now, changed); }
+    } sink;
+    dw3app::SettingsController settings(stored, active, &sink, config_file);
+    sink.fn = [&](const dw3app::Settings& now, std::span<const dw3app::SettingInfo* const> changed) {
+        bool ok = true, graphics = false, window_size = false;
+        for (const dw3app::SettingInfo* info : changed) {
+            const std::string_view id = info->id;
+            if (id == "graphics.fullscreen") SDL_SetWindowFullscreen(window, now.graphics.fullscreen);
+            else if (id == "graphics.window_width" || id == "graphics.window_height") window_size = true;
+            else if (id == "audio.mute") audio.set_muted(now.audio.mute);
+            else if (id == "audio.volume") audio.set_volume(now.audio.volume);
+            else if (id == "audio.device") audio.set_device(now.audio.device);
+            else if (id.starts_with("graphics.")) graphics = true;  // presentation, filters and the presets built from them
+        }
+        if (window_size && !(SDL_GetWindowFlags(window) & SDL_WINDOW_FULLSCREEN))
+            SDL_SetWindowSize(window, now.graphics.window_width, now.graphics.window_height);
+        if (graphics) {
+            ensure_precise(now);
+            ok = presenter->update_options(present_options(now), machine.gpu());
+        }
+        return ok;
+    };
 
     // Reads a state file; on failure `why` gets a short reason for the on-screen message.
     auto read_state_file = [](const std::string& path, std::vector<uint8_t>& data, std::string* why = nullptr) {
@@ -502,6 +567,15 @@ int main(int argc, char** argv) {
         SDL_SetWindowFullscreen(window, !now);
         SDL_Log("fullscreen %s", now ? "off" : "on");
     };
+    auto toggle_fast_forward_latch = [&] {
+        fast_forward.toggle_latch();
+        const double mult = dw3app::fast_forward_multiplier(settings.active().system.fast_forward_speed);
+        presenter->notify(fast_forward.latched()
+                              ? (mult > 0 ? "Fast-forward on (" + std::to_string(static_cast<int>(mult)) + "x)" : std::string("Fast-forward on (unlimited)"))
+                              : std::string("Fast-forward off"));
+    };
+    dw3app::Pacer pacer;
+    bool pacer_started = false, fast_forwarding = false;
     auto on_frame = [&](uint64_t frame) {
         host_pad.frame = static_cast<int64_t>(frame);
         for (const auto& act : opt.window_actions) {
@@ -513,6 +587,12 @@ int main(int argc, char** argv) {
                 toggle_fullscreen();
             }
         }
+        for (const int64_t f : opt.compare_frames)
+            if (f == static_cast<int64_t>(frame)) {
+                const std::string mode = settings.toggle_comparison();
+                SDL_Log("visual preset: %s", mode.c_str());
+                presenter->notify("Visual preset: " + mode);
+            }
         audio.pump(machine.spu());
         {
             std::lock_guard lock(saves.mutex);
@@ -527,6 +607,13 @@ int main(int argc, char** argv) {
                     case SDL_SCANCODE_F5: save_slot(); break;
                     case SDL_SCANCODE_F7: load_slot(); break;
                     case SDL_SCANCODE_F6: state_slot = state_slot > 1 ? state_slot - 1 : 9; select_slot(); break;
+                    case SDL_SCANCODE_F9: {
+                        const std::string mode = settings.toggle_comparison();
+                        SDL_Log("visual preset: %s", mode.c_str());
+                        presenter->notify("Visual preset: " + mode);
+                        break;
+                    }
+                    case SDL_SCANCODE_F10: toggle_fast_forward_latch(); break;
                     case SDL_SCANCODE_F11: toggle_fullscreen(); break;
                     case SDL_SCANCODE_RETURN:
                         if (e.key.mod & SDL_KMOD_ALT) toggle_fullscreen();
@@ -535,7 +622,15 @@ int main(int argc, char** argv) {
                     default: break;
                 }
             }
+            if (e.type == SDL_EVENT_GAMEPAD_BUTTON_DOWN && e.gbutton.button == SDL_GAMEPAD_BUTTON_LEFT_STICK)
+                toggle_fast_forward_latch();
             if (e.type == SDL_EVENT_GAMEPAD_ADDED && !host_pad.gamepad) host_pad.gamepad = SDL_OpenGamepad(e.gdevice.which);
+        }
+        {
+            const bool* keys = SDL_GetKeyboardState(nullptr);
+            bool held = keys[SDL_SCANCODE_TAB];
+            if (host_pad.gamepad && SDL_GetGamepadButton(host_pad.gamepad, SDL_GAMEPAD_BUTTON_RIGHT_STICK)) held = true;
+            fast_forward.set_held(held);
         }
         if (g_quit_requested) dw3::host::Host::stop();
         const bool last = opt.max_frames >= 0 && static_cast<int64_t>(frame) >= opt.max_frames;
@@ -551,19 +646,26 @@ int main(int argc, char** argv) {
             if (!opt.screenshot.empty() && save_capture(opt.screenshot)) SDL_Log("saved screenshot %s", opt.screenshot.c_str());
             dw3::host::Host::stop();
         }
-        // Real-time pacing against emulated time (exact NTSC/PAL frame period from the video clock).
-        if (!opt.uncapped && (opt.max_frames < 0 || opt.audio)) {
-            static uint64_t start_ns = SDL_GetTicksNS();
-            static int64_t start_cycles = machine.ctx().cycles;
-            if (pacing_reset) {
-                start_ns = SDL_GetTicksNS();
-                start_cycles = machine.ctx().cycles;
+        // Real-time pacing against emulated time (exact NTSC/PAL frame period from the video clock). Fast-forward
+        // changes the speed; the sound is dropped while it lasts so it can neither crackle nor build up latency.
+        const bool ff = fast_forward.active();
+        if (ff != fast_forwarding) {
+            fast_forwarding = ff;
+            audio.set_discard(ff);
+            presenter->update_options(present_options(settings.active()), machine.gpu());
+        }
+        if (!unpaced || opt.audio) {
+            const uint64_t now = SDL_GetTicksNS();
+            if (!pacer_started || pacing_reset) {
+                pacer.reset(now, machine.ctx().cycles);
+                pacer_started = true;
                 pacing_reset = false;
             }
-            uint64_t target = start_ns + static_cast<uint64_t>(
-                static_cast<double>(machine.ctx().cycles - start_cycles) * 1e9 / 33868800.0);
-            uint64_t now = SDL_GetTicksNS();
-            if (target > now) SDL_DelayPrecise(target - now);
+            pacer.set_speed(ff ? dw3app::fast_forward_multiplier(settings.active().system.fast_forward_speed) : 1.0, now,
+                            machine.ctx().cycles);
+            if (opt.uncapped) return;
+            const uint64_t wait = pacer.delay_ns(now, machine.ctx().cycles);
+            if (wait) SDL_DelayPrecise(wait);
         }
     };
 

@@ -59,6 +59,8 @@ add_custom_target(recompile
     DEPENDS psxrecomp
     COMMENT "Recompiling game code with psxrecomp")
 
+add_subdirectory(app/settings)
+
 if(DW3_BUILD_APP)
     add_subdirectory(app)
 endif()

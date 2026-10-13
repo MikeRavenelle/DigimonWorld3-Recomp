@@ -16,6 +16,7 @@ public:
 
     const char* name() const override { return "software (SDL renderer)"; }
     void set_vsync(bool on) override;
+    bool update_options(const PresentOptions& options, dw3::Gpu& gpu) override;
     bool present(dw3::Gpu& gpu, Capture* capture) override;
 
 private:
