@@ -34,7 +34,8 @@ constexpr uint32_t kFadeDimmed = 0x8800;
 constexpr uint32_t kLayer = 0x1000, kStyleText = 1;  // the only layer the title has
 constexpr uint32_t kWindowShow = 0x148;  // (window, 1) lays the box out
 constexpr uint32_t kCursorShow = 0x80;  // (cursor, 1) shows it; 0 hides it
-constexpr uint32_t kHeaderX = 152, kHeaderY = 19, kRowX = 189;
+// Centred on the 320-pixel screen: the field menu sits right of the party panels, the title has nothing beside it.
+constexpr uint32_t kHeaderX = 126, kHeaderY = 19, kRowX = 104, kTitleCursorX = kRowX - (189 - kCursorX);
 constexpr uint32_t kHintX = 100, kHintY = 8;
 constexpr uint32_t kRows = 5;
 
@@ -68,7 +69,8 @@ struct TitleHook {
         w.header = make_window(g, kHeaderX, kHeaderY);
         w.row_count = kRows;
         for (uint32_t i = 0; i < kRows; ++i) w.rows[i] = make_window(g, kRowX, kFirstRowY + kRowPitch * i);
-        w.cursor = g.call(kCreateCursor, kLayer, 0, kCursorX, kFirstRowY);
+        w.cursor = g.call(kCreateCursor, kLayer, 0, kTitleCursorX, kFirstRowY);
+        w.cursor_x = kTitleCursorX;
         g.call(g.r32(w.cursor + kCursorShow), w.cursor, 1);
         self.backdrop_ = g.call(kCreateFade, kLayer);
         g.w32(self.backdrop_ + kObjectState, kFadeHeld);
