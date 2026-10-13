@@ -7,6 +7,7 @@
 #include <utility>
 #include <vector>
 
+#include "display.h"
 #include "glyphs.h"
 #include "settings.h"
 
@@ -20,6 +21,7 @@ enum class Kind {
     Setting,  // left and right change the value
     Binding,  // cross waits for the next key or button
     Reset,    // cross restores every control setting
+    Resolution,  // left and right pick the window size, or the screen mode in exclusive fullscreen
 };
 
 struct Entry {
@@ -35,6 +37,8 @@ struct Entry {
 struct RowContext {
     input::PromptStyle style = input::PromptStyle::Xbox;  // names of gamepad buttons (never Auto)
     std::optional<input::Action> capturing;               // the binding row that waits for a key
+    const MonitorList* monitors = nullptr;                // what the monitor and resolution rows choose from
+    bool adaptive_vsync = false;                          // the presenter can do adaptive vertical sync
 };
 
 // Rows in menu order: the visual preset first, then graphics, audio, controls (the live settings, one row per
@@ -52,8 +56,11 @@ std::string value_label(const Settings& settings, const Entry& entry, const RowC
 // "Preset: Enhanced", "Cross: Z/A"
 std::string row_text(const Settings& settings, const Entry& entry, const RowContext& context = {});
 // The text to give SettingsController::set for one step (direction -1 or +1), or empty when the value cannot move
-// (always for Binding and Reset rows).
+// (always for Binding, Reset and Resolution rows). The monitor and vertical sync rows stop at what `context` offers.
 // Choices and the preset wrap around, switches flip, numbers stop at their limits.
-std::string stepped_value(const Settings& settings, const Entry& entry, int direction);
+std::string stepped_value(const Settings& settings, const Entry& entry, int direction, const RowContext& context = {});
+// Setting changes (id, value text) that move the resolution row one step: the window size, or the exclusive mode.
+// Empty when it cannot move (borderless, or already at the end of the list).
+std::vector<std::pair<std::string, std::string>> resolution_changes(const Settings& settings, const RowContext& context, int direction);
 
 }  // namespace dw3app::ingame

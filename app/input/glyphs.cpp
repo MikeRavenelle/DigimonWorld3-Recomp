@@ -56,6 +56,8 @@ std::string binding_label(const Binding& b, PromptStyle style) {
     const bool has_pad = b.pad != PadInput::None;
     if (b.key.empty() && !has_pad) return "None";
     std::string text = key_label(b.key);
+    // The arrow keys and the D-pad share their names: "Right" says it all, "Right/Right" runs out of the row.
+    if (has_pad && text == pad_label(b.pad, style)) return text;
     if (has_pad) text += (b.key.empty() ? "" : "/") + std::string(pad_label(b.pad, style));
     return text;
 }

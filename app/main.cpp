@@ -36,7 +36,9 @@
 //   --dump-textures DIR  GPU renderer: record the background images the game draws and write them to DIR on exit
 //                      (input of tools/texpack, which builds a texture pack)
 //   --window-size WxH  initial window size in pixels (default 1280x960)
-//   --fullscreen       start in (borderless, desktop) fullscreen; F11 or Alt+Enter toggles it
+//   --fullscreen       start in borderless fullscreen; F11 or Alt+Enter toggles it
+//   --display-mode M   windowed, borderless or exclusive; --monitor N picks the monitor (0 auto, 1 and up)
+//   --show-fps         frame rate counter; --gamma P and --brightness P adjust the picture (percent, GPU renderer)
 //   --resize-at F WxH  resize the window at frame F (repeatable; for checking swap chain resizing in audit runs)
 //   --fullscreen-at F  toggle fullscreen at frame F (repeatable)
 //   --compare-at F     press the Original/enhanced comparison hotkey at frame F (repeatable; for audit runs)
@@ -67,6 +69,7 @@
 #include <csignal>
 #include <cstdio>
 #include <cstdlib>
+#include <cmath>
 #include <filesystem>
 #include <functional>
 #include <span>
@@ -83,8 +86,10 @@
 #include "host_input.h"
 #include "ingame/field_menu.h"
 #include "ingame/gameplay.h"
+#include "present/monitors.h"
 #include "present/native_window.h"
 #include "settings/controller.h"
+#include "settings/display.h"
 #include "settings/fastforward.h"
 #include "present/post_options.h"
 #include "present/presenter.h"
@@ -178,7 +183,12 @@ Options parse(int argc, char** argv) {
             set("graphics.window_width", std::to_string(w));
             set("graphics.window_height", std::to_string(h));
         }
-        else if (a == "--fullscreen") set("graphics.fullscreen", "true");
+        else if (a == "--fullscreen") set("graphics.display_mode", "borderless");
+        else if (a == "--display-mode" && i + 1 < argc) set("graphics.display_mode", argv[++i]);
+        else if (a == "--monitor" && i + 1 < argc) set("graphics.monitor", argv[++i]);
+        else if (a == "--show-fps") set("graphics.show_fps", "true");
+        else if (a == "--gamma" && i + 1 < argc) set("graphics.gamma", argv[++i]);
+        else if (a == "--brightness" && i + 1 < argc) set("graphics.brightness", argv[++i]);
         else if (a == "--resize-at" && i + 2 < argc) {
             Options::WindowAction act{std::atoll(argv[++i]), 0, 0};
             if (!parse_size(argv[++i], act.w, act.h) || act.w < 160 || act.h < 120) {
@@ -198,7 +208,7 @@ Options parse(int argc, char** argv) {
         else if (a == "--true-color") set("graphics.true_color", "true");
         else if (a == "--precise-geometry") set("graphics.precise_geometry", "true");
         else if (a == "--texture-filter" && i + 1 < argc) set("graphics.texture_filter", argv[++i]);
-        else if (a == "--no-vsync") set("graphics.vsync", "false");
+        else if (a == "--no-vsync") set("graphics.vsync", "off");
         else if (a == "--hd-backgrounds") set("graphics.hd_backgrounds", "true");
         else if (a == "--texture-pack" && i + 1 < argc) set("graphics.texture_pack", argv[++i]);
         else if (a == "--dump-textures" && i + 1 < argc) o.dump_textures = argv[++i];
@@ -352,7 +362,8 @@ int main(int argc, char** argv) {
     auto present_options = [&](const dw3app::Settings& st) {
         dw3app::PresentOptions po;
         const auto& g = st.graphics;
-        po.vsync = g.vsync && !unpaced && !fast_forward.active() && st.gameplay.game_speed == 0;
+        po.vsync = unpaced || fast_forward.active() || st.gameplay.game_speed != 0 ? dw3app::VsyncMode::Off
+                                                                                       : static_cast<dw3app::VsyncMode>(g.vsync);
         po.linear = g.output_filter >= 1;
         po.post = dw3app::post_fx_from(g);
         po.internal_res = g.internal_res;
@@ -374,7 +385,15 @@ int main(int argc, char** argv) {
         return 1;
     }
     SDL_Log("presenting with %s", presenter->name());
-    if (active.graphics.fullscreen) SDL_SetWindowFullscreen(window, true);
+    dw3app::MonitorList monitors;
+    double refresh_hz = 0.0;
+    auto refresh_display_state = [&] {
+        monitors = dw3app::query_monitors(window);
+        refresh_hz = dw3app::window_refresh_hz(window);
+    };
+    dw3app::apply_display_settings(window, active.graphics);
+    refresh_display_state();
+    int last_fullscreen_mode = active.graphics.display_mode != 0 ? active.graphics.display_mode : 1;
     presenter->attach(machine.gpu());
     const bool software_presenter = std::string(presenter->name()).find("software") != std::string::npos;
     if (software_presenter && (active.graphics.hd_backgrounds || !opt.dump_textures.empty()))
@@ -408,13 +427,14 @@ int main(int argc, char** argv) {
     dw3app::SettingsController settings(stored, active, &sink, config_file);
     dw3app::input::HostInput host_input(settings, [&](const std::string& message) { presenter->notify(message); });
     dw3app::ingame::FieldMenuSettings settings_screen(machine, settings, &host_input);
+    settings_screen.set_display_context(&monitors, presenter->supports_adaptive_vsync());
     dw3app::ingame::GameplayHooks gameplay(machine, settings);
     sink.fn = [&](const dw3app::Settings& now, std::span<const dw3app::SettingInfo* const> changed) {
-        bool ok = true, graphics = false, window_size = false;
+        bool ok = true, graphics = false, display = false;
         for (const dw3app::SettingInfo* info : changed) {
             const std::string_view id = info->id;
-            if (id == "graphics.fullscreen") SDL_SetWindowFullscreen(window, now.graphics.fullscreen);
-            else if (id == "graphics.window_width" || id == "graphics.window_height") window_size = true;
+            if (id == "graphics.display_mode" || id == "graphics.monitor" || id.starts_with("graphics.window_") ||
+                id.starts_with("graphics.fullscreen_")) display = true;
             else if (id == "gameplay.game_speed") {
                 audio.set_speed(dw3app::game_speed_multiplier(now.gameplay.game_speed));
                 graphics = true;  // vsync is off while the game runs faster than the display
@@ -425,8 +445,10 @@ int main(int argc, char** argv) {
             else if (id.starts_with("controls.")) host_input.settings_changed();
             else if (id.starts_with("graphics.")) graphics = true;  // presentation, filters and the presets built from them
         }
-        if (window_size && !(SDL_GetWindowFlags(window) & SDL_WINDOW_FULLSCREEN))
-            SDL_SetWindowSize(window, now.graphics.window_width, now.graphics.window_height);
+        if (display) {
+            dw3app::apply_display_settings(window, now.graphics);
+            refresh_display_state();
+        }
         if (graphics) {
             ensure_precise(now);
             ok = presenter->update_options(present_options(now), machine.gpu());
@@ -578,10 +600,13 @@ int main(int argc, char** argv) {
             }
         });
     };
+    // Switches between windowed and the fullscreen mode used last (borderless to begin with).
     auto toggle_fullscreen = [&] {
-        const bool now = (SDL_GetWindowFlags(window) & SDL_WINDOW_FULLSCREEN) != 0;
-        SDL_SetWindowFullscreen(window, !now);
-        SDL_Log("fullscreen %s", now ? "off" : "on");
+        const int mode = settings.active().graphics.display_mode;
+        if (mode != 0) last_fullscreen_mode = mode;
+        const int next = mode != 0 ? 0 : last_fullscreen_mode;
+        settings.set("graphics.display_mode", next == 0 ? "windowed" : next == 1 ? "borderless" : "exclusive");
+        SDL_Log("display mode %d", next);
     };
     auto toggle_fast_forward_latch = [&] {
         fast_forward.toggle_latch();
@@ -602,7 +627,10 @@ int main(int argc, char** argv) {
                               presenter->notify("Visual preset: " + mode);
                           }};
     dw3app::Pacer pacer;
-    bool pacer_started = false, fast_forwarding = false;
+    bool pacer_started = false, fast_forwarding = false, display_changed = false, fps_shown = false;
+    uint64_t fps_window_start = SDL_GetTicksNS();
+    int fps_frames = 0;
+    constexpr uint64_t kFpsWindowNs = 500'000'000;
     auto on_frame = [&](uint64_t frame) {
         host_input.frame = static_cast<int64_t>(frame);
         settings_screen.apply_pending();
@@ -630,6 +658,8 @@ int main(int argc, char** argv) {
         SDL_Event e;
         while (SDL_PollEvent(&e)) {
             if (e.type == SDL_EVENT_QUIT) dw3::host::Host::stop();
+            if ((e.type >= SDL_EVENT_DISPLAY_FIRST && e.type <= SDL_EVENT_DISPLAY_LAST) || e.type == SDL_EVENT_WINDOW_DISPLAY_CHANGED)
+                display_changed = true;
             if (host_input.handle_event(e)) continue;
             if (e.type == SDL_EVENT_KEY_DOWN && !e.key.repeat) {
                 switch (e.key.scancode) {
@@ -645,6 +675,12 @@ int main(int argc, char** argv) {
                 }
             }
         }
+        if (display_changed) {
+            display_changed = false;
+            refresh_display_state();
+        } else if (frame % 120 == 0) {
+            refresh_hz = dw3app::window_refresh_hz(window);
+        }
         host_input.update();
         fast_forward.set_held(host_input.fast_forward_held());
         if (g_quit_requested) dw3::host::Host::stop();
@@ -652,6 +688,22 @@ int main(int argc, char** argv) {
         const bool periodic = opt.shot_every > 0 && frame % static_cast<uint64_t>(opt.shot_every) == 0;
         const bool want_shot = periodic || (last && !opt.screenshot.empty());
         presenter->present(machine.gpu(), want_shot ? &capture : nullptr);
+        // On a display that runs at a multiple of 60 Hz, each frame is shown for the same whole number of refreshes.
+        const auto& shown = settings.active().graphics;
+        if (shown.frame_pacing == 1 && shown.vsync != 0 && !unpaced && !fast_forward.active() && settings.active().gameplay.game_speed == 0)
+            for (int again = dw3app::refreshes_per_frame(refresh_hz); again > 1; --again) presenter->present(machine.gpu(), nullptr);
+        ++fps_frames;
+        if (const uint64_t now = SDL_GetTicksNS(); now - fps_window_start >= kFpsWindowNs) {
+            if (shown.show_fps) {
+                const double fps = static_cast<double>(fps_frames) * 1e9 / static_cast<double>(now - fps_window_start);
+                presenter->set_status(std::to_string(static_cast<int>(std::lround(fps))) + " FPS");
+            } else if (fps_shown) {
+                presenter->set_status("");
+            }
+            fps_shown = shown.show_fps;
+            fps_window_start = now;
+            fps_frames = 0;
+        }
         if (periodic) {
             char name[64];
             std::snprintf(name, sizeof(name), "/frame_%06llu.bmp", static_cast<unsigned long long>(frame));

@@ -8,6 +8,7 @@
 #include <sstream>
 
 #include "dw3/platform.h"
+#include "display.h"
 #include "presets.h"
 
 namespace dw3app {
@@ -24,6 +25,9 @@ constexpr std::string_view kAntialiasing[] = {"off", "smaa"};
 constexpr std::string_view kSharpening[] = {"off", "low", "medium", "high"};
 constexpr std::string_view kColorGrades[] = {"neutral", "vivid", "warm", "cool"};
 constexpr std::string_view kCrt[] = {"off", "scanlines", "crt"};
+constexpr std::string_view kDisplayModes[] = {"windowed", "borderless", "exclusive"};
+constexpr std::string_view kVsyncModes[] = {"off", "on", "adaptive"};
+constexpr std::string_view kFramePacing[] = {"off", "even"};
 constexpr std::string_view kScaleModes[] = {"fit", "integer", "stretch"};
 constexpr std::string_view kSpeeds[] = {"2x", "4x", "unlimited"};
 constexpr std::string_view kEncounters[] = {"normal", "half", "off", "double"};
@@ -55,14 +59,30 @@ const SettingInfo kSettings[] = {
      Group::Graphics, Type::Choice, Apply::Live, 0, 0, kOutputFilters, false, DW3_FIELD(graphics.output_filter)},
     {"graphics.scale_mode", "Scaling", "fit keeps 4:3 with borders, integer uses whole multiples only, stretch fills the window.",
      Group::Graphics, Type::Choice, Apply::Live, 0, 0, kScaleModes, false, DW3_FIELD(graphics.scale_mode)},
-    {"graphics.window_width", "Window width", "Window width in pixels.",
-     Group::Graphics, Type::Int, Apply::Live, 160, 16384, {}, false, DW3_FIELD(graphics.window_width)},
+    {"graphics.display_mode", "Display mode", "windowed, borderless (a desktop-sized window without borders) or exclusive (the monitor switches to the chosen mode). F11 or Alt+Enter toggles between windowed and the last fullscreen mode.",
+     Group::Graphics, Type::Choice, Apply::Live, 0, 0, kDisplayModes, false, DW3_FIELD(graphics.display_mode)},
+    {"graphics.monitor", "Monitor", "Which monitor fullscreen uses and a window opens on: 0 is auto (where the window is), 1 and up follow the system's order.",
+     Group::Graphics, Type::Int, Apply::Live, 0, 8, {}, false, DW3_FIELD(graphics.monitor)},
+    {"graphics.window_width", "Window width", "Window width in pixels (the in-game screen picks from a list of common sizes).",
+     Group::Graphics, Type::Int, Apply::Live, 160, 16384, {}, true, DW3_FIELD(graphics.window_width)},
     {"graphics.window_height", "Window height", "Window height in pixels.",
-     Group::Graphics, Type::Int, Apply::Live, 120, 16384, {}, false, DW3_FIELD(graphics.window_height)},
-    {"graphics.fullscreen", "Fullscreen", "Borderless fullscreen (F11 or Alt+Enter toggles it while playing).",
-     Group::Graphics, Type::Bool, Apply::Live, 0, 0, {}, false, DW3_FIELD(graphics.fullscreen)},
-    {"graphics.vsync", "Vertical sync", "Wait for the display refresh when presenting.",
-     Group::Graphics, Type::Bool, Apply::Live, 0, 0, {}, false, DW3_FIELD(graphics.vsync)},
+     Group::Graphics, Type::Int, Apply::Live, 120, 16384, {}, true, DW3_FIELD(graphics.window_height)},
+    {"graphics.fullscreen_width", "Exclusive width", "Width of the exclusive fullscreen mode; 0 uses the monitor's desktop mode.",
+     Group::Graphics, Type::Int, Apply::Live, 0, 16384, {}, true, DW3_FIELD(graphics.fullscreen_width)},
+    {"graphics.fullscreen_height", "Exclusive height", "Height of the exclusive fullscreen mode; 0 uses the monitor's desktop mode.",
+     Group::Graphics, Type::Int, Apply::Live, 0, 16384, {}, true, DW3_FIELD(graphics.fullscreen_height)},
+    {"graphics.fullscreen_refresh", "Exclusive refresh rate", "Refresh rate of the exclusive fullscreen mode in hundredths of a hertz (14400 is 144 Hz); 0 picks the highest the size offers.",
+     Group::Graphics, Type::Int, Apply::Live, 0, 100000, {}, true, DW3_FIELD(graphics.fullscreen_refresh)},
+    {"graphics.vsync", "Vertical sync", "Wait for the display refresh when presenting. adaptive tears instead of stalling when a frame is late, where the graphics path supports it (otherwise it acts as on).",
+     Group::Graphics, Type::Choice, Apply::Live, 0, 0, kVsyncModes, false, DW3_FIELD(graphics.vsync)},
+    {"graphics.frame_pacing", "Frame pacing", "even shows every emulated frame for the same whole number of refreshes on displays that run at a multiple of 60 Hz (120, 180, 240), which avoids judder; it needs vertical sync and does nothing on 60 Hz or 144 Hz displays.",
+     Group::Graphics, Type::Choice, Apply::Live, 0, 0, kFramePacing, false, DW3_FIELD(graphics.frame_pacing)},
+    {"graphics.show_fps", "Show FPS", "A small frame rate counter in the corner of the window.",
+     Group::Graphics, Type::Bool, Apply::Live, 0, 0, {}, false, DW3_FIELD(graphics.show_fps)},
+    {"graphics.gamma", "Gamma", "Gamma of the finished picture in percent: 100 changes nothing, above brightens the midtones (GPU renderer only). Not part of any preset.",
+     Group::Graphics, Type::Int, Apply::Live, 80, 140, {}, false, DW3_FIELD(graphics.gamma)},
+    {"graphics.brightness", "Brightness", "Brightness of the finished picture in percent: 0 changes nothing (GPU renderer only). Not part of any preset.",
+     Group::Graphics, Type::Int, Apply::Live, -50, 50, {}, false, DW3_FIELD(graphics.brightness)},
 
     {"graphics.antialiasing", "Anti-aliasing", "SMAA edge smoothing of the finished picture (GPU renderer only). Mostly useful at internal resolution 1x to 2x.",
      Group::Graphics, Type::Choice, Apply::Live, 0, 0, kAntialiasing, false, DW3_FIELD(graphics.antialiasing)},
@@ -352,6 +372,7 @@ Settings settings_from_toml(std::string_view text, LoadReport& report) {
             case Type::Choice:
             case Type::String:
                 if (n.is_string()) value = n.as_string()->get();
+                else if (auto legacy = n.value<bool>(); legacy && info.id == "graphics.vsync") value = *legacy ? "on" : "off";  // was a switch
                 else type_ok = false;
                 break;
         }
@@ -373,6 +394,13 @@ Settings settings_from_toml(std::string_view text, LoadReport& report) {
     for (const SettingInfo& info : kSettings) {
         if (&info == preset_info || &info == base_info) continue;
         if (const toml::node* n = lookup(info)) apply(info, *n);
+    }
+    // Files from before the display mode existed switch fullscreen on and off.
+    const SettingInfo* mode_info = find_setting("graphics.display_mode");
+    if (!lookup(*mode_info)) {
+        const toml::table* graphics = root["graphics"].as_table();
+        if (graphics && graphics->get_as<bool>("fullscreen") && graphics->get_as<bool>("fullscreen")->get())
+            s.graphics.display_mode = static_cast<int>(DisplayMode::Borderless);
     }
     // Custom keeps the base the file named; a named preset that the values still match is its own base.
     if (match_preset(s) == kPresetCustom) s.graphics.preset_base = base_from_file;

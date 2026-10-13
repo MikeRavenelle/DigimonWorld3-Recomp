@@ -181,3 +181,10 @@ TEST(IngameControls, ControlSettingsStepLikeOtherRows) {
     ASSERT_TRUE(set_text(s, *find_setting("controls.prompts"), "playstation", error));
     EXPECT_EQ(row_text(s, find("controls.prompts")), "Prompts: PlayStation");
 }
+
+TEST(IngameControls, ArrowKeysOnTheDpadShowTheirNameOnce) {
+    const Settings s = defaults();
+    EXPECT_EQ(row_text(s, binding_entry(input::Action::Right)), "Right: Right");
+    EXPECT_EQ(row_text(s, binding_entry(input::Action::Up)), "Up: Up");
+    EXPECT_EQ(row_text(s, binding_entry(input::Action::Cross)), "Cross: Z/A");
+}

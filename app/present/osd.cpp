@@ -152,20 +152,24 @@ void Osd::show(std::string text, uint64_t now_ms) {
     active_ = true;
 }
 
+void Osd::set_status(std::string text) { status_ = std::move(text); }
+
+int Osd::x(int window_w) const { return status_shown_ ? window_w - image_.w - margin_ : margin_; }
+
 const OsdImage* Osd::frame(int window_w, int window_h, uint64_t now_ms, float& opacity) {
-    if (!active_) return nullptr;
     const uint64_t age = now_ms >= shown_at_ ? now_ms - shown_at_ : 0;
-    if (age >= kShowMs) {
-        active_ = false;
-        return nullptr;
-    }
-    opacity = age + kFadeMs > kShowMs ? static_cast<float>(kShowMs - age) / static_cast<float>(kFadeMs) : 1.0f;
+    if (active_ && age >= kShowMs) active_ = false;
+    status_shown_ = !active_;
+    if (status_shown_ && status_.empty()) return nullptr;
+    const std::string& text = status_shown_ ? status_ : text_;
+    if (status_shown_) opacity = kStatusOpacity;
+    else opacity = age + kFadeMs > kShowMs ? static_cast<float>(kShowMs - age) / static_cast<float>(kFadeMs) : 1.0f;
     const int scale = osd_scale(window_h);
     margin_ = 2 * scale;
     const int max_width = window_w - 2 * margin_;
-    if (text_ != image_text_ || scale != image_scale_ || max_width != image_width_) {
-        image_ = osd_render_text(text_, scale, max_width);
-        image_text_ = text_;
+    if (text != image_text_ || scale != image_scale_ || max_width != image_width_) {
+        image_ = osd_render_text(text, scale, max_width);
+        image_text_ = text;
         image_scale_ = scale;
         image_width_ = max_width;
         ++serial_;

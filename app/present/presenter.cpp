@@ -11,6 +11,8 @@ namespace dw3app {
 
 void Presenter::notify(std::string text) { osd_.show(std::move(text), SDL_GetTicks()); }
 
+void Presenter::set_status(std::string text) { osd_.set_status(std::move(text)); }
+
 std::unique_ptr<Presenter> create_presenter(const char* title, int width, int height, RendererChoice choice,
                                             const PresentOptions& options, void (*log)(const std::string&),
                                             SDL_Window*& window) {

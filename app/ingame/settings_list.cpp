@@ -29,10 +29,13 @@ constexpr Labels kLabels[] = {
     {"graphics.color_grade", "Color", 1},
     {"graphics.crt", "CRT", 1},
     {"graphics.scale_mode", "Scaling", 1},
-    {"graphics.window_width", "Win Width", 160},
-    {"graphics.window_height", "Win Height", 120},
-    {"graphics.fullscreen", "Fullscreen", 1},
+    {"graphics.display_mode", "Display", 1},
+    {"graphics.monitor", "Monitor", 1},
     {"graphics.vsync", "VSync", 1},
+    {"graphics.frame_pacing", "Pacing", 1},
+    {"graphics.show_fps", "Show FPS", 1},
+    {"graphics.gamma", "Gamma", 5},
+    {"graphics.brightness", "Bright", 5},
     {"audio.mute", "Mute", 1},
     {"audio.volume", "Volume", 10},
     {"controls.pad", "Gamepad", 1},
@@ -77,6 +80,44 @@ std::string stepped_preset(const Settings& settings, int direction) {
     return std::string(preset(next).name);
 }
 
+// The monitor row shows the monitor's name when it is short and made of characters the game's font has.
+bool fits_the_row(std::string_view name) {
+    constexpr std::size_t kMaxName = 8;
+    if (name.empty() || name.size() > kMaxName) return false;
+    return std::all_of(name.begin(), name.end(), [](char c) {
+        return std::isalnum(static_cast<unsigned char>(c)) || c == ' ' || c == '.' || c == '/' || c == ':' || c == '-';
+    });
+}
+
+std::string monitor_label(const Settings& settings, const RowContext& context) {
+    const int number = settings.graphics.monitor;
+    if (number == 0) return "Auto";
+    if (context.monitors && static_cast<std::size_t>(number) <= context.monitors->monitors.size()) {
+        const std::string& name = context.monitors->monitors[static_cast<std::size_t>(number) - 1].name;
+        if (fits_the_row(name)) return name;
+    }
+    return std::to_string(number);
+}
+
+// The mode exclusive fullscreen uses: the saved size and refresh rate, or the desktop mode while none is saved.
+ScreenMode exclusive_mode_of(const Settings& settings, const MonitorInfo& monitor) {
+    const auto& g = settings.graphics;
+    if (g.fullscreen_width <= 0 || g.fullscreen_height <= 0) return monitor.desktop;
+    if (g.fullscreen_refresh > 0) return {g.fullscreen_width, g.fullscreen_height, g.fullscreen_refresh};
+    ScreenMode best{g.fullscreen_width, g.fullscreen_height, 0};
+    for (const ScreenMode& m : monitor.modes)
+        if (m.w == best.w && m.h == best.h) best.refresh_chz = std::max(best.refresh_chz, m.refresh_chz);
+    return best;
+}
+
+std::string resolution_label(const Settings& settings, const RowContext& context) {
+    const auto& g = settings.graphics;
+    if (g.display_mode == static_cast<int>(DisplayMode::Windowed)) return size_label({g.window_width, g.window_height});
+    const MonitorInfo* monitor = context.monitors ? context.monitors->effective(g.monitor) : nullptr;
+    if (g.display_mode == static_cast<int>(DisplayMode::Exclusive) && monitor) return mode_label(exclusive_mode_of(settings, *monitor)) + "Hz";
+    return "Desktop";
+}
+
 Page page_of(const SettingInfo& info) {
     switch (info.group) {
         case Group::Graphics: return Page::Graphics;
@@ -113,6 +154,8 @@ const std::vector<Entry>& entries() {
             const bool known = std::any_of(out.begin(), out.end(), [&](const Entry& e) { return e.info == &info; });
             if (listed(info) && !known) out.push_back({&info, std::string(info.label), 1, page_of(info)});
         }
+        const auto monitor_row = std::find_if(out.begin(), out.end(), [](const Entry& e) { return e.info && e.info->id == "graphics.monitor"; });
+        if (monitor_row != out.end()) out.insert(monitor_row + 1, Entry{nullptr, "Res", 0, Page::Graphics, Kind::Resolution});
         // Stable by page, so that the pages are contiguous whatever order the settings were listed in.
         std::stable_sort(out.begin(), out.end(), [](const Entry& a, const Entry& b) { return a.page < b.page; });
         // The bindings and the reset row close the controls page, after its settings.
@@ -155,6 +198,7 @@ std::vector<std::pair<std::string, std::string>> controls_reset_changes() {
 
 std::string value_label(const Settings& settings, const Entry& entry, const RowContext& context) {
     if (entry.kind == Kind::Reset) return "";
+    if (entry.kind == Kind::Resolution) return resolution_label(settings, context);
     if (entry.kind == Kind::Binding) {
         if (context.capturing == entry.action) return "Press key";
         const auto bindings = input::bindings_from_text(settings.controls.bindings);
@@ -166,6 +210,12 @@ std::string value_label(const Settings& settings, const Entry& entry, const RowC
         case Type::Int: {
             std::string v = get_text(settings, info);
             if (info.id == "graphics.internal_res") v += "X";
+            if (info.id == "graphics.monitor") return monitor_label(settings, context);
+            if (info.id == "graphics.gamma") {
+                const int percent = settings.graphics.gamma;
+                return std::to_string(percent / 100) + "." + (percent % 100 < 10 ? "0" : "") + std::to_string(percent % 100);
+            }
+            if (info.id == "graphics.brightness" && settings.graphics.brightness > 0) return "+" + v;
             return v;
         }
         case Type::Choice: return choice_label(get_text(settings, info));
@@ -176,22 +226,53 @@ std::string value_label(const Settings& settings, const Entry& entry, const RowC
 
 std::string row_text(const Settings& settings, const Entry& entry, const RowContext& context) {
     if (entry.kind == Kind::Reset) return entry.label;
+    // A mode with its refresh rate is as wide as the window: it goes without the label.
+    if (entry.kind == Kind::Resolution && settings.graphics.display_mode == static_cast<int>(DisplayMode::Exclusive) &&
+        context.monitors && context.monitors->effective(settings.graphics.monitor))
+        return value_label(settings, entry, context);
     return entry.label + ": " + value_label(settings, entry, context);
 }
 
-std::string stepped_value(const Settings& settings, const Entry& entry, int direction) {
+std::vector<std::pair<std::string, std::string>> resolution_changes(const Settings& settings, const RowContext& context, int direction) {
+    const auto& g = settings.graphics;
+    const MonitorInfo* monitor = context.monitors ? context.monitors->effective(g.monitor) : nullptr;
+    const auto at = [&](const auto& list, std::size_t from) -> std::optional<std::size_t> {
+        const long long next = static_cast<long long>(from) + direction;
+        if (list.empty() || next < 0 || next >= static_cast<long long>(list.size())) return std::nullopt;
+        return static_cast<std::size_t>(next);
+    };
+    if (g.display_mode == static_cast<int>(DisplayMode::Windowed)) {
+        const ScreenSize current{g.window_width, g.window_height};
+        const auto sizes = windowed_sizes(monitor ? monitor->usable : ScreenSize{16384, 16384}, current);
+        const auto next = at(sizes, nearest_size(sizes, current));
+        if (!next) return {};
+        return {{"graphics.window_width", std::to_string(sizes[*next].w)}, {"graphics.window_height", std::to_string(sizes[*next].h)}};
+    }
+    if (g.display_mode == static_cast<int>(DisplayMode::Exclusive) && monitor) {
+        const auto modes = exclusive_modes(monitor->modes);
+        const auto next = at(modes, nearest_mode(modes, exclusive_mode_of(settings, *monitor)));
+        if (!next) return {};
+        return {{"graphics.fullscreen_width", std::to_string(modes[*next].w)},
+                {"graphics.fullscreen_height", std::to_string(modes[*next].h)},
+                {"graphics.fullscreen_refresh", std::to_string(modes[*next].refresh_chz)}};
+    }
+    return {};
+}
+
+std::string stepped_value(const Settings& settings, const Entry& entry, int direction, const RowContext& context) {
     if (entry.kind != Kind::Setting) return "";
     const SettingInfo& info = *entry.info;
     switch (info.type) {
         case Type::Bool: return get_text(settings, info) == "true" ? "false" : "true";
         case Type::Int: {
             const int current = std::stoi(get_text(settings, info));
-            const int next = std::clamp(current + direction * entry.step, info.min, info.max);
+            const int highest = info.id == "graphics.monitor" && context.monitors ? static_cast<int>(context.monitors->monitors.size()) : info.max;
+            const int next = std::clamp(current + direction * entry.step, info.min, std::min(info.max, std::max(highest, current)));
             return next == current ? "" : std::to_string(next);
         }
         case Type::Choice: {
             if (info.id == "graphics.preset") return stepped_preset(settings, direction);
-            const int n = static_cast<int>(info.choices.size());
+            const int n = info.id == "graphics.vsync" && !context.adaptive_vsync ? 2 : static_cast<int>(info.choices.size());
             const int at = std::max(choice_index(settings, info), 0);
             return std::string(info.choices[static_cast<std::size_t>((at + direction + n) % n)]);
         }

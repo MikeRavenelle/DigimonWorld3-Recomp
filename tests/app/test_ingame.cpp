@@ -154,3 +154,192 @@ TEST(IngameText, SymbolsUseTheTwoByteRange) {
     EXPECT_EQ(encode_game_text("~"), (std::vector<uint8_t>{1, 1, 0}));  // unknown characters become spaces
     EXPECT_EQ(encode_game_text(""), (std::vector<uint8_t>{0}));
 }
+
+// ---- Display rows ----------------------------------------------------------------------------------------------
+
+namespace {
+
+MonitorList two_monitors() {
+    MonitorList list;
+    MonitorInfo a{"DP-1", {1920, 1080}, {1920, 1080, 14400}, {{1920, 1080, 14400}, {1920, 1080, 6000}, {1280, 720, 6000}, {640, 480, 6000}}};
+    MonitorInfo b{"LG ULTRAGEAR 27GL850", {2560, 1440}, {2560, 1440, 6000}, {{2560, 1440, 6000}}};
+    list.monitors = {a, b};
+    return list;
+}
+
+const Entry& resolution_entry() {
+    for (const Entry& e : entries())
+        if (e.kind == Kind::Resolution) return e;
+    ADD_FAILURE() << "no resolution row";
+    return entries().front();
+}
+
+void change(Settings& s, const std::vector<std::pair<std::string, std::string>>& changes) {
+    for (const auto& [id, value] : changes) {
+        std::string error;
+        ASSERT_TRUE(set_text(s, *find_setting(id), value, error)) << error;
+    }
+}
+
+}  // namespace
+
+TEST(IngameDisplay, RowsFollowTheGraphicsPageInOrder) {
+    std::vector<std::string> labels;
+    for (const Entry& e : entries())
+        if (e.page == Page::Graphics) labels.push_back(e.label);
+    const auto at = [&](const std::string& l) { return std::find(labels.begin(), labels.end(), l) - labels.begin(); };
+    EXPECT_LT(at("Scaling"), at("Display"));
+    EXPECT_EQ(at("Monitor"), at("Display") + 1);
+    EXPECT_EQ(at("Res"), at("Monitor") + 1);
+    EXPECT_EQ(at("VSync"), at("Res") + 1);
+    EXPECT_LT(at("VSync"), at("Pacing"));
+    EXPECT_LT(at("Pacing"), at("Show FPS"));
+    EXPECT_LT(at("Show FPS"), at("Gamma"));
+    EXPECT_LT(at("Gamma"), at("Bright"));
+    EXPECT_EQ(std::count(labels.begin(), labels.end(), "Win Width"), 0);
+    EXPECT_EQ(std::count(labels.begin(), labels.end(), "Fullscreen"), 0);
+}
+
+TEST(IngameDisplay, MonitorRowShowsAutoANameThatFitsOrItsNumber) {
+    const MonitorList list = two_monitors();
+    RowContext context;
+    context.monitors = &list;
+    Settings s = defaults();
+    const Entry& monitor = entry("graphics.monitor");
+    EXPECT_EQ(value_label(s, monitor, context), "Auto");
+    apply(s, monitor, "1");
+    EXPECT_EQ(value_label(s, monitor, context), "DP-1");
+    apply(s, monitor, "2");
+    EXPECT_EQ(value_label(s, monitor, context), "2");  // the name is too long for the row
+    EXPECT_LE(row_text(s, monitor, context).size(), 20u);
+    EXPECT_EQ(value_label(s, monitor), "2");           // no monitor list: the number
+}
+
+TEST(IngameDisplay, MonitorRowStopsAtTheLastMonitor) {
+    const MonitorList list = two_monitors();
+    RowContext context;
+    context.monitors = &list;
+    Settings s = defaults();
+    const Entry& monitor = entry("graphics.monitor");
+    EXPECT_EQ(stepped_value(s, monitor, 1, context), "1");
+    apply(s, monitor, "2");
+    EXPECT_EQ(stepped_value(s, monitor, 1, context), "");
+    EXPECT_EQ(stepped_value(s, monitor, -1, context), "1");
+    apply(s, monitor, "0");
+    EXPECT_EQ(stepped_value(s, monitor, -1, context), "");
+}
+
+TEST(IngameDisplay, WindowedResolutionStepsThroughSizesThatFit) {
+    const MonitorList list = two_monitors();
+    RowContext context;
+    context.monitors = &list;
+    Settings s = defaults();
+    apply(s, entry("graphics.monitor"), "1");
+    EXPECT_EQ(value_label(s, resolution_entry(), context), "1280x960");
+    const auto up = resolution_changes(s, context, 1);
+    ASSERT_EQ(up.size(), 2u);
+    EXPECT_EQ(up[0].first, "graphics.window_width");
+    EXPECT_EQ(up[0].second, "1440");
+    EXPECT_EQ(up[1].second, "900");
+    change(s, up);
+    EXPECT_EQ(value_label(s, resolution_entry(), context), "1440x900");
+    const auto down = resolution_changes(s, context, -1);
+    ASSERT_EQ(down.size(), 2u);
+    EXPECT_EQ(down[0].second, "1280");
+}
+
+TEST(IngameDisplay, WindowedResolutionStopsAtBothEnds) {
+    MonitorList list;
+    list.monitors = {{"A", {1024, 768}, {1024, 768, 6000}, {}}};
+    RowContext context;
+    context.monitors = &list;
+    Settings s = defaults();
+    change(s, {{"graphics.window_width", "1024"}, {"graphics.window_height", "768"}});
+    EXPECT_TRUE(resolution_changes(s, context, 1).empty());
+    change(s, {{"graphics.window_width", "640"}, {"graphics.window_height", "480"}});
+    EXPECT_TRUE(resolution_changes(s, context, -1).empty());
+}
+
+TEST(IngameDisplay, BorderlessUsesTheDesktopAndDoesNotStep) {
+    const MonitorList list = two_monitors();
+    RowContext context;
+    context.monitors = &list;
+    Settings s = defaults();
+    apply(s, entry("graphics.display_mode"), "borderless");
+    EXPECT_EQ(value_label(s, resolution_entry(), context), "Desktop");
+    EXPECT_TRUE(resolution_changes(s, context, 1).empty());
+}
+
+TEST(IngameDisplay, ExclusiveResolutionListsTheMonitorsOwnModes) {
+    const MonitorList list = two_monitors();
+    RowContext context;
+    context.monitors = &list;
+    Settings s = defaults();
+    apply(s, entry("graphics.display_mode"), "exclusive");
+    apply(s, entry("graphics.monitor"), "1");
+    EXPECT_EQ(value_label(s, resolution_entry(), context), "1920x1080 144Hz");  // the desktop mode until one is chosen
+    EXPECT_EQ(row_text(s, resolution_entry(), context), "1920x1080 144Hz");  // too wide for a label
+    EXPECT_TRUE(resolution_changes(s, context, 1).empty());                   // already the last mode
+    const auto down = resolution_changes(s, context, -1);
+    ASSERT_EQ(down.size(), 3u);
+    EXPECT_EQ(down[0].second, "1920");
+    EXPECT_EQ(down[1].second, "1080");
+    EXPECT_EQ(down[2].second, "6000");
+    change(s, down);
+    EXPECT_EQ(value_label(s, resolution_entry(), context), "1920x1080 60Hz");
+}
+
+TEST(IngameDisplay, ExclusiveWithoutMonitorInformationReadsDesktop) {
+    Settings s = defaults();
+    apply(s, entry("graphics.display_mode"), "exclusive");
+    EXPECT_EQ(value_label(s, resolution_entry()), "Desktop");
+    EXPECT_TRUE(resolution_changes(s, {}, 1).empty());
+}
+
+TEST(IngameDisplay, AdaptiveVsyncIsOnlyOfferedWhereItWorks) {
+    Settings s = defaults();
+    const Entry& vsync = entry("graphics.vsync");
+    EXPECT_EQ(stepped_value(s, vsync, 1), "off");  // on wraps past the missing adaptive
+    RowContext adaptive;
+    adaptive.adaptive_vsync = true;
+    EXPECT_EQ(stepped_value(s, vsync, 1, adaptive), "adaptive");
+    apply(s, vsync, "adaptive");
+    EXPECT_EQ(value_label(s, vsync), "Adaptive");
+    EXPECT_EQ(stepped_value(s, vsync, 1), "on");  // a saved adaptive on a path without it steps back to the list
+}
+
+TEST(IngameDisplay, GammaAndBrightnessReadAsValuesAndStep) {
+    Settings s = defaults();
+    const Entry& gamma = entry("graphics.gamma");
+    const Entry& bright = entry("graphics.brightness");
+    EXPECT_EQ(row_text(s, gamma), "Gamma: 1.00");
+    EXPECT_EQ(stepped_value(s, gamma, 1), "105");
+    apply(s, gamma, "105");
+    EXPECT_EQ(value_label(s, gamma), "1.05");
+    apply(s, gamma, "80");
+    EXPECT_EQ(value_label(s, gamma), "0.80");
+    EXPECT_EQ(stepped_value(s, gamma, -1), "");
+    apply(s, gamma, "140");
+    EXPECT_EQ(stepped_value(s, gamma, 1), "");
+    EXPECT_EQ(value_label(s, bright), "0");
+    apply(s, bright, "10");
+    EXPECT_EQ(value_label(s, bright), "+10");
+    apply(s, bright, "-20");
+    EXPECT_EQ(value_label(s, bright), "-20");
+}
+
+TEST(IngameDisplay, EveryDisplayRowFitsWhateverTheChoice) {
+    const MonitorList list = two_monitors();
+    RowContext context;
+    context.monitors = &list;
+    context.adaptive_vsync = true;
+    Settings s = defaults();
+    for (const char* mode : {"windowed", "borderless", "exclusive"}) {
+        apply(s, entry("graphics.display_mode"), mode);
+        for (const char* monitor : {"0", "1", "2"}) {
+            apply(s, entry("graphics.monitor"), monitor);
+            for (const Entry& e : entries())
+                if (e.page == Page::Graphics) EXPECT_LE(row_text(s, e, context).size(), 20u) << e.label << " " << mode << " " << monitor;
+        }
+    }
+}

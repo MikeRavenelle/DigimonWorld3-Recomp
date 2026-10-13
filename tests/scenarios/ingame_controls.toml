@@ -10,7 +10,7 @@ memcard = "blank"
 # The selected row is the third one (index 2) once the list has scrolled. Text is in the game's own encoding:
 # digits 4 + n, capitals 0x0E + (letter - A), lower case 0x28 + (letter - a); symbols are the pair 1, code.
 #   header: G = 0x14 (Graphics), A = 0x0E (Audio), C = 0x10 (Controls).
-#   settings cursor: 0x800AB75C. Controls start at row 19 (17 graphics rows, 2 audio rows).
+#   settings cursor: 0x800AB75C. Controls start at row 23 (21 graphics rows, 2 audio rows).
 
 [[press]]
 button = "START"
@@ -50,7 +50,7 @@ timeout = 300
 [[check]]
 at = 1751
 label = "cursor on the first audio row (Mute)"
-ram = [{ addr = 0x800AB75C, size = 4, value = 17 }]
+ram = [{ addr = 0x800AB75C, size = 4, value = 21 }]
 
 [[wait]]
 at = 1760
@@ -63,7 +63,7 @@ timeout = 300
 [[check]]
 at = 1761
 label = "cursor on the first controls row (Gamepad)"
-ram = [{ addr = 0x800AB75C, size = 4, value = 19 }]
+ram = [{ addr = 0x800AB75C, size = 4, value = 23 }]
 screenshot = true
 
 [[wait]]
@@ -88,7 +88,7 @@ at = 1790
 label = "cursor on Deadzone"
 press = "DOWN"
 every = 40
-ram = [{ addr = 0x800AB75C, size = 4, value = 21 }]
+ram = [{ addr = 0x800AB75C, size = 4, value = 25 }]
 timeout = 400
 
 [[wait]]
@@ -115,7 +115,7 @@ at = 1810
 label = "cursor on the Cross binding"
 press = "DOWN"
 every = 40
-ram = [{ addr = 0x800AB75C, size = 4, value = 27 }]
+ram = [{ addr = 0x800AB75C, size = 4, value = 31 }]
 timeout = 600
 
 [[check]]

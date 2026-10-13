@@ -17,10 +17,12 @@ struct SDL_Window;
 
 namespace dw3app {
 
+enum class VsyncMode { Off, On, Adaptive };
+
 struct PresentOptions {
     dw3::ScaleMode scale = dw3::ScaleMode::Fit;
     bool linear = false;  // linear filtering instead of nearest
-    bool vsync = true;
+    VsyncMode vsync = VsyncMode::On;
     int internal_res = 1;  // GPU renderer internal resolution multiplier (1..8)
     bool true_color = false;  // GPU renderer: no dithering, full precision shading
     int texture_filter = 0;   // GPU renderer: 0 nearest, 1 bilinear, 2 xBR
@@ -39,7 +41,9 @@ class Presenter {
 public:
     virtual ~Presenter() = default;
     virtual const char* name() const = 0;
-    virtual void set_vsync(bool on) = 0;
+    virtual void set_vsync(VsyncMode mode) = 0;
+    // Whether VsyncMode::Adaptive does anything beyond On on this path.
+    virtual bool supports_adaptive_vsync() const { return false; }
     // Applies changed display options to the running presenter: scaling, filtering, vsync and, on the GPU renderer,
     // internal resolution, true colour, texture filter and precise geometry (the render targets are rebuilt and the
     // current VRAM image carried over). Returns false if the renderer could not take the new configuration; it
@@ -56,6 +60,8 @@ public:
     // Shows a short message over the top-left of the window for a couple of seconds. It is drawn after the
     // emulated picture and is not part of captures.
     void notify(std::string text);
+    // A small line of text kept in the top-right corner (the frame rate); empty removes it. Not part of captures.
+    void set_status(std::string text);
 
 protected:
     Osd osd_;
