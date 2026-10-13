@@ -37,6 +37,12 @@
 // The exact PS1 target still receives the original texels, so what the game reads back never changes and the
 // replacement only exists where the display layer is shown. With no pack nothing is tracked and the output is
 // byte-identical to a build without this feature.
+// Seamless field backgrounds. With HwOptions::stage_library the renderer follows the field backgrounds the game draws
+// (texrep/field_backdrop.h): it finds the map and the scroll from the sprites, and draws the pieces of the map that the
+// game has not drawn, as "direct" sprites that read their texels from the replacement atlas (state_bits::kDirect, the
+// original picture of the cell or the pack's image of it), and hides the squares the game draws over unloaded cells. The
+// game's own sprites are never changed, so a frame without missing pieces is the game's frame bit for bit. Implies
+// the display layer.
 // HDR output. With HwOptions::hdr the swap chain is created as R16G16B16A16_FLOAT in the scRGB colour space where the
 // backend can (plume patch: Vulkan VK_EXT_swapchain_colorspace extended sRGB, Direct3D 12 DXGI G10_NONE_P709).
 // The final post-processing pass then turns the SDR picture into scRGB (render/shaders/post/hdr.glsl, hdr.h):
@@ -59,6 +65,7 @@
 #include "dw3/postfx.h"
 #include "dw3/present_layout.h"
 #include "dw3/texrep/pack.h"
+#include "dw3/texrep/stage_library.h"
 #include "dw3/widescreen.h"
 
 namespace dw3 {
@@ -94,6 +101,9 @@ struct HwOptions {
     // Replacement images for background blocks (texrep/blocks.h). When set, the display layer shows them in place of
     // the matching original images; the exact picture underneath is unchanged. Implies the display layer.
     std::shared_ptr<const texrep::TexturePack> texture_pack;
+    // Seamless field backgrounds (texrep/field_backdrop.h): the maps of the game, as indexed from the disc. When set, the
+    // renderer draws the pieces of a field map's background that the game has not drawn yet. Implies the display layer.
+    std::shared_ptr<texrep::StageLibrary> stage_library;
     // Extra render-target columns that hold a wider copy of the frame buffers (widescreen.h). Margin 0: none.
     WideFrame wide_frame;
     // Ask for an HDR swap chain (scRGB: linear Rec. 709 half floats, 1.0 = 80 nits) where the window system and the
@@ -112,6 +122,9 @@ struct HwOverlay {
 };
 
 struct HwStats {
+    // Seamless field backgrounds: pieces drawn by the renderer, and the opaque 64x64 squares the game draws over cells it
+    // has not loaded, hidden or let through.
+    uint64_t backdrop_pieces = 0, squares_hidden = 0, squares_drawn = 0;
     uint64_t draw_calls = 0, vertices = 0, uploads = 0, readbacks = 0, copy_syncs = 0, submits = 0, fills = 0, copies = 0;
 };
 
@@ -137,6 +150,7 @@ public:
     void vram_written(std::span<const uint16_t> vram, const VramRect& r) override;
     bool vram_fill(const VramRect& r, uint16_t color) override;
     bool vram_copy(const VramRect& src, int dx, int dy, bool check_mask, bool set_mask) override;
+    void display_flipped() override;
 
     // Shows the display area in the window and ends the frame. When `capture` is given the window image is also
     // read back into it (RGBA8, `capture_w` x `capture_h`). Returns false if nothing could be presented.

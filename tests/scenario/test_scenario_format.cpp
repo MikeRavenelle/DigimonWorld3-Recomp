@@ -106,6 +106,17 @@ ram=[{addr=0x800A0000, size=2, value=7}]
     EXPECT_EQ(*s.checks[1].min_primitives, 10u);
 }
 
+TEST(ScenarioFormat, SeamlessBackgroundCounters) {
+    Scenario s = parse(
+        "name = \"t\"\nframes = 100\n[[check]]\nat = 50\nbackdrop_pieces_min = 5\nsquares_hidden_min = 6\n"
+        "squares_drawn_min = 7\nsquares_drawn_max = 8\n");
+    ASSERT_EQ(s.checks.size(), 1u);
+    EXPECT_EQ(s.checks[0].backdrop_pieces_min, 5u);
+    EXPECT_EQ(s.checks[0].squares_hidden_min, 6u);
+    EXPECT_EQ(s.checks[0].squares_drawn_min, 7u);
+    EXPECT_EQ(s.checks[0].squares_drawn_max, 8u);
+}
+
 TEST(ScenarioFormat, CheckOutsideRangeRejected) {
     EXPECT_THROW(parse("name=\"t\"\nframes=10\n[[check]]\nat=11\n"), std::runtime_error);
 }

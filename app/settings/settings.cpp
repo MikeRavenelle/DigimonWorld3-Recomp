@@ -106,6 +106,8 @@ const SettingInfo kSettings[] = {
 
     {"graphics.hd_backgrounds", "HD BG", "Replace the pre-rendered field backgrounds with the images of the selected texture pack (GPU renderer only; a pack is made from your own disc, see docs/SETTINGS.md).",
      Group::Graphics, Type::Bool, Apply::Live, 0, 0, {}, false, DW3_FIELD(graphics.hd_backgrounds)},
+    {"graphics.seamless_bg", "Seamless BG", "Draw the parts of a field map's background that the game has not loaded yet, from your disc's map files, so blocks no longer pop in at the screen edges (GPU renderer only; uses the HD pack's images where it has them).",
+     Group::Graphics, Type::Bool, Apply::Live, 0, 0, {}, false, DW3_FIELD(graphics.seamless_bg)},
     {"graphics.texture_pack", "Texture pack", "Name of the folder under <user data>/texture-packs that holds the replacement images; empty for none.",
      Group::Graphics, Type::String, Apply::Live, 0, 0, {}, true, DW3_FIELD(graphics.texture_pack)},
 

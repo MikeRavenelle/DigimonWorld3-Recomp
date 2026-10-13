@@ -11,6 +11,7 @@
 #include "dw3/postfx.h"
 #include "dw3/present_layout.h"
 #include "dw3/texrep/pack.h"
+#include "dw3/texrep/stage_library.h"
 #include "dw3/widescreen.h"
 #include "osd.h"
 
@@ -31,6 +32,7 @@ struct PresentOptions {
     dw3::WideAspect widescreen = dw3::WideAspect::Off;  // GPU renderer: wider battles (see dw3/widescreen.h)
     dw3::PostFx post;               // GPU renderer: post-processing (the software path ignores it)
     std::shared_ptr<const dw3::texrep::TexturePack> texture_pack;  // GPU renderer: replacement backgrounds (null: off)
+    std::shared_ptr<dw3::texrep::StageLibrary> stage_library;      // GPU renderer: seamless field backgrounds (null: off)
 };
 
 // Window contents as seen by the user (borders included), RGBA8888.

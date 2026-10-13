@@ -52,6 +52,7 @@ struct Settings {
         int crt = 0;                 // off, scanlines, crt (not part of any preset)
         // Replacement background images (GPU renderer only; see docs/SETTINGS.md).
         bool hd_backgrounds = false;
+        bool seamless_bg = false;    // draw the parts of a field map that the game has not loaded yet (GPU renderer)
         std::string texture_pack;    // name of a folder in <user data>/texture-packs; empty for none
         bool operator==(const Graphics&) const = default;
     } graphics;

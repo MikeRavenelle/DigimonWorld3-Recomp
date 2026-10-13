@@ -104,6 +104,10 @@
 //   margin_colors_min = 8      # needs `gpu = true` (or a widescreen setting): the picture rendered by the GPU renderer at
 //   margin_colors_max = 1      # 1280x720 must show at least / at most that many distinct colours in the outer 10% of its
 //                              # columns (1 is the black pillarbox of a 4:3 picture)
+//   backdrop_pieces_min = 1   # needs `gpu = true`: totals since the start of the run for the seamless field background:
+//   squares_hidden_min = 20   # pieces the renderer drew that the game had not, the "not loaded yet" squares it hid, and
+//   squares_drawn_min = 20    # the ones it let through (the game draws an opaque 64x64 square, 4-bit texture, over every
+//   squares_drawn_max = 0     # cell that is not loaded; with `graphics.seamless_bg` they are hidden instead)
 //   audio_min_rms = 100.0      # RMS (int16 units, both channels) of the mixed output over the last `audio_frames` video frames
 //   audio_max_rms = 20000.0
 //   audio_frames = 60          # window length in video frames (default 60)
@@ -180,6 +184,7 @@ struct Check {
     std::optional<int> min_disc_backgrounds;
     std::optional<std::array<uint64_t, 4>> screen_hash;
     std::optional<int> margin_colors_min, margin_colors_max;
+    std::optional<uint64_t> backdrop_pieces_min, squares_hidden_min, squares_drawn_min, squares_drawn_max;
     int max_hash_distance = 24;
     std::vector<RamCheck> ram;
     bool screenshot = false;

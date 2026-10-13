@@ -88,6 +88,8 @@ public:
                       int width, int height) = 0;
     virtual void line(std::span<uint16_t> vram, const DrawState& s, const PrimitiveFlags& f, const GpuVertex& a,
                       const GpuVertex& b) = 0;
+    // The game pointed the display at another frame buffer (GP1 05): the frame it drew is finished.
+    virtual void display_flipped() {}
 };
 
 // Display configuration from GP1 (what the TV shows).

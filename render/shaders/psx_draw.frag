@@ -31,9 +31,16 @@
 // 5-bit quantisation, no dithering) and is modulated by the vertex colour like any texel. The exact PS1 state in the
 // first target is untouched: it still holds what the game drew, so read-backs and later draws see the original.
 //
+// Direct sprites (display layer variant only). A sprite with bit 16 of state0 does not read VRAM at all: its texels come
+// from the replacement atlas, at (texel position * replacement scale + offset) like a replacement texture, and an atlas
+// pixel with no alpha is transparent. The exact target receives the colour of the atlas pixel at the middle of the
+// texel, reduced to 5 bits, so what the game can read back is a picture of the same thing. The renderer draws
+// background pieces this way when the game has not (see texrep/field_backdrop.h). Without a replacement scale above
+// 1 the texels are shown as they are, like the game's own sprites.
+//
 // state0: bit0 textured, 1 raw texture, 2 semi-transparent, 3 dither, 4 check mask, 5 set mask,
 //         6-7 blend mode, 8-9 texture depth (0: 4 bit, 1: 8 bit, 2: 15 bit), 10 texels map 1:1 to pixels, 11 precise (float attributes),
-//         12 replacement texture, 13-15 replacement scale - 1
+//         12 replacement texture, 13-15 replacement scale - 1, 16 direct sprite
 // state1: bits 0-15 CLUT attribute, 16-19 texture page x / 64, 20 texture page y / 256
 // state2: texture window: bits 0-4 mask x, 5-9 mask y, 10-14 offset x, 15-19 offset y (8-pixel units)
 
@@ -183,6 +190,18 @@ vec3 xbrTexel(vec2 t, vec3 fallback) {
 }
 
 #ifdef DISPLAY_LAYER
+// The VRAM word that a texel of a direct sprite stands for: the atlas pixel at the middle of the texel, in 5 bits per
+// channel; zero when the pixel is transparent. Opaque black is 0x8000, as in the game's own palettes.
+uint directTexel(ivec2 uv) {
+    const int rs = int((s0 >> 13) & 7u) + 1;
+    const ivec2 origin = ivec2(int(vHdOffset << 16) >> 16, int(vHdOffset) >> 16);
+    vec4 c = texelFetch(uReplace, origin + uv * rs + rs / 2, 0);
+    if (c.a < 0.5) return 0u;
+    uvec3 b = uvec3(c.rgb * 255.0 + 0.5) >> 3;
+    uint w = b.r | (b.g << 5) | (b.b << 10);
+    return w == 0u ? 0x8000u : w;
+}
+
 // Replacement colour (0..255) at continuous atlas position `a` (texel centres at half integers), bilinear, with every
 // tap kept inside [lo, hi]. When the internal resolution equals the replacement scale the samples fall on texel
 // centres and nothing is blended.
@@ -253,7 +272,11 @@ void main() {
     uint t = 0u;
     if (textured) {
         ivec2 uv = (isPrecise ? ivec2(floor(vUvF)) : ivec2(planeAt(9, p) >> 12, planeAt(12, p) >> 12)) & 255;
+#ifdef DISPLAY_LAYER
+        t = (s0 & 65536u) != 0u ? directTexel(uv) : fetchTexel(uv);
+#else
         t = fetchTexel(uv);
+#endif
         if (t == 0u) discard;
         ivec3 tc = ivec3(int(t & 31u), int((t >> 5) & 31u), int((t >> 10) & 31u)) << 3;
         c = raw ? tc : min((tc * c) >> 7, ivec3(255));
@@ -291,7 +314,8 @@ void main() {
             const ivec2 lo = ivec2(int(vUvRect & 255u), int((vUvRect >> 16) & 255u)) * rs + origin;
             const ivec2 hi = ivec2(int((vUvRect >> 8) & 255u) + 1, int(vUvRect >> 24) + 1) * rs - 1 + origin;
             vec2 cc = vec2(planeF(9, p, off), planeF(12, p, off)) / 4096.0;
-            tcf = replaceTexel(cc * float(rs) + vec2(origin), lo, hi);
+            if ((s0 & 65536u) != 0u && rs == 1) tcf = texelFetch(uReplace, clamp(ivec2(floor(cc)) + origin, lo, hi), 0).rgb * 255.0;
+            else tcf = replaceTexel(cc * float(rs) + vec2(origin), lo, hi);
             replaced = true;
         }
         // The small offset keeps a blend of equal texels (division by the weight sum) from rounding down a step.

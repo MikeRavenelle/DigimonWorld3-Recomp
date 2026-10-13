@@ -57,6 +57,7 @@ struct Options {
     std::string wav;  // --wav: whole-run audio dump
     std::vector<sc::RamCheck> watches;  // --watch (value/mask unused)
     std::vector<std::pair<int64_t, std::string>> dumps;  // --dump, sorted by frame
+    std::string texture_pack;  // --texture-pack: a texture pack directory for the GPU renderer
     bool no_xa = false;  // --no-xa: drop XA-ADPCM sectors (isolates SPU voice output when auditing)
 };
 
@@ -278,6 +279,17 @@ int evaluate(const Options& opt, const sc::Scenario& s, const sc::Check& c, dw3:
     std::vector<uint32_t> gpu_pixels;
     constexpr int kGpuW = 1280, kGpuH = 720;
     const bool gpu_image = hw && hw->render_to_image(m.gpu().display(), dw3::ScaleMode::Fit, false, nullptr, kGpuW, kGpuH, gpu_pixels);
+    if (c.backdrop_pieces_min || c.squares_hidden_min || c.squares_drawn_min || c.squares_drawn_max) {
+        if (!hw) {
+            report(r, false, "backdrop", "no GPU renderer");
+        } else {
+            const dw3::HwStats& st = hw->stats();
+            if (c.backdrop_pieces_min) report(r, st.backdrop_pieces >= *c.backdrop_pieces_min, "backdrop_pieces_min", "drawn " + num(st.backdrop_pieces) + ", expected >= " + num(*c.backdrop_pieces_min));
+            if (c.squares_hidden_min) report(r, st.squares_hidden >= *c.squares_hidden_min, "squares_hidden_min", "hidden " + num(st.squares_hidden) + ", expected >= " + num(*c.squares_hidden_min));
+            if (c.squares_drawn_min) report(r, st.squares_drawn >= *c.squares_drawn_min, "squares_drawn_min", "drawn " + num(st.squares_drawn) + ", expected >= " + num(*c.squares_drawn_min));
+            if (c.squares_drawn_max) report(r, st.squares_drawn <= *c.squares_drawn_max, "squares_drawn_max", "drawn " + num(st.squares_drawn) + ", expected <= " + num(*c.squares_drawn_max));
+        }
+    }
     if (c.margin_colors_min || c.margin_colors_max) {
         if (!gpu_image) {
             report(r, false, "margin_colors", "no GPU renderer frame");
@@ -315,6 +327,7 @@ int main(int argc, char** argv) {
         if (a == "--disc" && i + 1 < argc) opt.disc = argv[++i];
         else if (a == "--game-dir" && i + 1 < argc) opt.game_dir = argv[++i];
         else if (a == "--out" && i + 1 < argc) opt.out = argv[++i];
+        else if (a == "--texture-pack" && i + 1 < argc) opt.texture_pack = argv[++i];
         else if (a == "--state-dir" && i + 1 < argc) opt.state_dir = argv[++i];
         else if (a == "--record") opt.record = true;
         else if (a == "--wav" && i + 1 < argc) opt.wav = argv[++i];
@@ -482,8 +495,25 @@ int main(int argc, char** argv) {
                 return 2;
             }
         }
-        if (scenario.gpu || scenario_settings.graphics.widescreen != 0) {
+        if (scenario.gpu || scenario_settings.graphics.widescreen != 0 || scenario_settings.graphics.seamless_bg) {
             dw3::HwOptions hw_options;
+            if (scenario_settings.graphics.seamless_bg) {
+                std::string library_error;
+                hw_options.stage_library = dw3::texrep::StageLibrary::open_async(opt.disc, library_error);
+                if (!hw_options.stage_library) {
+                    std::fprintf(stderr, "scenario error: seamless_bg: %s\n", library_error.c_str());
+                    return 2;
+                }
+                hw_options.stage_library->wait_until_ready();  // the same picture on every run
+            }
+            if (!opt.texture_pack.empty()) {
+                std::string pack_error;
+                hw_options.texture_pack = dw3::texrep::TexturePack::load(opt.texture_pack, pack_error);
+                if (!hw_options.texture_pack) {
+                    std::fprintf(stderr, "scenario error: texture pack: %s\n", pack_error.c_str());
+                    return 2;
+                }
+            }
             hw_options.wide_frame = dw3::make_wide_frame(static_cast<dw3::WideAspect>(scenario_settings.graphics.widescreen));
             std::string hw_error;
             hw = dw3::HwRenderer::create(nullptr, {}, hw_error, scenario_settings.graphics.internal_res, hw_options);

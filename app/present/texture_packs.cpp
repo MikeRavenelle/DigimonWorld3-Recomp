@@ -53,4 +53,15 @@ std::shared_ptr<const dw3::texrep::TexturePack> TexturePackCache::get(const Sett
     return pack_;
 }
 
+std::shared_ptr<dw3::texrep::StageLibrary> StageLibraryCache::get(const Settings::Graphics& g, const std::string& disc_path) {
+    if (!g.seamless_bg) return nullptr;
+    if (disc_path != disc_ || !library_) {
+        disc_ = disc_path;
+        std::string error;
+        library_ = dw3::texrep::StageLibrary::open_async(dw3::platform::path_from_utf8(disc_path), error);
+        if (!library_) SDL_Log("seamless backgrounds: %s", error.c_str());
+    }
+    return library_;
+}
+
 }  // namespace dw3app

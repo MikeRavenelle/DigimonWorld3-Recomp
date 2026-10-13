@@ -5,6 +5,7 @@
 #include <string>
 
 #include "dw3/texrep/pack.h"
+#include "dw3/texrep/stage_library.h"
 #include "settings.h"
 
 namespace dw3app {
@@ -20,6 +21,18 @@ private:
     std::string name_, discovered_;
     bool searched_ = false;
     std::shared_ptr<const dw3::texrep::TexturePack> pack_;
+};
+
+// The index of the game's field maps that seamless backgrounds need, built from the disc on a background thread the first
+// time it is asked for and kept while the disc stays the same.
+class StageLibraryCache {
+public:
+    // Null when seamless backgrounds are off or the disc has no stage packs (logged once).
+    std::shared_ptr<dw3::texrep::StageLibrary> get(const Settings::Graphics& g, const std::string& disc_path);
+
+private:
+    std::string disc_;
+    std::shared_ptr<dw3::texrep::StageLibrary> library_;
 };
 
 }  // namespace dw3app

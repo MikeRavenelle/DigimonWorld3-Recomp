@@ -46,6 +46,8 @@ constexpr uint32_t kPrecise = 1u << 11;  // float attributes instead of planes (
 // Bits 13-15 hold the replacement scale minus one; hd_offset places the texel at (u, v) in the atlas.
 constexpr uint32_t kHd = 1u << 12;
 constexpr int kHdScaleShift = 13;
+// Direct sprite: the texels come from the replacement atlas instead of VRAM (see psx_draw.frag).
+constexpr uint32_t kDirect = 1u << 16;
 }  // namespace state_bits
 
 // True when textures are sampled for this primitive.

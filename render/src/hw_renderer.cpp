@@ -9,10 +9,12 @@
 #include <cstring>
 #include <map>
 #include <set>
+#include <tuple>
 
 #include "dw3/hdr.h"
 #include "dw3/texrep/blocks.h"
 #include "dw3/texrep/dump.h"
+#include "dw3/texrep/field_backdrop.h"
 #include "dw3/texrep/pack.h"
 #include "dw3/vertex_builder.h"
 #include "dw3/vram_regions.h"
@@ -182,11 +184,35 @@ struct HwRenderer::Impl {
     texrep::ShelfAtlas atlas_alloc{kAtlasSize, kAtlasSize};
     struct Resident {
         int x = 0, y = 0;
+        int scale = 1;  // atlas pixels per texel
     };
-    std::map<std::pair<uint64_t, uint64_t>, Resident> resident;  // (block, palette) -> place in the atlas
-    std::set<std::pair<uint64_t, uint64_t>> unusable;            // entries whose image could not be loaded
+    // What an atlas image is: a pack image as it is (for sprites the game draws), the original picture of a map cell,
+    // or a pack image whose transparency is that of the original (both for pieces drawn by the seamless background).
+    enum class ImageKind { PackImage, Original, PackOpaque };
+    using ResidentKey = std::tuple<uint64_t, uint64_t, ImageKind>;
+    std::map<ResidentKey, Resident> resident;  // (block, palette, kind) -> place in the atlas
+    std::set<ResidentKey> unusable;            // entries whose image could not be loaded
     int atlas_epoch = 0;  // incremented whenever the atlas is cleared
-    bool tracking() const { return pack || dump; }
+    bool tracking() const { return pack || dump || library; }
+    bool uses_atlas() const { return pack || library; }
+
+    // Seamless field backgrounds (texrep/field_backdrop.h). `library` is set while the option is on; `backdrop_state` and
+    // `backdrop_flags` are the draw state of the latest background sprite, which the pieces drawn here borrow.
+    std::shared_ptr<texrep::StageLibrary> library;
+    texrep::FieldBackdrop backdrop{nullptr};
+    DrawState backdrop_state;
+    PrimitiveFlags backdrop_flags;
+    bool backdrop_has_state = false;
+    void flush_backdrop();
+    void draw_backdrop_fills(const std::vector<texrep::BackdropFill>& fills);
+    const Resident* make_tile_resident(const texrep::BackdropFill& fill);
+    bool note_backdrop_sprite(std::span<uint16_t> vram, const DrawState& s, const PrimitiveFlags& f, const GpuVertex& v, int width,
+                              int height);
+    void reset_backdrop(std::shared_ptr<texrep::StageLibrary> lib) {
+        library = std::move(lib);
+        backdrop = texrep::FieldBackdrop(library);
+        backdrop_has_state = false;
+    }
     // Wide frame copy (see widescreen.h): the targets have extra columns when it is enabled, `mirror` says whether
     // frame-buffer draws are currently duplicated into it, and `wide_ready[i]` that frame buffer i (y = 0, 256)
     // has had its copy drawn since mirroring started.
@@ -317,7 +343,8 @@ struct HwRenderer::Impl {
                          const Region* clut_src, std::size_t vertices_before);
     bool draw_background_rect(std::span<uint16_t> vram, const DrawState& s, const PrimitiveFlags& f, const GpuVertex& v, int width,
                               int height);
-    const Resident* make_resident(const texrep::PackEntry& e);
+    const Resident* place_image(const ResidentKey& key, const texrep::Image& img, int image_scale);
+    const Resident* make_resident(const texrep::PackEntry& e, ImageKind kind = ImageKind::PackImage, const texrep::Image* alpha_from = nullptr);
     void upload_replacement(const texrep::Image& img, int x, int y);
     void upload(std::span<const uint16_t> vram, const Region& r);
     void readback(const std::vector<Region>& regions, std::span<uint16_t> vram);
@@ -347,7 +374,8 @@ bool HwRenderer::Impl::init(const NativeWindow* window, int internal_scale, cons
     precise = options.precise_geometry;
     wide = options.wide_frame;
     pack = options.texture_pack;
-    layer = options.true_color || options.filter != TextureFilter::Nearest || pack;
+    reset_backdrop(options.stage_library);
+    layer = options.true_color || options.filter != TextureFilter::Nearest || pack || library;
     draw_mode = (layer ? 1u : 0u) | (options.true_color ? 2u : 0u) | (static_cast<uint32_t>(options.filter) << 2);
     const char* api_name = "Vulkan";
     if (options.api == GraphicsApi::Metal) {
@@ -457,7 +485,7 @@ bool HwRenderer::Impl::create_targets(std::string& error) {
             return false;
         }
         // The replacement atlas is only as large as it needs to be: a dummy texel unless a pack is active.
-        const int atlas_px = pack ? kAtlasSize : 1;
+        const int atlas_px = uses_atlas() ? kAtlasSize : 1;
         atlas = device->createTexture(RenderTextureDesc::Texture2D(atlas_px, atlas_px, 1, kVramFormat));
         if (!atlas) {
             error = "replacement atlas creation failed";
@@ -1020,19 +1048,9 @@ void HwRenderer::Impl::upload_replacement(const texrep::Image& img, int x, int y
                            static_cast<uint32_t>(x), static_cast<uint32_t>(y), 0);
 }
 
-// The place of a pack entry's image in the atlas, loading it on first use. When the atlas is full everything is
-// dropped and loaded again as needed (after the draws that still read the old contents have been recorded).
-const HwRenderer::Impl::Resident* HwRenderer::Impl::make_resident(const texrep::PackEntry& e) {
-    const std::pair<uint64_t, uint64_t> key{e.block, e.clut};
-    if (auto it = resident.find(key); it != resident.end()) return &it->second;
-    if (unusable.count(key)) return nullptr;
-    texrep::Image img;
-    std::string err;
-    if (!pack->load_image(e, img, err)) {
-        std::fprintf(stderr, "texture pack: %s\n", err.c_str());
-        unusable.insert(key);
-        return nullptr;
-    }
+// The place of an image in the atlas, loading it on first use. When the atlas is full everything is dropped and loaded
+// again as needed (after the draws that still read the old contents have been recorded).
+const HwRenderer::Impl::Resident* HwRenderer::Impl::place_image(const ResidentKey& key, const texrep::Image& img, int image_scale) {
     auto place = atlas_alloc.alloc(img.w, img.h);
     if (!place) {
         record_draws();
@@ -1046,7 +1064,58 @@ const HwRenderer::Impl::Resident* HwRenderer::Impl::make_resident(const texrep::
         }
     }
     upload_replacement(img, place->first, place->second);
-    return &(resident[key] = Resident{place->first, place->second});
+    return &(resident[key] = Resident{place->first, place->second, image_scale});
+}
+
+const HwRenderer::Impl::Resident* HwRenderer::Impl::make_resident(const texrep::PackEntry& e, ImageKind kind,
+                                                                  const texrep::Image* alpha_from) {
+    const ResidentKey key{e.block, e.clut, kind};
+    if (auto it = resident.find(key); it != resident.end()) return &it->second;
+    if (unusable.count(key)) return nullptr;
+    texrep::Image img;
+    std::string err;
+    if (!pack->load_image(e, img, err)) {
+        std::fprintf(stderr, "texture pack: %s\n", err.c_str());
+        unusable.insert(key);
+        return nullptr;
+    }
+    if (alpha_from) {
+        // The pack image gives the colour, the original picture says which texels are there at all.
+        const int rs = pack->scale();
+        for (int y = 0; y < img.h; ++y)
+            for (int x = 0; x < img.w; ++x) {
+                uint32_t& px = img.rgba[static_cast<std::size_t>(y) * img.w + x];
+                const uint32_t src = alpha_from->rgba[static_cast<std::size_t>(y / rs) * alpha_from->w + x / rs];
+                px = (px & 0x00FFFFFFu) | (src & 0xFF000000u);
+            }
+    }
+    return place_image(key, img, pack->scale());
+}
+
+// The image to draw a map cell's picture from: the pack's when there is one for it, otherwise the picture as the game
+// has it.
+const HwRenderer::Impl::Resident* HwRenderer::Impl::make_tile_resident(const texrep::BackdropFill& fill) {
+    const texrep::StageLibrary::Tile& tile = library->map(fill.map).tiles[fill.tile];
+    texrep::Image original;
+    auto have_original = [&] { return original.w > 0 || library->tile_image(fill.map, fill.tile, original); };
+    if (pack) {
+        const texrep::PackEntry* e = pack->find(tile.block_hash, tile.clut_hash);
+        if (e && e->width == tile.width && e->height == tile.height) {
+            const ResidentKey key{tile.block_hash, tile.clut_hash, ImageKind::PackOpaque};
+            if (auto it = resident.find(key); it != resident.end()) return &it->second;
+            if (!unusable.count(key) && have_original()) {
+                if (const Resident* r = make_resident(*e, ImageKind::PackOpaque, &original)) return r;
+            }
+        }
+    }
+    const ResidentKey key{tile.block_hash, tile.clut_hash, ImageKind::Original};
+    if (auto it = resident.find(key); it != resident.end()) return &it->second;
+    if (unusable.count(key)) return nullptr;
+    if (!have_original()) {
+        unusable.insert(key);
+        return nullptr;
+    }
+    return place_image(key, original, 1);
 }
 
 // Handles a sprite that samples 8-bit texels: reports what it draws to the dump, and draws the parts that show a
@@ -1120,6 +1189,82 @@ bool HwRenderer::Impl::draw_background_rect(std::span<uint16_t> vram, const Draw
         queue_primitive(s, bounds, f.semi_transparent || s.check_mask, &t, &clut, before);
     }
     return true;
+}
+
+// -------------------------------------------------------------------------------------------------------
+// Seamless field backgrounds
+
+// Reports a sprite that reads 8-bit texels to the backdrop tracker. A sprite that is not part of the background ends the
+// background phase of the frame, so the pieces the game left out are drawn before it.
+bool HwRenderer::Impl::note_backdrop_sprite(std::span<uint16_t> vram, const DrawState& s, const PrimitiveFlags& f,
+                                            const GpuVertex& v, int width, int height) {
+    if (!library->ready()) return false;
+    texrep::BackdropSprite sprite;
+    sprite.x = v.x - s.off_x;
+    sprite.y = v.y - s.off_y;
+    sprite.w = width;
+    sprite.h = height;
+    sprite.color = static_cast<uint32_t>(v.r) | (static_cast<uint32_t>(v.g) << 8) | (static_cast<uint32_t>(v.b) << 16);
+    const Region clut = clut_region(s, f);
+    if (!clut.empty() && !dirty.intersects(clut)) {
+        const std::vector<texrep::Piece> pieces =
+            texrep::split_by_blocks(blocks, s.tex_base_x, s.tex_base_y, v.u, v.v, width, height, true);
+        if (pieces.size() == 1 && pieces[0].block && pieces[0].w == width && pieces[0].h == height) {
+            const texrep::Piece& p = pieces[0];
+            sprite.keyed = true;
+            sprite.block = blocks.hash_of(*p.block, vram);
+            sprite.clut = texrep::hash_clut(vram, (f.clut & 0x3F) * 16, (f.clut >> 6) & 0x1FF);
+            sprite.bu = p.u - p.block_u0;
+            sprite.bv = p.v - p.block_v0;
+        }
+    }
+    const bool background = backdrop.add_sprite(sprite);
+    if (background) {
+        backdrop_state = s;
+        backdrop_flags = f;
+        backdrop_has_state = true;
+    } else {
+        flush_backdrop();
+    }
+    return background;
+}
+
+// Draws the pieces of the background that the game has not drawn in this frame (see texrep/field_backdrop.h).
+void HwRenderer::Impl::flush_backdrop() {
+    if (!library || !backdrop_has_state) return;
+    const unsigned due = backdrop.due();
+    if (!due) return;
+    const DrawState& s = backdrop_state;
+    const texrep::BackdropRect view{s.area_x1 - s.off_x, s.area_y1 - s.off_y, s.area_x2 - s.off_x + 1, s.area_y2 - s.off_y + 1};
+    draw_backdrop_fills(backdrop.take_missing(due, view));
+}
+
+void HwRenderer::Impl::draw_backdrop_fills(const std::vector<texrep::BackdropFill>& fills) {
+    for (const texrep::BackdropFill& fill : fills) {
+        const Resident* r = make_tile_resident(fill);
+        if (!r) continue;
+        const texrep::StagePiece& piece = *fill.piece;
+        const Resident slot = *r;
+        GpuVertex v;
+        v.x = fill.x + backdrop_state.off_x;
+        v.y = fill.y + backdrop_state.off_y;
+        v.u = static_cast<uint8_t>(piece.ax);
+        v.v = static_cast<uint8_t>(piece.ay);
+        v.r = static_cast<uint8_t>(fill.color);
+        v.g = static_cast<uint8_t>(fill.color >> 8);
+        v.b = static_cast<uint8_t>(fill.color >> 16);
+        const Region bounds = rect_bounds(backdrop_state, v, piece.w, piece.h);
+        if (bounds.empty()) continue;
+        const std::size_t before = pending.size();
+        build_rect(pending, backdrop_state, backdrop_flags, v, piece.w, piece.h);
+        const texrep::ReplacementOffset o = texrep::replacement_offset(0, 0, slot.x, slot.y, slot.scale);
+        for (std::size_t i = before; i < pending.size(); ++i) {
+            pending[i].state0 |= state_bits::kHd | state_bits::kDirect | (static_cast<uint32_t>(slot.scale - 1) << state_bits::kHdScaleShift);
+            pending[i].hd_offset = (static_cast<uint32_t>(o.y) << 16) | (static_cast<uint32_t>(o.x) & 0xFFFFu);
+        }
+        queue_primitive(backdrop_state, bounds, false, nullptr, nullptr, before);
+        ++stats.backdrop_pieces;
+    }
 }
 
 // -------------------------------------------------------------------------------------------------------
@@ -1367,6 +1512,7 @@ void HwRenderer::Impl::draw_triangle(const DrawState& s, const PrimitiveFlags& f
     const Region bounds = triangle_bounds(s, v);
     if (bounds.empty()) return;
     if (tracked && tracking()) blocks.invalidate(bounds);
+    if (tracked && library) flush_backdrop();
     const std::size_t before = pending.size();
     if (precise && has_precise(v)) build_precise_triangle(pending, s, f, v, scale);
     else build_triangle(pending, s, f, v, scale);
@@ -1402,12 +1548,22 @@ void HwRenderer::Impl::draw_rect(std::span<uint16_t> vram, const DrawState& s, c
                                  int width, int height, bool tracked) {
     const Region bounds = rect_bounds(s, v, width, height);
     if (bounds.empty()) return;
+    if (tracked && s.depth == TexDepth::Bit4 && uses_texture(s, f) && !f.semi_transparent && width == 64 && height == 64) {
+        // The squares the game puts over cells it has not loaded would hide what is drawn there instead.
+        if (library && backdrop.is_placeholder(v.x - s.off_x, v.y - s.off_y, width, height)) {
+            ++stats.squares_hidden;
+            return;
+        }
+        ++stats.squares_drawn;
+    }
     if (tracked && tracking()) {
         blocks.invalidate(bounds);
         // Opaque sprites that read 8-bit texels one to one: the candidates for background images.
-        if (s.depth == TexDepth::Bit8 && uses_texture(s, f) && !f.semi_transparent && !s.rect_flip_x && !s.rect_flip_y &&
-            s.win_mask_x == 0 && s.win_mask_y == 0 && draw_background_rect(vram, s, f, v, width, height))
-            return;
+        const bool candidate = s.depth == TexDepth::Bit8 && uses_texture(s, f) && !f.semi_transparent && !s.rect_flip_x &&
+                               !s.rect_flip_y && s.win_mask_x == 0 && s.win_mask_y == 0;
+        // Other sprites (effects, text, translucent shapes) neither belong to the background nor end its phase of the frame.
+        if (library && candidate) note_backdrop_sprite(vram, s, f, v, width, height);
+        if (candidate && draw_background_rect(vram, s, f, v, width, height)) return;
     }
     const std::size_t before = pending.size();
     build_rect(pending, s, f, v, width, height);
@@ -1443,6 +1599,7 @@ void HwRenderer::Impl::draw_line(const DrawState& s, const PrimitiveFlags& f, co
     const Region bounds = line_bounds(s, a, b);
     if (bounds.empty()) return;
     if (tracked && tracking()) blocks.invalidate(bounds);
+    if (tracked && library) flush_backdrop();
     const std::size_t before = pending.size();
     if (build_line(pending, s, f, a, b) == 0) return;
     queue_primitive(s, bounds, f.semi_transparent || s.check_mask, nullptr, nullptr, before);
@@ -1460,6 +1617,13 @@ void HwRenderer::line(std::span<uint16_t>, const DrawState& s, const PrimitiveFl
     m.draw_line(s, f, a, b, true);
 }
 
+void HwRenderer::display_flipped() {
+    Impl& m = *impl_;
+    if (!m.library) return;
+    m.flush_backdrop();
+    m.backdrop.begin_frame();
+}
+
 void HwRenderer::vram_written(std::span<const uint16_t> vram, const VramRect& r) {
     const Region region = region_from(r);
     if (impl_->tracking()) impl_->blocks.add_upload(region);
@@ -1475,6 +1639,7 @@ void HwRenderer::vram_read_begin(std::span<uint16_t> vram, const VramRect& r) {
 
 bool HwRenderer::vram_fill(const VramRect& r, uint16_t color) {
     Impl& m = *impl_;
+    if (m.library) m.flush_backdrop();
     CopyParams p{};
     p.flags = 1;
     p.color = word_to_rgba(color);
@@ -1509,6 +1674,7 @@ bool HwRenderer::vram_fill(const VramRect& r, uint16_t color) {
 
 bool HwRenderer::vram_copy(const VramRect& src, int dx, int dy, bool check_mask, bool set_mask) {
     Impl& m = *impl_;
+    if (m.library) m.flush_backdrop();
     if (m.tracking()) m.blocks.invalidate(region_from({dx, dy, src.w, src.h}));
     if (copy_has_row_hazard(src, dx, dy)) {
         // Rows are copied in order and later rows read what earlier ones wrote, so do them one at a time.
@@ -1692,10 +1858,11 @@ bool HwRenderer::render_to_image(const DisplayState& shown, ScaleMode mode, bool
 bool HwRenderer::reconfigure(int internal_scale, const HwOptions& options, std::span<uint16_t> vram, std::string& error) {
     Impl& m = *impl_;
     const int new_scale = std::clamp(internal_scale, 1, 8);
-    const bool new_layer = options.true_color || options.filter != TextureFilter::Nearest || options.texture_pack;
+    const bool new_layer = options.true_color || options.filter != TextureFilter::Nearest || options.texture_pack || options.stage_library;
     const uint32_t new_mode = (new_layer ? 1u : 0u) | (options.true_color ? 2u : 0u) | (static_cast<uint32_t>(options.filter) << 2);
     m.record_draws();
-    const bool pack_present_changed = static_cast<bool>(options.texture_pack) != static_cast<bool>(m.pack);
+    const bool pack_present_changed =
+        (options.texture_pack || options.stage_library) != (static_cast<bool>(m.pack) || static_cast<bool>(m.library));
     if (options.hdr != m.hdr_wanted) {
         m.hdr_wanted = options.hdr;
         if (!m.recreate_swapchain()) {
@@ -1709,12 +1876,14 @@ bool HwRenderer::reconfigure(int internal_scale, const HwOptions& options, std::
     if (new_scale == m.scale && new_layer == m.layer && !pack_present_changed && !wide_changed) {
         // Only the draw shader's mode word and the vertex path change: nothing to rebuild. A different pack empties
         // the atlas, which the new pack's images will fill again.
-        if (options.texture_pack != m.pack) {
+        if (options.texture_pack != m.pack || options.stage_library != m.library) {
+            m.record_draws();
             m.resident.clear();
             m.unusable.clear();
             m.atlas_alloc.reset();
             ++m.atlas_epoch;
             m.pack = options.texture_pack;
+            m.reset_backdrop(options.stage_library);
         }
         m.precise = options.precise_geometry;
         m.wide = options.wide_frame;
@@ -1728,6 +1897,7 @@ bool HwRenderer::reconfigure(int internal_scale, const HwOptions& options, std::
     const int old_scale = m.scale;
     const bool old_layer = m.layer;
     const auto old_pack = m.pack;
+    const auto old_library = m.library;
     const WideFrame old_wide = m.wide;
     m.wide = options.wide_frame;
     m.wide_ready[0] = m.wide_ready[1] = false;
@@ -1747,10 +1917,12 @@ bool HwRenderer::reconfigure(int internal_scale, const HwOptions& options, std::
         return true;
     };
     m.pack = options.texture_pack;
+    m.reset_backdrop(options.stage_library);
     if (!rebuild(new_scale, new_layer, error)) {
         std::string ignored;
         m.wait_all();
         m.pack = old_pack;
+        m.reset_backdrop(old_library);
         m.wide = old_wide;
         rebuild(old_scale, old_layer, ignored);
         return false;

@@ -26,6 +26,7 @@ std::unique_ptr<HwPresenter> HwPresenter::create(SDL_Window* window, dw3::Graphi
     hw.filter = static_cast<dw3::TextureFilter>(options.texture_filter);
     hw.precise_geometry = options.precise_geometry;
     hw.texture_pack = options.texture_pack;
+    hw.stage_library = options.stage_library;
     hw.wide_frame = dw3::make_wide_frame(options.widescreen);
     hw.hdr = options.post.hdr.mode != dw3::HdrMode::Off;
     p->api_ = api;
@@ -56,13 +57,15 @@ bool HwPresenter::update_options(const PresentOptions& options, dw3::Gpu& gpu) {
     bool ok = true;
     if (options.internal_res != options_.internal_res || options.true_color != options_.true_color ||
         options.texture_filter != options_.texture_filter || options.precise_geometry != options_.precise_geometry ||
-        options.texture_pack != options_.texture_pack || options.widescreen != options_.widescreen ||
+        options.texture_pack != options_.texture_pack || options.stage_library != options_.stage_library ||
+        options.widescreen != options_.widescreen ||
         (options.post.hdr.mode != dw3::HdrMode::Off) != (options_.post.hdr.mode != dw3::HdrMode::Off)) {
         dw3::HwOptions hw;
         hw.true_color = options.true_color;
         hw.filter = static_cast<dw3::TextureFilter>(options.texture_filter);
         hw.precise_geometry = options.precise_geometry;
         hw.texture_pack = options.texture_pack;
+        hw.stage_library = options.stage_library;
         hw.wide_frame = dw3::make_wide_frame(options.widescreen);
         hw.hdr = options.post.hdr.mode != dw3::HdrMode::Off;
         std::string error;
@@ -72,6 +75,7 @@ bool HwPresenter::update_options(const PresentOptions& options, dw3::Gpu& gpu) {
             options_.texture_filter = options.texture_filter;
             options_.precise_geometry = options.precise_geometry;
             options_.texture_pack = options.texture_pack;
+            options_.stage_library = options.stage_library;
             options_.widescreen = options.widescreen;
             options_.post.hdr = options.post.hdr;
             if (hw.hdr && !renderer_->hdr_active()) SDL_Log("HDR output is not available on this display or driver; staying SDR");

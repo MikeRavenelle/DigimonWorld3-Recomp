@@ -409,6 +409,7 @@ void Gpu::write_gp1(uint32_t w) {
         case 0x05:
             display_.vram_x = static_cast<int>(w & 0x3FE);
             display_.vram_y = static_cast<int>((w >> 10) & 0x1FF);
+            if (raster_) raster_->display_flipped();
             break;
         case 0x06:
             display_.h_start = static_cast<int>(w & 0xFFF);
