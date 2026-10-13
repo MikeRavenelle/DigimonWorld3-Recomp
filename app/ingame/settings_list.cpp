@@ -38,6 +38,8 @@ constexpr Labels kLabels[] = {
     {"graphics.brightness", "Bright", 5},
     {"audio.mute", "Mute", 1},
     {"audio.volume", "Volume", 10},
+    {"audio.music_volume", "Music", 10},
+    {"audio.sfx_volume", "Effects", 10},
     {"controls.pad", "Gamepad", 1},
     {"controls.left_stick", "Left Stick", 1},
     {"controls.deadzone", "Deadzone", 5},

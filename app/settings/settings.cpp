@@ -104,6 +104,10 @@ const SettingInfo kSettings[] = {
      Group::Audio, Type::Bool, Apply::Live, 0, 0, {}, false, DW3_FIELD(audio.mute)},
     {"audio.volume", "Volume", "Output volume in percent.",
      Group::Audio, Type::Int, Apply::Live, 0, 100, {}, false, DW3_FIELD(audio.volume)},
+    {"audio.music_volume", "Music volume", "Level of the music in percent, below the master volume. Movie sound counts as music.",
+     Group::Audio, Type::Int, Apply::Live, 0, 100, {}, false, DW3_FIELD(audio.music_volume)},
+    {"audio.sfx_volume", "Effects volume", "Level of the sound effects in percent, below the master volume.",
+     Group::Audio, Type::Int, Apply::Live, 0, 100, {}, false, DW3_FIELD(audio.sfx_volume)},
     {"audio.device", "Output device", "Name of the playback device; empty uses the system default.",
      Group::Audio, Type::String, Apply::Live, 0, 0, {}, false, DW3_FIELD(audio.device)},
 

@@ -51,6 +51,8 @@ everything else applies immediately.
 | `graphics.brightness` | -50 to 50 (percent) | `--brightness` |
 | `audio.mute` | bool | `--mute` |
 | `audio.volume` | 0 to 100 | |
+| `audio.music_volume` | 0 to 100 (percent; steps of 10 in the in-game screen) | |
+| `audio.sfx_volume` | 0 to 100 (percent; steps of 10 in the in-game screen) | |
 | `audio.device` | device name, empty for the default | |
 | `controls.pad` | `auto`, `1` to `4` | |
 | `controls.left_stick` | bool | |
@@ -84,6 +86,14 @@ All of these default to the original game and apply immediately; they also appea
 - **Text speed** sets how quickly message boxes print (dialogue, menu descriptions, battle text). `fast` prints three
   characters per frame instead of one every few frames; `instant` prints each box at once and still waits for the
   button to close it. Pauses written into the text and scripted timing are unchanged.
+
+## Music and effects volume
+
+`audio.music_volume` and `audio.sfx_volume` scale the two kinds of sound the game plays, below the master `audio.volume`.
+The game's sound driver records, for each voice it keys on, the sequence that started it. Music plays from sequence
+slots 2 and 3, which the field, the battle and the card game load alternately; the effect banks are slots 0 and 1, and
+effects started directly use a fixed id. The SPU mixes each group at its own level before reverb. Movie and other CD
+audio follows the music level. The victory fanfare comes from an effect bank, so it follows the effects level.
 
 ## Visual presets
 

@@ -54,6 +54,8 @@ struct Settings {
     struct Audio {
         bool mute = false;
         int volume = 100;            // percent
+        int music_volume = 100;      // percent of the music's level (the master volume applies on top)
+        int sfx_volume = 100;        // percent of the sound effects' level
         std::string device;          // playback device name; empty selects the system default
         bool operator==(const Audio&) const = default;
     } audio;

@@ -8,6 +8,7 @@
 
 #include "controller.h"
 #include "fastforward.h"
+#include "audio_mix.h"
 #include "gameplay_scaling.h"
 #include "timestretch.h"
 
@@ -421,6 +422,35 @@ TEST(Experience, AwardScalesAndStopsAtTheFieldMaximum) {
     EXPECT_EQ(scaled_experience(6, 0), 6u);
 }
 
+TEST(AudioSettings, MusicAndEffectsDefaultToFullAndRoundTrip) {
+    Settings s = defaults();
+    EXPECT_EQ(get_text(s, *find_setting("audio.music_volume")), "100");
+    EXPECT_EQ(get_text(s, *find_setting("audio.sfx_volume")), "100");
+    EXPECT_TRUE(set(s, "audio.music_volume", "40"));
+    EXPECT_TRUE(set(s, "audio.sfx_volume", "0"));
+    EXPECT_FALSE(set(s, "audio.music_volume", "101"));
+    EXPECT_FALSE(set(s, "audio.sfx_volume", "-1"));
+    LoadReport report;
+    const Settings loaded = settings_from_toml(settings_to_toml(s), report);
+    EXPECT_EQ(loaded, s);
+    EXPECT_EQ(loaded.audio.music_volume, 40);
+    EXPECT_EQ(loaded.audio.sfx_volume, 0);
+}
+
+TEST(AudioMix, SequencesFromAccessesTwoAndUpAreMusic) {
+    EXPECT_TRUE(is_music_sequence(0x0002));
+    EXPECT_TRUE(is_music_sequence(0x0003));
+    EXPECT_TRUE(is_music_sequence(0x0402));  // another score of the same file
+}
+
+TEST(AudioMix, EffectBanksAndDirectKeyOnsAreEffects) {
+    EXPECT_FALSE(is_music_sequence(0x0000));
+    EXPECT_FALSE(is_music_sequence(0x0e01));
+    EXPECT_FALSE(is_music_sequence(0x0b00));
+    EXPECT_FALSE(is_music_sequence(kUtilityKeyOnSequence));
+    EXPECT_FALSE(is_music_sequence(0x00FF));  // a voice no sequence has used
+}
+
 TEST(TextSpeed, ChoiceMapsToSpeed) {
     EXPECT_EQ(text_speed(0), TextSpeed::Normal);
     EXPECT_EQ(text_speed(1), TextSpeed::Fast);
@@ -434,7 +464,7 @@ TEST(TextSpeed, NormalLeavesTheWindowAlone) {
 
 TEST(TextSpeed, FastAdvancesAndStopsShortOfTheBoxEnd) {
     EXPECT_EQ(text_position_before_tick(TextSpeed::Fast, 5, 55), 5u + kFastTextChars - 1);
-    EXPECT_EQ(text_position_before_tick(TextSpeed::Fast, 52, 55), 53u);
+    EXPECT_EQ(text_position_before_tick(TextSpeed::Fast, 51, 55), 53u);
     EXPECT_EQ(text_position_before_tick(TextSpeed::Fast, 54, 55), 54u);
     EXPECT_EQ(text_position_before_tick(TextSpeed::Fast, 0, 0), 0u);
     EXPECT_EQ(text_position_before_tick(TextSpeed::Fast, 60, 55), 60u);

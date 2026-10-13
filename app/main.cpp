@@ -85,6 +85,7 @@
 #include "dw3/platform.h"
 #include "host_input.h"
 #include "ingame/field_menu.h"
+#include "ingame/audio_groups.h"
 #include "ingame/gameplay.h"
 #include "present/monitors.h"
 #include "present/native_window.h"
@@ -431,6 +432,7 @@ int main(int argc, char** argv) {
     dw3app::ingame::FieldMenuSettings settings_screen(machine, settings, &host_input);
     settings_screen.set_display_context(&monitors, presenter->supports_adaptive_vsync());
     dw3app::ingame::GameplayHooks gameplay(machine, settings);
+    dw3app::ingame::AudioGroups audio_groups(machine, settings);
     sink.fn = [&](const dw3app::Settings& now, std::span<const dw3app::SettingInfo* const> changed) {
         bool ok = true, graphics = false, display = false;
         for (const dw3app::SettingInfo* info : changed) {
@@ -443,6 +445,7 @@ int main(int argc, char** argv) {
             }
             else if (id == "audio.mute") audio.set_muted(now.audio.mute);
             else if (id == "audio.volume") audio.set_volume(now.audio.volume);
+            else if (id == "audio.music_volume" || id == "audio.sfx_volume") audio_groups.apply();
             else if (id == "audio.device") audio.set_device(now.audio.device);
             else if (id.starts_with("controls.")) host_input.settings_changed();
             else if (id.starts_with("graphics.")) graphics = true;  // presentation, filters and the presets built from them
