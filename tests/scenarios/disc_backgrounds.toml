@@ -1,0 +1,16 @@
+name = "disc_backgrounds"
+description = "Walk from the Amaterasu Inn through the Underground Path to Amaterasu Central Sector and check that the background images the game uploads and draws there are the ones the stage pack files on the disc describe, with the same image and palette keys the renderer computes."
+start_state = "endgame.state"   # written by endgame_state.toml
+start_frame = 1300
+frames = 2100
+include = ["common/endgame_to_central.toml"]
+memcard = "game:memcards/endgame.mcd"   # personal save data under the game directory; skipped when absent
+skip_intro = false
+
+# Map ids (word 0x800554D4): 0x270 Amaterasu Inn 1F (from the saved state, so its images
+# are not uploaded again), 0x291 Underground Path, 0x1FE Amaterasu City Central Sector.
+[[check]]
+at = 2050
+label = "Central Sector backgrounds are on the disc"
+ram = [{ addr = 0x800554D4, size = 4, value = 0x1FE }, { addr = 0x800554D0, size = 4, value = 2 }]
+disc_backgrounds = 10

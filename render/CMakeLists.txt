@@ -1,7 +1,8 @@
 # GPU renderer. The pure parts (primitive -> vertex conversion, dirty-region bookkeeping) have no GPU dependency and
 # are always built; the plume-backed renderer is added when plume is available (see cmake/Dependencies.cmake).
 add_library(dw3render STATIC
-    src/vertex_builder.cpp)
+    src/vertex_builder.cpp
+    src/upload_recorder.cpp)
 target_include_directories(dw3render PUBLIC include)
 target_link_libraries(dw3render PUBLIC dw3runtime dw3texrep)
 dw3_target_defaults(dw3render)

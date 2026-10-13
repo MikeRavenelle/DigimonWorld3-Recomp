@@ -123,6 +123,12 @@ Making a pack:
    `graphics.texture_pack` empty the game uses the first folder in `texture-packs` that has a manifest; to pick a
    pack, set `graphics.texture_pack = "general-x4"` in `settings.toml` (or `--texture-pack general-x4`).
 
+To cover every field map without playing, give `texpack` the disc instead of dumps:
+`texpack generate --disc "<disc .cue or .bin, or an extracted copy>" --out "<user data dir>/texture-packs/general-x4"
+--name general-x4` reads the background images from the disc's stage pack files and upscales them with the same options as
+above (`--disc` can be combined with `--dump`). It takes a long time. `texpack extract --disc ... --out dump-all`
+only writes the dump, and `--map S226` limits either command to one map.
+
 Notes and limits:
 
 - An image is replaced only when both the image and the palette it is drawn with match the pack. Palettes that animate

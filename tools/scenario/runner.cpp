@@ -26,6 +26,8 @@
 #include <fstream>
 #include <iterator>
 #include <map>
+#include <memory>
+#include <set>
 #include <span>
 #include <string>
 #include <vector>
@@ -33,6 +35,8 @@
 #include "dw3/host.h"
 #include "dw3/recomp.h"
 #include "dw3/state.h"
+#include "dw3/texrep/stage_dump.h"
+#include "dw3/upload_recorder.h"
 #include "field_menu.h"
 #include "gameplay.h"
 #include "scenario.h"
@@ -156,9 +160,28 @@ void report(Results& r, bool ok, const std::string& field, const std::string& de
     (ok ? r.pass : r.fail)++;
 }
 
+// The keys of every field map background on the disc: block hash -> palette hashes the files give it.
+using DiscKeys = std::map<uint64_t, std::set<uint64_t>>;
+
+bool load_disc_keys(const std::string& disc, DiscKeys& keys, std::string& error) {
+    auto source = dw3::texrep::StageSource::open(disc, error);
+    if (!source) return false;
+    std::vector<uint8_t> data;
+    for (const std::string& map : source->maps()) {
+        dw3::texrep::StagePack pack;
+        if (!source->read(map, data, error) || !dw3::texrep::parse_stage_pack(data, pack, error)) {
+            error = map + ": " + error;
+            return false;
+        }
+        for (const dw3::texrep::StageTile& t : pack.tiles)
+            if (t.tracked()) keys[t.block_hash].insert(t.clut_hash);
+    }
+    return true;
+}
+
 // Evaluates one check against the live machine. Returns the number of failures it added.
 int evaluate(const Options& opt, const sc::Scenario& s, const sc::Check& c, dw3::host::Host& host, Results& total,
-             const sc::AudioMeter& meter) {
+             const sc::AudioMeter& meter, const dw3::UploadRecorder* recorder, const DiscKeys& disc_keys) {
     dw3::Machine& m = host.machine();
     Results r;
     std::printf("  check @%lld \"%s\"\n", static_cast<long long>(c.at), c.label.c_str());
@@ -178,6 +201,19 @@ int evaluate(const Options& opt, const sc::Scenario& s, const sc::Check& c, dw3:
     if (c.min_commands)
         report(r, m.gpu().commands() >= *c.min_commands, "min_commands",
                "actual " + num(m.gpu().commands()) + ", expected >= " + num(*c.min_commands));
+    if (c.min_disc_backgrounds) {
+        int matched = 0, wrong_palette = 0;
+        if (recorder)
+            for (const auto& [block, palette] : recorder->keys()) {
+                const auto it = disc_keys.find(block);
+                if (it == disc_keys.end()) continue;
+                if (it->second.count(palette)) ++matched;
+                else ++wrong_palette;
+            }
+        report(r, matched >= *c.min_disc_backgrounds && wrong_palette == 0, "disc_backgrounds",
+               num(matched) + " keys drawn so far are on the disc, " + num(wrong_palette) + " with another palette, expected >= " +
+                   num(*c.min_disc_backgrounds) + " and none with another palette");
+    }
     if (c.tty_contains) {
         bool ok = host.tty().find(*c.tty_contains) != std::string::npos;
         report(r, ok, "tty_contains", std::string(ok ? "found" : "not found") + " \"" + *c.tty_contains + "\"");
@@ -344,6 +380,13 @@ int main(int argc, char** argv) {
     std::string error;
     std::unique_ptr<dw3::host::Host> host;
     sc::Timeline timeline(scenario);
+    DiscKeys disc_keys;
+    std::unique_ptr<dw3::UploadRecorder> recorder;
+    const bool wants_disc_keys = std::any_of(scenario.checks.begin(), scenario.checks.end(), [](const sc::Check& c) { return c.min_disc_backgrounds.has_value(); });
+    if (wants_disc_keys && !load_disc_keys(opt.disc, disc_keys, error)) {
+        std::fprintf(stderr, "scenario error: reading the stage packs of the disc: %s\n", error.c_str());
+        return 2;
+    }
     ScriptPad pad(timeline);
     auto read_ram = [&](uint32_t addr, int size) -> uint32_t {
         RecompContext* ctx = &host->machine().ctx();
@@ -397,6 +440,10 @@ int main(int argc, char** argv) {
         }
         if (opt.no_xa) host->machine().cdrom().set_xa_sink(nullptr);
         host->machine().sio().set_pad_source(0, &pad);
+        if (wants_disc_keys) {
+            recorder = std::make_unique<dw3::UploadRecorder>(host->machine().gpu().rasterizer());
+            host->machine().gpu().set_rasterizer(recorder.get());
+        }
         // The game's settings screen runs as in the app, on default settings that are never written anywhere.
         dw3app::Settings scenario_settings;
         for (const std::string& entry : scenario.settings) {
@@ -501,7 +548,7 @@ int main(int argc, char** argv) {
             for (auto& [path, snap] : snapshots)
                 if (snap.recording) snap.digests.push_back(digest_of(host->machine()));
             while (next < scenario.checks.size() && script >= scenario.checks[next].at)
-                evaluate(opt, scenario, scenario.checks[next++], *host, total, meter);
+                evaluate(opt, scenario, scenario.checks[next++], *host, total, meter, recorder.get(), disc_keys);
             while (save_next < scenario.saves.size() && script >= scenario.saves[save_next].at) {
                 const std::string name = scenario.saves[save_next++].path;
                 const std::string path = resolve_state_path(opt, name);

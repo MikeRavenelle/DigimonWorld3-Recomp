@@ -267,6 +267,15 @@ TEST(ScenarioAudio, Defaults) {
     EXPECT_FALSE(s.checks[0].wav);
 }
 
+TEST(ScenarioDiscBackgrounds, CheckFieldParsed) {
+    Scenario s = parse("name=\"t\"\nframes=100\n[[check]]\nat=50\ndisc_backgrounds=12\n[[check]]\nat=60\n");
+    ASSERT_EQ(s.checks.size(), 2u);
+    ASSERT_TRUE(s.checks[0].min_disc_backgrounds);
+    EXPECT_EQ(*s.checks[0].min_disc_backgrounds, 12);
+    EXPECT_FALSE(s.checks[1].min_disc_backgrounds);
+    EXPECT_THROW(parse("name=\"t\"\nframes=100\n[[check]]\nat=50\ndisc_backgrounds=0\n"), std::runtime_error);
+}
+
 TEST(ScenarioAudio, ZeroWindowRejected) {
     EXPECT_THROW(parse("name=\"t\"\nframes=100\n[[check]]\nat=50\naudio_frames=0\n"), std::runtime_error);
 }
