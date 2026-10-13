@@ -243,6 +243,10 @@ and a Reset Controls row) and the gameplay options. Cross on a binding row waits
 Escape or five seconds cancel. The options that need a restart (renderer, memory cards) stay in the file. Five
 rows show at a time (six when the menu has CARD FOLDERS); the list scrolls.
 
+The same screen opens from the title menu: while Start / Continue waits for input, SELECT (the hint is shown at the top)
+opens the list over the dimmed title. The menu stands still until circle or triangle closes it, and then waits as
+before. Options that only matter in the field, such as the encounter rate, can be set there and apply once playing.
+
 ## Display
 
 - Display mode: `windowed`, `borderless` (a desktop-sized window without borders) or `exclusive` (the monitor

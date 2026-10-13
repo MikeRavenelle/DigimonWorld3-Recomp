@@ -1,0 +1,120 @@
+name = "title_settings"
+description = "Title menu: SELECT opens the settings screen, a value and the page change, circle returns to the Start / Continue menu as it was, and New Game still starts."
+frames = 3000
+
+# RAM words (USA executable). The title menu is the task object at 0x800D8F90:
+#   +0x0C state and +0x10 sub-state (2 and 1: the menu waits for up, down or cross), +0x5A selected entry,
+#   +0x74 marker 0x53455453 while the settings screen is open (the screen's own windows draw, the menu task stands
+#   still), +0x78 settings cursor. The screen's first row window is at 0x800D9368 and keeps a pointer to its text at
+#   +0x5C; the text is in the game's own encoding (P = 0x1D, E = 0x12).
+#   game mode 0x800554D0: 0xE title, 2 field and scenes.
+
+[[press]]
+button = "START"
+at = 900
+
+[[check]]
+at = 970
+label = "menu: waits for input, hint window present"
+display_enabled = true
+ram = [
+    { addr = 0x800D8F9C, size = 4, value = 2 },
+    { addr = 0x800D8FA0, size = 4, value = 1 },
+    { addr = 0x800D9004, size = 4, value = 0 },
+]
+screenshot = true
+
+# SELECT opens the settings screen on its first row (the visual preset).
+[[wait]]
+at = 980
+label = "settings open"
+press = "SELECT"
+every = 40
+ram = [{ addr = 0x800D9004, size = 4, value = 0x53455453 }]
+timeout = 300
+
+[[check]]
+at = 990
+label = "settings: cursor on the first row, which reads Preset"
+display_enabled = true
+ram = [
+    { addr = 0x800554D0, size = 4, value = 0xE },
+    { addr = 0x800D9008, size = 4, value = 0 },
+    { via = 0x800D93C4, addr = 0, size = 1, value = 0x1D },
+]
+screenshot = true
+
+# RIGHT steps the preset from Original to Enhanced; the row shows it.
+[[wait]]
+at = 1000
+label = "preset changed"
+press = "RIGHT"
+every = 40
+ram = [{ via = 0x800D93C4, addr = 10, size = 1, value = 0x12 }]
+timeout = 300
+
+# L1 jumps back from the first page to the last one, the gameplay settings (those that need the field).
+[[wait]]
+at = 1010
+label = "gameplay page"
+press = "L1"
+every = 40
+ram = [{ addr = 0x800D9008, size = 4, value = 0, cmp = "gt" }]
+timeout = 300
+
+[[check]]
+at = 1020
+label = "gameplay page shown"
+display_enabled = true
+screenshot = true
+
+# The screen stays open for as long as it is left alone (the menu task would time out on its own).
+[[check]]
+at = 2000
+label = "still open after a long wait"
+display_enabled = true
+ram = [{ addr = 0x800D9004, size = 4, value = 0x53455453 }, { addr = 0x800554D0, size = 4, value = 0xE }]
+
+# Circle returns to the menu: it waits for input again with the same entry selected.
+[[wait]]
+at = 2010
+label = "back in the menu"
+press = "CIRCLE"
+every = 40
+ram = [{ addr = 0x800D9004, size = 4, value = 0x53455453, cmp = "ne" }]
+timeout = 300
+
+[[check]]
+at = 2030
+label = "menu restored"
+display_enabled = true
+ram = [
+    { addr = 0x800D8F9C, size = 4, value = 2 },
+    { addr = 0x800D8FA0, size = 4, value = 1 },
+    { addr = 0x800554D0, size = 4, value = 0xE },
+]
+screenshot = true
+
+# New Game still starts: UP picks it, CROSS confirms.
+[[press]]
+button = "UP"
+at = 2040
+
+[[press]]
+button = "CROSS"
+at = 2100
+
+[[wait]]
+at = 2110
+label = "new game running"
+ram = [{ addr = 0x800554D0, size = 4, value = 2 }, { addr = 0x800554D4, size = 4, value = 0x1DA }]
+timeout = 600
+press = "CROSS"
+every = 45
+press_hold = 3
+
+[[check]]
+at = 2360
+label = "opening scene"
+display_enabled = true
+screenshot = true
