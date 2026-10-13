@@ -5,10 +5,13 @@ disc image of the USA release (Digimon World 3 (USA).cue and its .bin file).
 
 Run
 ---
+    dw3recomp.exe
+
+On first start a setup window asks for your disc image (.cue) and saves its location; run
+"dw3recomp.exe --setup" to open it again. To use a disc for one run only:
     dw3recomp.exe --disc "C:\Games\Digimon World 3 (USA).cue"
 
-The path may contain spaces and non-ASCII characters. Without --disc the program looks for
-"game\Digimon World 3 (USA).cue" next to where it is started.
+The path may contain spaces and non-ASCII characters.
 
 Memory cards, save states and the disc index cache are kept in %APPDATA%\DW3Recomp.
 

@@ -132,3 +132,8 @@ dw3_add_test(test_settings
 dw3_add_test(test_ingame
     SOURCES app/test_ingame.cpp
     LIBS dw3ingame)
+
+# First-run wizard logic: state machine, disc identification, hashes, download plan, unpacking and the install sequence.
+dw3_add_test(test_wizard
+    SOURCES app/test_wizard.cpp
+    LIBS dw3wizard_core dw3texrep miniz)

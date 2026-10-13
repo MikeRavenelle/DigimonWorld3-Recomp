@@ -50,6 +50,7 @@ struct Settings {
         bool memcards = true;        // false: games see no card
         std::string memcard1;        // empty selects <user data dir>/memcards/slot1.mcd
         std::string memcard2;        // empty selects <user data dir>/memcards/slot2.mcd
+        std::string disc_path;       // the disc image chosen in the first-run setup; empty if none yet
         int fast_forward_speed = 1;  // choice: 2x, 4x, unlimited
         bool operator==(const System&) const = default;
     } system;
