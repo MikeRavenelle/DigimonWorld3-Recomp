@@ -9,6 +9,9 @@ namespace dw3app {
 // Emulated-time multiplier for a fast_forward_speed choice (0 means no limit); the index is that of system.fast_forward_speed.
 inline double fast_forward_multiplier(int choice) { return choice == 0 ? 2.0 : choice == 1 ? 4.0 : 0.0; }
 
+// Emulated-time multiplier for a gameplay.game_speed choice (1x, 2x, 3x, 4x).
+inline double game_speed_multiplier(int choice) { return choice < 0 ? 1.0 : choice > 3 ? 4.0 : choice + 1.0; }
+
 // Fast-forward runs while the hold key or pad combo is down, or while the latch is on.
 class FastForwardInput {
 public:

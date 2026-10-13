@@ -11,6 +11,7 @@
 #include <vector>
 
 #include "dw3/spu.h"
+#include "timestretch.h"
 
 namespace dw3app {
 
@@ -52,6 +53,15 @@ public:
         if (stream_) {
             stop();
             if (!muted_) start();
+        }
+    }
+    // Game speed above 1: the SPU produces `speed` times the normal samples per second; they are time-compressed by the
+    // same factor so the device plays them at their normal pitch.
+    void set_speed(double speed) {
+        stretch_.set_speed(speed);
+        if (stream_ && !discard_) {
+            SDL_ClearAudioStream(stream_);
+            refill();
         }
     }
     // Fast-forward: the SPU is still drained so it never backs up, but nothing is played; going back to normal speed
@@ -124,7 +134,13 @@ public:
                     SDL_ClearAudioStream(stream_);
                     ++drops_;
                 }
-                SDL_PutAudioStreamData(stream_, buf_.data(), static_cast<int>(n * 4));
+                if (stretch_.speed() > 1.0) {
+                    stretched_.clear();
+                    stretch_.process(buf_.data(), n, stretched_);
+                    SDL_PutAudioStreamData(stream_, stretched_.data(), static_cast<int>(stretched_.size() * 2));
+                } else {
+                    SDL_PutAudioStreamData(stream_, buf_.data(), static_cast<int>(n * 4));
+                }
             }
             if (n < buf_.size() / 2) break;
         }
@@ -149,6 +165,8 @@ private:
     std::string device_;
     int volume_ = 100;
     SDL_AudioStream* stream_ = nullptr;
+    TimeStretch stretch_;
+    std::vector<int16_t> stretched_;
     std::vector<int16_t> buf_ = std::vector<int16_t>(4096);
     uint64_t drops_ = 0;
     uint64_t underruns_ = 0;
