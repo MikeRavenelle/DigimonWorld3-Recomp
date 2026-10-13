@@ -5,12 +5,15 @@
 // applied to the running configuration only; the file is written from the stored configuration, which never sees them.
 #pragma once
 
+#include <array>
 #include <cstdint>
 #include <filesystem>
 #include <span>
 #include <string>
 #include <string_view>
 #include <vector>
+
+#include "bindings.h"
 
 namespace dw3app {
 
@@ -46,6 +49,14 @@ struct Settings {
         std::string device;          // playback device name; empty selects the system default
         bool operator==(const Audio&) const = default;
     } audio;
+    struct Controls {
+        int pad = 0;                 // choice: auto, 1, 2, 3, 4 (which connected gamepad drives port 1)
+        bool left_stick = true;      // the left stick moves like the D-pad
+        int deadzone = 25;           // percent of stick travel that does nothing
+        int prompts = 0;             // choice: auto, xbox, playstation, nintendo (names of gamepad buttons in hints)
+        std::array<std::string, input::kActionCount> bindings = input::default_binding_texts();  // "Z|South" per action
+        bool operator==(const Controls&) const = default;
+    } controls;
     struct System {
         bool memcards = true;        // false: games see no card
         std::string memcard1;        // empty selects <user data dir>/memcards/slot1.mcd
@@ -65,7 +76,7 @@ struct Settings {
     bool operator==(const Settings&) const = default;
 };
 
-enum class Group { Graphics, Audio, System, Gameplay };
+enum class Group { Graphics, Audio, Controls, System, Gameplay };
 enum class Type { Bool, Int, Choice, String };
 // Whether a changed value takes effect in the running program or only after a restart.
 enum class Apply { Live, Restart };

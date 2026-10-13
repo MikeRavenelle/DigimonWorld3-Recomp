@@ -28,6 +28,8 @@ constexpr std::string_view kScaleModes[] = {"fit", "integer", "stretch"};
 constexpr std::string_view kSpeeds[] = {"2x", "4x", "unlimited"};
 constexpr std::string_view kEncounters[] = {"normal", "half", "off", "double"};
 constexpr std::string_view kGameSpeeds[] = {"1x", "2x", "3x", "4x"};
+constexpr std::string_view kPads[] = {"auto", "1", "2", "3", "4"};
+constexpr std::string_view kPrompts[] = {"auto", "xbox", "playstation", "nintendo"};
 
 #define DW3_FIELD(path) +[](Settings& s) -> void* { return &s.path; }
 
@@ -82,6 +84,55 @@ const SettingInfo kSettings[] = {
      Group::Audio, Type::Int, Apply::Live, 0, 100, {}, false, DW3_FIELD(audio.volume)},
     {"audio.device", "Output device", "Name of the playback device; empty uses the system default.",
      Group::Audio, Type::String, Apply::Live, 0, 0, {}, false, DW3_FIELD(audio.device)},
+
+    {"controls.pad", "Gamepad", "Which connected gamepad drives port 1: auto uses the first one and keeps it until it is unplugged; 1 to 4 pick by position and fall back to auto when that pad is not connected.",
+     Group::Controls, Type::Choice, Apply::Live, 0, 0, kPads, false, DW3_FIELD(controls.pad)},
+    {"controls.left_stick", "Left stick", "The left stick moves like the D-pad.",
+     Group::Controls, Type::Bool, Apply::Live, 0, 0, {}, false, DW3_FIELD(controls.left_stick)},
+    {"controls.deadzone", "Stick deadzone", "How far the left stick must lean, in percent of its travel, before it moves.",
+     Group::Controls, Type::Int, Apply::Live, 10, 50, {}, false, DW3_FIELD(controls.deadzone)},
+    {"controls.prompts", "Button prompts", "Names of gamepad buttons in on-screen hints: auto follows the connected pad.",
+     Group::Controls, Type::Choice, Apply::Live, 0, 0, kPrompts, false, DW3_FIELD(controls.prompts)},
+    {"controls.up", "Up binding", "Keyboard key and gamepad button for Up, written as key|button (for example Z|South). Reserved keys cannot be moved.",
+     Group::Controls, Type::String, Apply::Live, 0, 0, {}, true, DW3_FIELD(controls.bindings[0])},
+    {"controls.down", "Down binding", "Keyboard key and gamepad button for Down, written as key|button (for example Z|South). Reserved keys cannot be moved.",
+     Group::Controls, Type::String, Apply::Live, 0, 0, {}, true, DW3_FIELD(controls.bindings[1])},
+    {"controls.left", "Left binding", "Keyboard key and gamepad button for Left, written as key|button (for example Z|South). Reserved keys cannot be moved.",
+     Group::Controls, Type::String, Apply::Live, 0, 0, {}, true, DW3_FIELD(controls.bindings[2])},
+    {"controls.right", "Right binding", "Keyboard key and gamepad button for Right, written as key|button (for example Z|South). Reserved keys cannot be moved.",
+     Group::Controls, Type::String, Apply::Live, 0, 0, {}, true, DW3_FIELD(controls.bindings[3])},
+    {"controls.cross", "Cross binding", "Keyboard key and gamepad button for Cross, written as key|button (for example Z|South). Reserved keys cannot be moved.",
+     Group::Controls, Type::String, Apply::Live, 0, 0, {}, true, DW3_FIELD(controls.bindings[4])},
+    {"controls.circle", "Circle binding", "Keyboard key and gamepad button for Circle, written as key|button (for example Z|South). Reserved keys cannot be moved.",
+     Group::Controls, Type::String, Apply::Live, 0, 0, {}, true, DW3_FIELD(controls.bindings[5])},
+    {"controls.square", "Square binding", "Keyboard key and gamepad button for Square, written as key|button (for example Z|South). Reserved keys cannot be moved.",
+     Group::Controls, Type::String, Apply::Live, 0, 0, {}, true, DW3_FIELD(controls.bindings[6])},
+    {"controls.triangle", "Triangle binding", "Keyboard key and gamepad button for Triangle, written as key|button (for example Z|South). Reserved keys cannot be moved.",
+     Group::Controls, Type::String, Apply::Live, 0, 0, {}, true, DW3_FIELD(controls.bindings[7])},
+    {"controls.l1", "L1 binding", "Keyboard key and gamepad button for L1, written as key|button (for example Z|South). Reserved keys cannot be moved.",
+     Group::Controls, Type::String, Apply::Live, 0, 0, {}, true, DW3_FIELD(controls.bindings[8])},
+    {"controls.r1", "R1 binding", "Keyboard key and gamepad button for R1, written as key|button (for example Z|South). Reserved keys cannot be moved.",
+     Group::Controls, Type::String, Apply::Live, 0, 0, {}, true, DW3_FIELD(controls.bindings[9])},
+    {"controls.l2", "L2 binding", "Keyboard key and gamepad button for L2, written as key|button (for example Z|South). Reserved keys cannot be moved.",
+     Group::Controls, Type::String, Apply::Live, 0, 0, {}, true, DW3_FIELD(controls.bindings[10])},
+    {"controls.r2", "R2 binding", "Keyboard key and gamepad button for R2, written as key|button (for example Z|South). Reserved keys cannot be moved.",
+     Group::Controls, Type::String, Apply::Live, 0, 0, {}, true, DW3_FIELD(controls.bindings[11])},
+    {"controls.l3", "L3 binding", "Keyboard key and gamepad button for L3, written as key|button (for example Z|South). Reserved keys cannot be moved.",
+     Group::Controls, Type::String, Apply::Live, 0, 0, {}, true, DW3_FIELD(controls.bindings[12])},
+    {"controls.r3", "R3 binding", "Keyboard key and gamepad button for R3, written as key|button (for example Z|South). Reserved keys cannot be moved.",
+     Group::Controls, Type::String, Apply::Live, 0, 0, {}, true, DW3_FIELD(controls.bindings[13])},
+    {"controls.start", "Start binding", "Keyboard key and gamepad button for Start, written as key|button (for example Z|South). Reserved keys cannot be moved.",
+     Group::Controls, Type::String, Apply::Live, 0, 0, {}, true, DW3_FIELD(controls.bindings[14])},
+    {"controls.select", "Select binding", "Keyboard key and gamepad button for Select, written as key|button (for example Z|South). Reserved keys cannot be moved.",
+     Group::Controls, Type::String, Apply::Live, 0, 0, {}, true, DW3_FIELD(controls.bindings[15])},
+    {"controls.fast_forward", "Fast-forward (hold) binding", "Keyboard key and gamepad button for Fast-forward (hold), written as key|button (for example Z|South). Reserved keys cannot be moved.",
+     Group::Controls, Type::String, Apply::Live, 0, 0, {}, true, DW3_FIELD(controls.bindings[16])},
+    {"controls.fast_forward_latch", "Fast-forward (latch) binding", "Keyboard key and gamepad button for Fast-forward (latch), written as key|button (for example Z|South). Reserved keys cannot be moved.",
+     Group::Controls, Type::String, Apply::Live, 0, 0, {}, true, DW3_FIELD(controls.bindings[17])},
+    {"controls.game_speed", "Game speed cycle binding", "Keyboard key and gamepad button for Game speed cycle, written as key|button (for example Z|South). Reserved keys cannot be moved.",
+     Group::Controls, Type::String, Apply::Live, 0, 0, {}, true, DW3_FIELD(controls.bindings[18])},
+    {"controls.compare", "Original/preset comparison binding", "Keyboard key and gamepad button for Original/preset comparison, written as key|button (for example Z|South). Reserved keys cannot be moved.",
+     Group::Controls, Type::String, Apply::Live, 0, 0, {}, true, DW3_FIELD(controls.bindings[19])},
 
     {"system.memcards", "Memory cards", "Insert memory cards; off means games see no card.",
      Group::System, Type::Bool, Apply::Restart, 0, 0, {}, false, DW3_FIELD(system.memcards)},
@@ -186,6 +237,7 @@ std::string_view group_name(Group g) {
     switch (g) {
         case Group::Graphics: return "graphics";
         case Group::Audio: return "audio";
+        case Group::Controls: return "controls";
         case Group::System: return "system";
         case Group::Gameplay: return "gameplay";
     }
@@ -237,7 +289,12 @@ bool set_text(Settings& s, const SettingInfo& info, std::string_view text, std::
             // The comparison preset's list leaves out "original", so its indices are offset by one.
             if (info.id == "graphics.comparison_preset") number += 1;
             break;
-        case Type::String: break;
+        case Type::String:
+            if (info.group == Group::Controls && !input::parse_binding(text)) {
+                error = std::string(info.id) + ": '" + std::string(text) + "' is not a binding (key|button, for example Z|South)";
+                return false;
+            }
+            break;
     }
     if (info.id == "graphics.preset") {
         if (number < kNamedPresets) {
