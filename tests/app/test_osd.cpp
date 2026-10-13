@@ -125,3 +125,23 @@ TEST(OsdLifetime, NewMessageRestartsTheTimer) {
     EXPECT_NE(osd.frame(1280, 960, 2500, op), nullptr);
     EXPECT_EQ(osd.frame(1280, 960, 3600, op), nullptr);
 }
+
+TEST(OsdStatus, ShowsAtTheTopRightWhenNoMessageIsActive) {
+    Osd osd;
+    float op = 0;
+    EXPECT_EQ(osd.frame(1280, 960, 0, op), nullptr);
+    osd.set_status("60 FPS");
+    const OsdImage* status = osd.frame(1280, 960, 0, op);
+    ASSERT_NE(status, nullptr);
+    EXPECT_LT(op, 1.0f);  // unobtrusive
+    EXPECT_EQ(osd.x(1280), 1280 - status->w - osd.margin());
+    osd.show("Slot 2", 100);
+    const OsdImage* message = osd.frame(1280, 960, 150, op);
+    ASSERT_NE(message, nullptr);
+    EXPECT_EQ(osd.x(1280), osd.margin());  // messages keep the top left
+    EXPECT_EQ(op, 1.0f);
+    EXPECT_NE(osd.frame(1280, 960, 100 + Osd::kShowMs + 10, op), nullptr);  // back to the status line
+    EXPECT_NE(osd.x(1280), osd.margin());
+    osd.set_status("");
+    EXPECT_EQ(osd.frame(1280, 960, 100 + Osd::kShowMs + 20, op), nullptr);
+}

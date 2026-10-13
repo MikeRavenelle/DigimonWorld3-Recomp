@@ -326,7 +326,7 @@ bool PostChain::run(RenderCommandList* cmd, const PostFx& fx, uint32_t pic_w, ui
     if (!fx.grade.neutral()) {
         const GradeParams& g = fx.grade;
         const float a[4] = {g.saturation, g.contrast, g.vibrance, g.gamma};
-        const float b[4] = {g.tint[0], g.tint[1], g.tint[2], 0};
+        const float b[4] = {g.tint[0], g.tint[1], g.tint[2], g.brightness};
         ok = ok && pass_to_target(cmd, Grade, *other, cur->set.get(), {cur}, cur->w, cur->h, a, b);
         std::swap(cur, other);
     }

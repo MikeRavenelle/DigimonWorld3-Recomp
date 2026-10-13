@@ -31,7 +31,7 @@ std::unique_ptr<HwPresenter> HwPresenter::create(SDL_Window* window, dw3::Graphi
     p->name_ = api == dw3::GraphicsApi::D3D12 ? "GPU (plume/Direct3D 12)"
                : api == dw3::GraphicsApi::Metal ? "GPU (plume/Metal)"
                                                 : "GPU (plume/Vulkan)";
-    p->renderer_->set_vsync(options.vsync);
+    p->renderer_->set_vsync(options.vsync != VsyncMode::Off);
     SDL_Log("GPU renderer: %s, device %s", p->name_.c_str(), p->renderer_->device_name().c_str());
     return p;
 #else
@@ -43,9 +43,9 @@ std::unique_ptr<HwPresenter> HwPresenter::create(SDL_Window* window, dw3::Graphi
 #endif
 }
 
-void HwPresenter::set_vsync(bool on) {
-    options_.vsync = on;
-    renderer_->set_vsync(on);
+void HwPresenter::set_vsync(VsyncMode mode) {
+    options_.vsync = mode;
+    renderer_->set_vsync(mode != VsyncMode::Off);
 }
 
 bool HwPresenter::update_options(const PresentOptions& options, dw3::Gpu& gpu) {
@@ -96,7 +96,8 @@ bool HwPresenter::present(dw3::Gpu& gpu, Capture* capture) {
         overlay.rgba = img->rgba.data();
         overlay.w = img->w;
         overlay.h = img->h;
-        overlay.x = overlay.y = osd_.margin();
+        overlay.x = osd_.x(ww);
+        overlay.y = osd_.margin();
         overlay.serial = osd_.serial();
     }
     const bool ok = renderer_->present(gpu.display(), options_.scale, options_.linear, capture ? &capture->rgba : nullptr, &w, &h,

@@ -29,10 +29,18 @@ struct Settings {
         bool precise_geometry = false;
         int output_filter = 0;       // nearest, linear, fsr (scaling the picture to the window)
         int scale_mode = 0;          // fit, integer, stretch
-        int window_width = 1280;
+        int display_mode = 0;        // choice: windowed, borderless, exclusive
+        int monitor = 0;             // 0 is auto (where the window is), 1.. the monitors in the system's order
+        int window_width = 1280;     // windowed size
         int window_height = 960;
-        bool fullscreen = false;
-        bool vsync = true;
+        int fullscreen_width = 0;    // exclusive mode: 0 for the monitor's desktop mode
+        int fullscreen_height = 0;
+        int fullscreen_refresh = 0;  // in hundredths of a hertz; 0 for the highest the size offers
+        int vsync = 1;               // choice: off, on, adaptive
+        int frame_pacing = 1;        // choice: off, even (show each frame for a whole number of refreshes when possible)
+        bool show_fps = false;
+        int gamma = 100;             // percent, 80..140
+        int brightness = 0;          // percent, -50..50
         // Post-processing (GPU renderer only; see docs/SETTINGS.md).
         int antialiasing = 0;        // off, smaa
         int sharpening = 0;          // off, low, medium, high

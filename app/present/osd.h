@@ -38,17 +38,24 @@ class Osd {
 public:
     static constexpr uint64_t kShowMs = 2000;
     static constexpr uint64_t kFadeMs = 400;
+    static constexpr float kStatusOpacity = 0.7f;
 
     void show(std::string text, uint64_t now_ms);
     // The image to draw this frame, or null when there is nothing to show. `opacity` receives 0..1. The image is
     // rebuilt only when the text or the window size changed; `serial()` changes whenever the pixels do.
     const OsdImage* frame(int window_w, int window_h, uint64_t now_ms, float& opacity);
     uint64_t serial() const { return serial_; }
-    // Window position of the box's top-left corner for the last frame().
+    // A line kept on screen whenever no notification shows, in the top-right corner (the frame rate).
+    void set_status(std::string text);
+    // Window position of the box's top-left corner for the last frame(): notifications sit at the top left, the
+    // status line at the top right.
     int margin() const { return margin_; }
+    int x(int window_w) const;
 
 private:
     std::string text_;
+    std::string status_;
+    bool status_shown_ = false;
     uint64_t shown_at_ = 0;
     bool active_ = false;
     OsdImage image_;

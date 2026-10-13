@@ -125,7 +125,7 @@ target_include_directories(test_osd PRIVATE ${PROJECT_SOURCE_DIR}/app)
 
 # Settings model, presets, settings.toml and fast-forward pacing.
 dw3_add_test(test_settings
-    SOURCES app/test_settings.cpp app/test_controls_settings.cpp
+    SOURCES app/test_settings.cpp app/test_controls_settings.cpp app/test_display.cpp
     LIBS dw3settings)
 
 # Bindings, stick maths, pad selection and button prompts.

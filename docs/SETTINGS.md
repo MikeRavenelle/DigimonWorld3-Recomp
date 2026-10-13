@@ -40,9 +40,15 @@ everything else applies immediately.
 | `graphics.color_grade` | `neutral`, `vivid`, `warm`, `cool` | |
 | `graphics.crt` | `off`, `scanlines`, `crt` | |
 | `graphics.scale_mode` | `fit`, `integer`, `stretch` | `--scale` |
-| `graphics.window_width`, `graphics.window_height` | pixels | `--window-size WxH` |
-| `graphics.fullscreen` | bool | `--fullscreen` |
-| `graphics.vsync` | bool | `--no-vsync` |
+| `graphics.display_mode` | `windowed`, `borderless`, `exclusive` | `--display-mode`, `--fullscreen` (borderless) |
+| `graphics.monitor` | 0 (auto: where the window is), 1 and up | `--monitor` |
+| `graphics.window_width`, `graphics.window_height` | pixels; not listed in the in-game screen, which offers common sizes | `--window-size WxH` |
+| `graphics.fullscreen_width`, `graphics.fullscreen_height`, `graphics.fullscreen_refresh` | exclusive mode; refresh in hundredths of a hertz; 0 for the desktop mode or the highest refresh rate; not listed | |
+| `graphics.vsync` | `off`, `on`, `adaptive` | `--no-vsync` |
+| `graphics.frame_pacing` | `off`, `even` | |
+| `graphics.show_fps` | bool | `--show-fps` |
+| `graphics.gamma` | 80 to 140 (percent) | `--gamma` |
+| `graphics.brightness` | -50 to 50 (percent) | `--brightness` |
 | `audio.mute` | bool | `--mute` |
 | `audio.volume` | 0 to 100 | |
 | `audio.device` | device name, empty for the default | |
@@ -213,11 +219,29 @@ right change the value, L1 and R1 jump between the pages (Graphics, Audio, Contr
 page and the row's position in it), and circle or triangle returns to the menu. Every change applies at once and is written to `settings.toml` (nothing is written with `--no-config`).
 
 It lists the options that take effect while playing: the visual preset first, then the graphics options (3D scale,
-true colour, texture filter, precise geometry, HD BG, output filter, scaling, window size, fullscreen, vsync), mute and
+true colour, texture filter, precise geometry, HD BG, output filter, scaling, display mode, monitor, resolution, vsync,
+frame pacing, FPS counter, gamma, brightness), mute and
 volume, the controls (gamepad, left stick, deadzone, button prompts, then one row per binding such as `Cross: Z/A`,
 and a Reset Controls row) and the gameplay options. Cross on a binding row waits for the next key or gamepad button;
 Escape or five seconds cancel. The options that need a restart (renderer, memory cards) stay in the file. Five
 rows show at a time (six when the menu has CARD FOLDERS); the list scrolls.
+
+## Display
+
+- Display mode: `windowed`, `borderless` (a desktop-sized window without borders) or `exclusive` (the monitor
+  switches to the chosen mode). F11 and Alt+Enter toggle between windowed and the last fullscreen mode. A
+  settings.toml with the old `fullscreen = true` loads as `borderless`, and `vsync = false` or `true` as `off` or `on`.
+- Monitor: auto follows the window; the in-game row shows a monitor's name when it is short, otherwise its number.
+- Resolution (in-game row): windowed offers common 4:3, 16:9 and 16:10 sizes that fit the monitor's desktop area;
+  borderless uses the desktop; exclusive lists the monitor's own modes with their refresh rates.
+- Vertical sync `adaptive` needs a presenter that supports it (the software path through SDL, where the driver
+  allows); the GPU renderer treats it as `on`, and the in-game row does not offer it there.
+- Frame pacing `even` (with vertical sync on) shows each emulated frame for the same whole number of refreshes when the
+  display runs at a multiple of 60 Hz (120, 180, 240); other rates, such as 144 Hz, cannot be paced evenly and keep
+  the plain behaviour. There is no frame interpolation.
+- Show FPS draws the emulated frame rate small in the top-right corner (not part of screenshots).
+- Gamma and brightness are applied in the colour-grading pass of the GPU renderer, after the colour grade. They are
+  not part of any visual preset, like the display options.
 
 ## Fast-forward
 

@@ -163,6 +163,8 @@ struct MenuHook {
         RowContext context;
         context.style = style_of(self);
         if (self.controls_) context.capturing = self.controls_->capturing();
+        context.monitors = self.monitors_;
+        context.adaptive_vsync = self.adaptive_vsync_;
         return context;
     }
 
@@ -226,7 +228,16 @@ struct MenuHook {
             for (const auto& [id, value] : controls_reset_changes()) self.pending_.push_back({id, value});
             g.play(kSoundConfirm);
         } else if (left != right) {
-            const std::string value = stepped_value(view, list[selected], right ? 1 : -1);
+            if (list[selected].kind == Kind::Resolution) {
+                const auto changes = resolution_changes(view, context_of(self), right ? 1 : -1);
+                for (const auto& [id, value] : changes) {
+                    self.pending_.push_back({id, value});
+                    std::string ignored;
+                    set_text(view, *find_setting(id), value, ignored);
+                }
+                if (!changes.empty()) g.play(kSoundCursor);
+            }
+            const std::string value = stepped_value(view, list[selected], right ? 1 : -1, context_of(self));
             if (!value.empty()) {
                 self.pending_.push_back({std::string(list[selected].info->id), value});
                 std::string ignored;

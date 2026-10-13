@@ -15,6 +15,7 @@ std::unique_ptr<SoftwarePresenter> SoftwarePresenter::create(SDL_Window* window,
         error = std::string("SDL_CreateRenderer failed: ") + SDL_GetError();
         return nullptr;
     }
+    p->adaptive_vsync_ = SDL_SetRenderVSync(p->renderer_, SDL_RENDERER_VSYNC_ADAPTIVE);
     p->set_vsync(options.vsync);
     return p;
 }
@@ -25,9 +26,10 @@ SoftwarePresenter::~SoftwarePresenter() {
     if (renderer_) SDL_DestroyRenderer(renderer_);
 }
 
-void SoftwarePresenter::set_vsync(bool on) {
-    options_.vsync = on;
-    SDL_SetRenderVSync(renderer_, on ? 1 : 0);
+void SoftwarePresenter::set_vsync(VsyncMode mode) {
+    options_.vsync = mode;
+    const int interval = mode == VsyncMode::Off ? 0 : mode == VsyncMode::Adaptive && adaptive_vsync_ ? SDL_RENDERER_VSYNC_ADAPTIVE : 1;
+    SDL_SetRenderVSync(renderer_, interval);
 }
 
 bool SoftwarePresenter::update_options(const PresentOptions& options, dw3::Gpu&) {
@@ -55,7 +57,7 @@ void SoftwarePresenter::draw_osd() {
         osd_serial_ = osd_.serial();
     }
     SDL_SetTextureAlphaModFloat(osd_texture_, opacity);
-    const SDL_FRect dst = {static_cast<float>(osd_.margin()), static_cast<float>(osd_.margin()),
+    const SDL_FRect dst = {static_cast<float>(osd_.x(ww)), static_cast<float>(osd_.margin()),
                            static_cast<float>(img->w), static_cast<float>(img->h)};
     SDL_RenderTexture(renderer_, osd_texture_, nullptr, &dst);
 }

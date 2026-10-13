@@ -173,6 +173,34 @@ TEST_P(PostFxTest, GradingWithIdentityValuesIsTheIdentity) {
     EXPECT_LE(worst, 1);
 }
 
+TEST_P(PostFxTest, GammaFollowsTheCurveOnEveryChannel) {
+    load([](int, int) { return word(120, 80, 200); });
+    const auto plain = render(nullptr);
+    for (const float gamma : {0.8f, 1.4f}) {
+        PostFx fx;
+        fx.grade.gamma = gamma;
+        const auto graded = render(&fx);
+        for (int c = 0; c < 3; ++c) {
+            const float in = static_cast<float>(channel(plain[100 * kW + 100], c)) / 255.0f;
+            EXPECT_NEAR(channel(graded[100 * kW + 100], c), 255.0f * std::pow(in, 1.0f / gamma), 2.0f) << "gamma " << gamma << " channel " << c;
+        }
+    }
+}
+
+TEST_P(PostFxTest, BrightnessIsAddedAndClamped) {
+    load([](int, int) { return word(120, 80, 248); });
+    const auto plain = render(nullptr);
+    PostFx fx;
+    fx.grade.brightness = 0.1f;
+    const auto brighter = render(&fx);
+    EXPECT_NEAR(channel(brighter[100 * kW + 100], 0), channel(plain[100 * kW + 100], 0) + 25.5f, 2.0f);
+    EXPECT_NEAR(channel(brighter[100 * kW + 100], 1), channel(plain[100 * kW + 100], 1) + 25.5f, 2.0f);
+    EXPECT_EQ(channel(brighter[100 * kW + 100], 2), 255);
+    fx.grade.brightness = -0.1f;
+    const auto darker = render(&fx);
+    EXPECT_NEAR(channel(darker[100 * kW + 100], 0), channel(plain[100 * kW + 100], 0) - 25.5f, 2.0f);
+}
+
 TEST_P(PostFxTest, FsrProducesTheWindowSizedPicture) {
     load(staircase);
     PostFx fx;

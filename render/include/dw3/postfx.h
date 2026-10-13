@@ -20,10 +20,11 @@ struct GradeParams {
     float contrast = 1.0f;
     float vibrance = 0.0f;  // extra saturation for dull colours only
     float gamma = 1.0f;
+    float brightness = 0.0f;  // added to every channel after gamma (-0.5..0.5)
     float tint[3] = {1.0f, 1.0f, 1.0f};
     bool neutral() const {
-        return saturation == 1.0f && contrast == 1.0f && vibrance == 0.0f && gamma == 1.0f && tint[0] == 1.0f &&
-               tint[1] == 1.0f && tint[2] == 1.0f;
+        return saturation == 1.0f && contrast == 1.0f && vibrance == 0.0f && gamma == 1.0f && brightness == 0.0f &&
+               tint[0] == 1.0f && tint[1] == 1.0f && tint[2] == 1.0f;
     }
 };
 

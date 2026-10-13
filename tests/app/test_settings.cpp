@@ -43,7 +43,8 @@ TEST(Settings, DefaultsAreTheOriginalPicture) {
     EXPECT_EQ(bundle_of(s), preset(kPresetOriginal).graphics);
     EXPECT_EQ(s.graphics.internal_res, 1);
     EXPECT_FALSE(s.graphics.true_color);
-    EXPECT_TRUE(s.graphics.vsync);
+    EXPECT_EQ(s.graphics.vsync, 1);
+    EXPECT_EQ(s.graphics.display_mode, 0);
 }
 
 TEST(Settings, MetadataIsCompleteAndConsistent) {
@@ -111,7 +112,7 @@ TEST(Settings, InvalidValuesFallBackWithAMessage) {
     EXPECT_EQ(s.graphics.texture_filter, 0);
     EXPECT_FALSE(s.graphics.true_color);
     EXPECT_EQ(s.audio.volume, 100);
-    EXPECT_FALSE(s.graphics.vsync);  // valid values next to bad ones still load
+    EXPECT_EQ(s.graphics.vsync, 0);  // valid values next to bad ones still load
 }
 
 TEST(Settings, UnparsableFileGivesDefaults) {
@@ -479,4 +480,126 @@ TEST(Presets, OnlyRemasterTurnsHdBackgroundsOn) {
     ASSERT_TRUE(set(s, "graphics.hd_backgrounds", "false"));
     EXPECT_EQ(s.graphics.preset, kPresetCustom);
     EXPECT_EQ(s.graphics.preset_base, kPresetRemaster);
+}
+
+// ---- Display settings ------------------------------------------------------------------------------------------
+
+namespace {
+Settings from(std::string_view toml) {
+    LoadReport report;
+    const Settings s = settings_from_toml(toml, report);
+    EXPECT_TRUE(report.messages.empty()) << (report.messages.empty() ? "" : report.messages.front());
+    return s;
+}
+}  // namespace
+
+TEST(DisplaySettings, OldFullscreenSwitchBecomesTheDisplayMode) {
+    EXPECT_EQ(from("[graphics]\nfullscreen = true\n").graphics.display_mode, 1);
+    EXPECT_EQ(from("[graphics]\nfullscreen = false\n").graphics.display_mode, 0);
+    EXPECT_EQ(from("[graphics]\nwindow_width = 1600\n").graphics.display_mode, 0);
+}
+
+TEST(DisplaySettings, ANewDisplayModeBeatsTheOldSwitch) {
+    EXPECT_EQ(from("[graphics]\nfullscreen = true\ndisplay_mode = \"windowed\"\n").graphics.display_mode, 0);
+    EXPECT_EQ(from("[graphics]\nfullscreen = false\ndisplay_mode = \"exclusive\"\n").graphics.display_mode, 2);
+}
+
+TEST(DisplaySettings, OldVsyncSwitchBecomesOffOrOn) {
+    EXPECT_EQ(from("[graphics]\nvsync = false\n").graphics.vsync, 0);
+    EXPECT_EQ(from("[graphics]\nvsync = true\n").graphics.vsync, 1);
+    EXPECT_EQ(from("[graphics]\nvsync = \"adaptive\"\n").graphics.vsync, 2);
+}
+
+TEST(DisplaySettings, MigratedFilesAreWrittenInTheNewForm) {
+    const std::string text = settings_to_toml(from("[graphics]\nfullscreen = true\nvsync = false\n"));
+    EXPECT_NE(text.find("display_mode = \"borderless\""), std::string::npos);
+    EXPECT_NE(text.find("vsync = \"off\""), std::string::npos);
+    EXPECT_EQ(text.find("fullscreen = "), std::string::npos);
+}
+
+TEST(DisplaySettings, EveryDisplaySettingRoundTrips) {
+    Settings s = defaults();
+    ASSERT_TRUE(set(s, "graphics.display_mode", "exclusive"));
+    ASSERT_TRUE(set(s, "graphics.monitor", "2"));
+    ASSERT_TRUE(set(s, "graphics.window_width", "1600"));
+    ASSERT_TRUE(set(s, "graphics.window_height", "1200"));
+    ASSERT_TRUE(set(s, "graphics.fullscreen_width", "1920"));
+    ASSERT_TRUE(set(s, "graphics.fullscreen_height", "1080"));
+    ASSERT_TRUE(set(s, "graphics.fullscreen_refresh", "14400"));
+    ASSERT_TRUE(set(s, "graphics.vsync", "adaptive"));
+    ASSERT_TRUE(set(s, "graphics.frame_pacing", "off"));
+    ASSERT_TRUE(set(s, "graphics.show_fps", "true"));
+    ASSERT_TRUE(set(s, "graphics.gamma", "125"));
+    ASSERT_TRUE(set(s, "graphics.brightness", "-15"));
+    LoadReport report;
+    const Settings back = settings_from_toml(settings_to_toml(s), report);
+    EXPECT_TRUE(report.messages.empty());
+    EXPECT_EQ(back, s);
+}
+
+TEST(DisplaySettings, ValuesAreRangeChecked) {
+    Settings s = defaults();
+    EXPECT_FALSE(set(s, "graphics.gamma", "79"));
+    EXPECT_FALSE(set(s, "graphics.gamma", "141"));
+    EXPECT_FALSE(set(s, "graphics.brightness", "51"));
+    EXPECT_FALSE(set(s, "graphics.monitor", "-1"));
+    EXPECT_FALSE(set(s, "graphics.display_mode", "fullscreen"));
+    EXPECT_FALSE(set(s, "graphics.vsync", "maybe"));
+    EXPECT_TRUE(set(s, "graphics.gamma", "80"));
+    EXPECT_TRUE(set(s, "graphics.gamma", "140"));
+}
+
+TEST(DisplaySettings, TheOldFullscreenKeyIsNoLongerASetting) {
+    EXPECT_EQ(find_setting("graphics.fullscreen"), nullptr);
+    EXPECT_NE(find_setting("graphics.display_mode"), nullptr);
+}
+
+TEST(DisplaySettings, PresetsLeaveDisplayAndPictureAdjustmentsAlone) {
+    for (const std::string_view id : {"graphics.display_mode", "graphics.monitor", "graphics.window_width", "graphics.window_height",
+                                      "graphics.fullscreen_width", "graphics.vsync", "graphics.frame_pacing", "graphics.show_fps",
+                                      "graphics.gamma", "graphics.brightness"})
+        for (const std::string_view member : preset_member_ids()) EXPECT_NE(id, member);
+    Settings s = defaults();
+    ASSERT_TRUE(set(s, "graphics.display_mode", "borderless"));
+    ASSERT_TRUE(set(s, "graphics.gamma", "120"));
+    ASSERT_TRUE(set(s, "graphics.brightness", "10"));
+    ASSERT_TRUE(set(s, "graphics.vsync", "off"));
+    for (int p = 0; p < kNamedPresets; ++p) {
+        ASSERT_TRUE(set(s, "graphics.preset", preset(p).name));
+        EXPECT_EQ(s.graphics.preset, p);
+        EXPECT_EQ(s.graphics.display_mode, 1);
+        EXPECT_EQ(s.graphics.gamma, 120);
+        EXPECT_EQ(s.graphics.brightness, 10);
+        EXPECT_EQ(s.graphics.vsync, 0);
+    }
+}
+
+TEST(DisplaySettings, ChangingThemKeepsThePreset) {
+    Settings s = defaults();
+    ASSERT_TRUE(set(s, "graphics.preset", "enhanced"));
+    ASSERT_TRUE(set(s, "graphics.gamma", "110"));
+    ASSERT_TRUE(set(s, "graphics.show_fps", "true"));
+    EXPECT_EQ(s.graphics.preset, kPresetEnhanced);
+}
+
+TEST(DisplaySettings, TheComparisonToggleKeepsTheDisplayChoices) {
+    RecordingSink sink;
+    Settings s = defaults();
+    set(s, "graphics.preset", "remaster");
+    set(s, "graphics.display_mode", "borderless");
+    set(s, "graphics.gamma", "115");
+    SettingsController c(s, s, &sink, {});
+    c.toggle_comparison();
+    EXPECT_EQ(c.active().graphics.display_mode, 1);
+    EXPECT_EQ(c.active().graphics.gamma, 115);
+}
+
+TEST(DisplaySettings, AllOfThemApplyLive) {
+    for (const std::string_view id : {"graphics.display_mode", "graphics.monitor", "graphics.vsync", "graphics.frame_pacing",
+                                      "graphics.show_fps", "graphics.gamma", "graphics.brightness"}) {
+        const SettingInfo* info = find_setting(id);
+        ASSERT_NE(info, nullptr) << id;
+        EXPECT_FALSE(info->is_restart()) << id;
+        EXPECT_FALSE(info->hidden) << id;
+    }
 }

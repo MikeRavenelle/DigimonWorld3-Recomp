@@ -13,7 +13,7 @@ public:
     ~HwPresenter() override;
 
     const char* name() const override { return name_.c_str(); }
-    void set_vsync(bool on) override;
+    void set_vsync(VsyncMode mode) override;
     bool update_options(const PresentOptions& options, dw3::Gpu& gpu) override;
     bool present(dw3::Gpu& gpu, Capture* capture) override;
     void attach(dw3::Gpu& gpu) override;

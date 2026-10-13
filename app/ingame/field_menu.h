@@ -12,6 +12,7 @@
 
 #include "controller.h"
 #include "controls_host.h"
+#include "display.h"
 #include "dw3/machine.h"
 
 namespace dw3app::ingame {
@@ -29,6 +30,13 @@ public:
     // hook, where the presenter may be reconfigured safely (the game code that asks for the change runs mid-frame).
     void apply_pending();
 
+    // What the monitor and resolution rows choose from, and whether vertical sync can be adaptive. The list must
+    // outlive the screen or be replaced before it is freed; null leaves those rows without choices.
+    void set_display_context(const MonitorList* monitors, bool adaptive_vsync) {
+        monitors_ = monitors;
+        adaptive_vsync_ = adaptive_vsync;
+    }
+
 private:
     friend struct MenuHook;
     struct Change {
@@ -38,6 +46,8 @@ private:
     SettingsController& controller_;
     input::ControlsHost* controls_;
     std::vector<Change> pending_;
+    const MonitorList* monitors_ = nullptr;
+    bool adaptive_vsync_ = false;
 };
 
 }  // namespace dw3app::ingame
