@@ -8,7 +8,10 @@
 //                      follow on the command line still override its members
 //
 // Options:
-//   --disc PATH        disc image (.cue); default game/Digimon World 3 (USA).cue
+//   --disc PATH        disc image (.cue), used as given; default: the path saved by the first-run setup (system.disc_path),
+//                      then game/Digimon World 3 (USA).cue if that exists
+//   --setup            open the first-run setup window (it also opens by itself when no valid disc is configured)
+//   --setup-shots DIR  with --setup: walk through the setup unattended, saving a picture of each page to DIR (nothing is saved)
 //   --frames N         exit after N emulated frames (audit runs)
 //   --screenshot PATH  save a BMP of the last frame before exiting
 //   --trace-bios       log every kernel call
@@ -85,11 +88,17 @@
 #include "present/post_options.h"
 #include "present/presenter.h"
 #include "present/texture_packs.h"
+#include "assets.h"
+#include "disc_check.h"
+#include "disc_location.h"
+#include "wizard_ui.h"
 
 namespace {
 
 struct Options {
-    std::string disc = "game/Digimon World 3 (USA).cue";
+    std::string disc;  // --disc, as given
+    bool setup = false;
+    std::string setup_shots;
     int max_frames = -1;
     std::string screenshot;
     bool trace_bios = false;
@@ -204,6 +213,8 @@ Options parse(int argc, char** argv) {
     for (int i = 1; i < argc; ++i) {
         std::string a = argv[i];
         if (a == "--disc" && i + 1 < argc) o.disc = argv[++i];
+        else if (a == "--setup") o.setup = true;
+        else if (a == "--setup-shots" && i + 1 < argc) o.setup_shots = argv[++i];
         else if (a == "--frames" && i + 1 < argc) o.max_frames = std::atoi(argv[++i]);
         else if (a == "--screenshot" && i + 1 < argc) o.screenshot = argv[++i];
         else if (a == "--trace-bios") o.trace_bios = true;
@@ -333,8 +344,40 @@ int main(int argc, char** argv) {
     SDL_Log("no recompiled code linked: run `cmake --build <dir> --target recompile` and reconfigure");
     return 1;
 #else
+    // The disc: --disc, else the one the setup saved, else the checkout's own copy. With none, the setup window opens (not in
+    // audit runs, which must not wait for a person).
+    auto disc_usable = [](const std::string& p) { return dw3setup::check_disc(dw3::platform::path_from_utf8(p)).ok(); };
+    std::optional<std::string> disc = dw3setup::locate_disc(opt.disc, active.system.disc_path, "game/Digimon World 3 (USA).cue", disc_usable);
+    if (opt.setup || !disc) {
+        if (opt.max_frames >= 0) {
+            std::fprintf(stderr, "no disc image: pass --disc PATH, or run without --frames to open the setup\n");
+            return 1;
+        }
+        dw3setup::WizardLaunch launch;
+        launch.initial_disc = disc ? *disc : active.system.disc_path;
+        launch.user_data = dw3::platform::user_data_dir();
+        launch.screenshot_dir = opt.setup_shots;
+        const dw3setup::WizardOutcome outcome = dw3setup::run_setup_wizard(launch);
+        if (!outcome.completed) return opt.setup ? 0 : 1;
+        auto store = [&](const char* id, const std::string& value) {
+            for (dw3app::Settings* target : {&stored, &active}) {
+                std::string err;
+                if (!dw3app::set_text(*target, *dw3app::find_setting(id), value, err)) SDL_Log("settings: %s", err.c_str());
+            }
+        };
+        store("system.disc_path", outcome.disc_path);
+        if (outcome.hd_backgrounds) {
+            store("graphics.texture_pack", dw3setup::kPackName);
+            store("graphics.hd_backgrounds", "true");
+        }
+        if (!config_file.empty()) {
+            std::string err;
+            if (!dw3app::save_settings_file(config_file, stored, err)) SDL_Log("settings: %s", err.c_str());
+        }
+        disc = outcome.disc_path;
+    }
     dw3::host::Config cfg;
-    cfg.disc_path = opt.disc;
+    cfg.disc_path = *disc;
     cfg.card_mode = active.system.memcards ? dw3::host::CardMode::Files : dw3::host::CardMode::None;
     cfg.card_path = {active.system.memcard1, active.system.memcard2};
     cfg.trace_bios = opt.trace_bios;

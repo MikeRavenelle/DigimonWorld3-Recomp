@@ -89,6 +89,8 @@ const SettingInfo kSettings[] = {
      Group::System, Type::String, Apply::Restart, 0, 0, {}, false, DW3_FIELD(system.memcard1)},
     {"system.memcard2", "Memory card 2", "Path of the slot 2 card image; empty uses <user data>/memcards/slot2.mcd (inserted only if it exists).",
      Group::System, Type::String, Apply::Restart, 0, 0, {}, false, DW3_FIELD(system.memcard2)},
+    {"system.disc_path", "Disc image", "Path of the Digimon World 3 (USA) disc image (.cue); set by the first-run setup.",
+     Group::System, Type::String, Apply::Restart, 0, 0, {}, true, DW3_FIELD(system.disc_path)},
     {"system.fast_forward_speed", "Fast-forward speed", "Speed while fast-forwarding (hold Tab, or press F10 to latch it).",
      Group::System, Type::Choice, Apply::Live, 0, 0, kSpeeds, false, DW3_FIELD(system.fast_forward_speed)},
 

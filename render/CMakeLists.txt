@@ -14,6 +14,7 @@ add_library(dw3texrep STATIC
     src/texrep/pack.cpp
     src/texrep/dump.cpp
     src/texrep/generate.cpp
+    src/texrep/pack_job.cpp
     src/texrep/stage_pack.cpp
     src/texrep/stage_dump.cpp
     src/texrep/window.cpp

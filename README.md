@@ -23,6 +23,22 @@ cmake --build --preset linux-x64-debug
 ctest --preset linux-x64-debug
 ```
 
+## First run
+
+The program ships without game data. On first start (or whenever no valid disc is configured) a setup window asks for
+your own disc image of Digimon World 3 (USA): choose its `.cue`, the program checks the serial (SLUS-01436) and the
+SHA-256 of the game executable, and saves the path as `system.disc_path` in `settings.toml`. `--setup` opens the window
+again. `--disc PATH` overrides the saved path for one run.
+
+The window also offers HD backgrounds, which is optional and off until you accept. Accepting downloads the
+realesrgan-ncnn-vulkan upscaler (v0.2.0, MIT, about 2 to 9 MB depending on the platform) from its official release and
+the converted Real-ESRGAN model (BSD 3-Clause) from this project's releases, using the `curl` that comes with your
+system. Every file is checked against a fixed SHA-256, unpacked into `<user data>/tools`, and then a texture pack is
+built from your disc on your own computer (this takes a long time and needs a Vulkan GPU; it can be cancelled and
+resumed). If `curl` is missing the window lists the addresses and the folder to put the files in. Options that matter
+while playing stay in the game's own settings screen. See `docs/SETTINGS.md` for details and
+`tools/models/` for how the model files are made.
+
 ## Game files
 
 Put your dump at `game/Digimon World 3 (USA).bin` / `.cue`. That directory is git-ignored. Tests

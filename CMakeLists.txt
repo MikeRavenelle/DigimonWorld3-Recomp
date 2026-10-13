@@ -62,6 +62,7 @@ add_custom_target(recompile
 
 add_subdirectory(app/settings)
 add_subdirectory(app/ingame)
+add_subdirectory(app/wizard)
 
 if(DW3_BUILD_APP)
     add_subdirectory(app)

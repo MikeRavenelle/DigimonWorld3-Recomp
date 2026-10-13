@@ -48,6 +48,7 @@ everything else applies immediately.
 | `audio.device` | device name, empty for the default | |
 | `system.memcards` (restart) | bool | `--no-memcard` |
 | `system.memcard1`, `system.memcard2` (restart) | paths, empty for the defaults | `--memcard1`, `--memcard2` |
+| `system.disc_path` (restart) | path of the disc image (`.cue`); written by the first-run setup, not listed in the in-game screen | `--disc` |
 | `system.fast_forward_speed` | `2x`, `4x`, `unlimited` | `--fast-forward-speed` |
 | `gameplay.encounters` | `normal`, `half`, `off`, `double` | `--encounters` |
 | `gameplay.game_speed` | `1x`, `2x`, `3x`, `4x` | `--game-speed` |
@@ -102,6 +103,10 @@ them with sharper versions from a texture pack while everything else (characters
 The game does not come with such a pack: you make one on your own computer from your own disc, using an AI upscaler.
 Packs need the GPU renderer; with the software renderer the option is ignored. Best results need an internal
 resolution equal to the pack's scale (4x for the default pack); other values work but resample the pack.
+
+The first-run setup (`dw3recomp --setup`) can do all of this for you: on "Accept" it downloads the upscaler and the model
+into `<user data dir>/tools` (checked by SHA-256, with the system `curl`), builds a pack named `disc-hd` from the disc,
+and sets `graphics.hd_backgrounds` and `graphics.texture_pack`. The steps below are the manual route.
 
 Making a pack:
 

@@ -6,7 +6,7 @@ add_executable(dw3recomp main.cpp
     present/texture_packs.cpp
     present/native_window.cpp)
 target_include_directories(dw3recomp PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
-target_link_libraries(dw3recomp PRIVATE dw3runtime dw3render dw3settings dw3ingame psxdisc SDL3::SDL3)
+target_link_libraries(dw3recomp PRIVATE dw3runtime dw3render dw3settings dw3ingame dw3wizard_ui psxdisc SDL3::SDL3)
 if(DW3_HAVE_GENERATED)
     target_link_libraries(dw3recomp PRIVATE dw3host)
     target_compile_definitions(dw3recomp PRIVATE DW3_HAVE_GENERATED=1)
