@@ -21,4 +21,24 @@ inline uint32_t scaled_experience(uint32_t amount, int multiplier) {
     return static_cast<uint32_t>(std::min<uint64_t>(scaled, kMaxExperience));
 }
 
+// Text speed (gameplay.text_speed): normal, fast, instant.
+enum class TextSpeed { Normal, Fast, Instant };
+constexpr int kFastTextChars = 3;  // characters a window prints per frame at "fast"
+
+inline TextSpeed text_speed(int choice) { return choice == 1 ? TextSpeed::Fast : choice == 2 ? TextSpeed::Instant : TextSpeed::Normal; }
+
+// How far a message window has printed before its own tick of this frame. `shown` is the position printed so far and
+// `page_end` where the current box ends. Fast moves ahead by kFastTextChars - 1 (the window's tick adds the last one)
+// without passing the end; instant prints the whole box.
+inline uint32_t text_position_before_tick(TextSpeed speed, uint32_t shown, uint32_t page_end) {
+    switch (speed) {
+        case TextSpeed::Instant: return std::max(shown, page_end);
+        case TextSpeed::Fast: {
+            const uint32_t last_before_end = page_end > 0 ? page_end - 1 : 0;
+            return std::max(shown, std::min(shown + (kFastTextChars - 1), last_before_end));
+        }
+        default: return shown;
+    }
+}
+
 }  // namespace dw3app

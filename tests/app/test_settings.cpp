@@ -385,6 +385,7 @@ TEST(GameplaySettings, DefaultsAreTheOriginalGame) {
     EXPECT_EQ(get_text(s, *find_setting("gameplay.game_speed")), "1x");
     EXPECT_EQ(get_text(s, *find_setting("gameplay.god_mode")), "false");
     EXPECT_EQ(get_text(s, *find_setting("gameplay.xp_multiplier")), "1x");
+    EXPECT_EQ(get_text(s, *find_setting("gameplay.text_speed")), "normal");
 }
 
 TEST(GameplaySettings, ValuesRoundTripThroughToml) {
@@ -393,6 +394,8 @@ TEST(GameplaySettings, ValuesRoundTripThroughToml) {
     EXPECT_TRUE(set(s, "gameplay.game_speed", "3x"));
     EXPECT_TRUE(set(s, "gameplay.god_mode", "true"));
     EXPECT_TRUE(set(s, "gameplay.xp_multiplier", "5x"));
+    EXPECT_TRUE(set(s, "gameplay.text_speed", "instant"));
+    EXPECT_FALSE(set(s, "gameplay.text_speed", "slow"));
     EXPECT_FALSE(set(s, "gameplay.game_speed", "9x"));
     EXPECT_FALSE(set(s, "gameplay.xp_multiplier", "4x"));
     LoadReport report;
@@ -416,6 +419,30 @@ TEST(Experience, AwardScalesAndStopsAtTheFieldMaximum) {
     EXPECT_EQ(scaled_experience(100000, 10), kMaxExperience);
     EXPECT_EQ(scaled_experience(0xFFFFFFFFu, 10), kMaxExperience);
     EXPECT_EQ(scaled_experience(6, 0), 6u);
+}
+
+TEST(TextSpeed, ChoiceMapsToSpeed) {
+    EXPECT_EQ(text_speed(0), TextSpeed::Normal);
+    EXPECT_EQ(text_speed(1), TextSpeed::Fast);
+    EXPECT_EQ(text_speed(2), TextSpeed::Instant);
+    EXPECT_EQ(text_speed(7), TextSpeed::Normal);
+}
+
+TEST(TextSpeed, NormalLeavesTheWindowAlone) {
+    EXPECT_EQ(text_position_before_tick(TextSpeed::Normal, 5, 55), 5u);
+}
+
+TEST(TextSpeed, FastAdvancesAndStopsShortOfTheBoxEnd) {
+    EXPECT_EQ(text_position_before_tick(TextSpeed::Fast, 5, 55), 5u + kFastTextChars - 1);
+    EXPECT_EQ(text_position_before_tick(TextSpeed::Fast, 52, 55), 53u);
+    EXPECT_EQ(text_position_before_tick(TextSpeed::Fast, 54, 55), 54u);
+    EXPECT_EQ(text_position_before_tick(TextSpeed::Fast, 0, 0), 0u);
+    EXPECT_EQ(text_position_before_tick(TextSpeed::Fast, 60, 55), 60u);
+}
+
+TEST(TextSpeed, InstantPrintsTheWholeBox) {
+    EXPECT_EQ(text_position_before_tick(TextSpeed::Instant, 5, 55), 55u);
+    EXPECT_EQ(text_position_before_tick(TextSpeed::Instant, 60, 55), 60u);
 }
 
 TEST(GameSpeed, MultiplierFollowsTheChoice) {

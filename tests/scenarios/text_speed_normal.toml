@@ -1,0 +1,40 @@
+name = "text_speed_normal"
+description = "Normal text speed: the first field dialogue box prints one character every few frames."
+frames = 1710
+memcard = "none"
+settings = ["gameplay.text_speed=normal"]
+
+# Title -> New Game -> the opening scenes (CROSS clicks through them) up to the first field dialogue on the street corner in
+# Kusanagi City; the CROSS taps stop before that box so that it prints on its own. Its window object is at 0x800CD6A0:
+#   +0x0C state (1 printing, 2 waiting for the button)   +0xA4 characters printed so far (45 once it has printed itself, 55 when a button skipped it)
+# The window prints one character every 7 frames (normal), three per frame (fast) or the whole box at once (instant).
+
+[[press]]
+button = "START"
+at = 900
+
+[[press]]
+button = "UP"
+at = 960
+
+[[press]]
+button = "CROSS"
+at = 1020
+
+[[repeat]]
+button = "CROSS"
+from = 1100
+to = 1630
+every = 45
+hold = 3
+
+[[check]]
+at = 1640
+label = "normal: 1 printed"
+ram = [{ addr = 0x800CD744, size = 2, value = 1 }, { addr = 0x800CD6AC, size = 4, value = 1 }]
+
+[[check]]
+at = 1650
+label = "normal: 2 printed"
+ram = [{ addr = 0x800CD744, size = 2, value = 2 }, { addr = 0x800CD6AC, size = 4, value = 1 }]
+

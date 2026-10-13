@@ -217,6 +217,7 @@ Options parse(int argc, char** argv) {
         else if (a == "--game-speed" && i + 1 < argc) set("gameplay.game_speed", argv[++i]);
         else if (a == "--god-mode") set("gameplay.god_mode", "true");
         else if (a == "--xp-multiplier" && i + 1 < argc) set("gameplay.xp_multiplier", argv[++i]);
+        else if (a == "--text-speed" && i + 1 < argc) set("gameplay.text_speed", argv[++i]);
         else if (a == "--screenshot-every" && i + 2 < argc) {
             o.shot_every = std::atoi(argv[++i]);
             o.shot_dir = argv[++i];
