@@ -15,6 +15,7 @@ public:
     const char* name() const override { return name_.c_str(); }
     void set_vsync(VsyncMode mode) override;
     bool update_options(const PresentOptions& options, dw3::Gpu& gpu) override;
+    void set_wide_active(bool active) override;
     bool present(dw3::Gpu& gpu, Capture* capture) override;
     void attach(dw3::Gpu& gpu) override;
     bool set_texture_dump(const std::string& directory) override;

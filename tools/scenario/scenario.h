@@ -13,6 +13,8 @@
 //
 //   settings = ["gameplay.encounters=off"]   # application settings for this run, as id=value (ids as in settings.toml);
 //                              # everything else keeps its default
+//   gpu = true                 # draw with a headless GPU renderer instead of the software rasterizer (skips when the
+//                              # machine has no usable GPU); implied by a graphics.widescreen setting
 //
 //   [[reboot]]                 # power-cycle the machine at frame `at`: RAM, GPU and game state are lost, the
 //   at = 4000                  # memory card image is kept. Frames in the file stay global; the intro skip
@@ -99,6 +101,9 @@
 //                              # bits) and `cmp` = "eq" (default) | "ne" | "lt" | "le" | "gt" | "ge"; with `via` = P
 //                              # the address is the word at P plus `addr` (false while P is not a RAM pointer)
 //   screenshot = true          # save BMP of the display (for review; never committed)
+//   margin_colors_min = 8      # needs `gpu = true` (or a widescreen setting): the picture rendered by the GPU renderer at
+//   margin_colors_max = 1      # 1280x720 must show at least / at most that many distinct colours in the outer 10% of its
+//                              # columns (1 is the black pillarbox of a 4:3 picture)
 //   audio_min_rms = 100.0      # RMS (int16 units, both channels) of the mixed output over the last `audio_frames` video frames
 //   audio_max_rms = 20000.0
 //   audio_frames = 60          # window length in video frames (default 60)
@@ -174,6 +179,7 @@ struct Check {
     std::optional<std::string> tty_contains;
     std::optional<int> min_disc_backgrounds;
     std::optional<std::array<uint64_t, 4>> screen_hash;
+    std::optional<int> margin_colors_min, margin_colors_max;
     int max_hash_distance = 24;
     std::vector<RamCheck> ram;
     bool screenshot = false;
@@ -196,6 +202,7 @@ struct Scenario {
     bool skip_intro = true;
     std::string memcard = "none";
     std::vector<std::string> settings;  // "id=value"
+    bool gpu = false;  // draw with a headless GPU renderer (implied by a widescreen setting)
     std::vector<Press> presses;
     std::vector<int64_t> reboots;  // sorted, within (0, frames)
     std::vector<StateOp> saves, loads;  // sorted by `at`

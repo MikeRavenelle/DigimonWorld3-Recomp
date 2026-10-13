@@ -29,6 +29,7 @@ constexpr Labels kLabels[] = {
     {"graphics.color_grade", "Color", 1},
     {"graphics.crt", "CRT", 1},
     {"graphics.scale_mode", "Scaling", 1},
+    {"graphics.widescreen", "Wide Battle", 1},
     {"graphics.display_mode", "Display", 1},
     {"graphics.monitor", "Monitor", 1},
     {"graphics.vsync", "VSync", 1},
@@ -63,6 +64,7 @@ std::string choice_label(std::string_view name) {
     if (name == "smaa") return "SMAA";
     if (name == "fsr") return "FSR";
     if (name == "crt") return "Full";
+    if (name.find(':') != std::string_view::npos) return std::string(name);
     if (name.size() == 2 && name[1] == 'x' && std::isdigit(static_cast<unsigned char>(name[0]))) return std::string(1, name[0]) + "X";
     if (name == "unlimited") return "Max";
     if (name == "playstation") return "PlayStation";

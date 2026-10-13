@@ -20,9 +20,10 @@ struct PresentRect {
 constexpr int kDisplayAspectNum = 4;
 constexpr int kDisplayAspectDen = 3;
 
-// Destination rectangle, in window pixels, for a src_w x src_h display area. Returns an empty rectangle
-// for degenerate sizes.
-PresentRect compute_present_rect(int src_w, int src_h, int win_w, int win_h, ScaleMode mode);
+// Destination rectangle, in window pixels, for a src_w x src_h display area shown at aspect_num:aspect_den (4:3
+// unless the picture is widened). Returns an empty rectangle for degenerate sizes.
+PresentRect compute_present_rect(int src_w, int src_h, int win_w, int win_h, ScaleMode mode,
+                                 int aspect_num = kDisplayAspectNum, int aspect_den = kDisplayAspectDen);
 
 // Parses "fit", "integer" or "stretch". Returns false on anything else.
 bool parse_scale_mode(const char* text, ScaleMode& out);

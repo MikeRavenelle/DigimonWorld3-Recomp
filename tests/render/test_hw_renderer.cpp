@@ -19,6 +19,7 @@
 #include "dw3/texrep/blocks.h"
 #include "dw3/texrep/pack.h"
 #include "dw3/vertex_builder.h"
+#include "dw3/widescreen.h"
 
 #if DW3_HW_RENDERER
 #include "dw3/hw_renderer.h"
@@ -1624,6 +1625,67 @@ TEST(HwReplacementReconfigure, PackCanBeEnabledAndDisabled) {
         EXPECT_EQ(hw->internal_scale(), 2);
     }
 }
+
+// The wide frame copy: while mirroring is on, draws into a frame buffer also land, shifted, in extra render-target
+// columns, 3D geometry beyond the 4:3 area fills the margins and 2D shapes stay centred.
+class HwWideFrame : public ::testing::TestWithParam<GpuParam> {};
+
+TEST_P(HwWideFrame, MarginsShowTheWorldAndTheHudStaysCentred) {
+    std::string error;
+    HwOptions o;
+    o.wide_frame = make_wide_frame(WideAspect::Ratio16x9);
+    auto hw = create_renderer(GetParam(), error, o);
+    if (!hw) GTEST_SKIP() << "no GPU device: " << error;
+    std::vector<uint16_t> vram(kPixels, 0);
+    hw->vram_written(vram, {});
+    DrawState world;
+    world.area_x2 = 319;
+    world.area_y2 = 239;
+    world.off_x = 160;
+    world.off_y = 120;
+    DrawState hud = world;
+    hud.off_x = hud.off_y = 0;
+    PrimitiveFlags flat;
+    DisplayState display;
+    display.enabled = true;
+
+    // Mirroring off: nothing reaches the copy, and the 4:3 picture is shown.
+    hw->rect(vram, world, flat, gv(0, 0, 0, 0, 0), 320, 240);
+    std::vector<uint32_t> img;
+    ASSERT_TRUE(hw->render_to_image(display, ScaleMode::Fit, false, nullptr, 424, 240, img));
+    EXPECT_EQ(img[100 * 424 + 4] & 0xFFFFFF, 0u) << "pillarbox";
+
+    hw->set_wide_mirror(true);
+    hw->rect(vram, world, flat, gv(0, 0, 0, 0, 0), 320, 240);                               // clear, full width
+    const GpuVertex red[3] = {gv(-40, 100, 248, 0, 0), gv(-10, 100, 248, 0, 0), gv(-40, 130, 248, 0, 0)};
+    hw->triangle(vram, world, flat, red);                                                  // wholly outside the 4:3 area
+    hw->rect(vram, hud, flat, gv(10, 10, 0, 248, 0), 20, 20);                               // HUD box
+    hw->rect(vram, hud, flat, gv(0, 200, 0, 0, 248), 320, 10);                              // HUD bar touching both edges
+    ASSERT_TRUE(hw->render_to_image(display, ScaleMode::Fit, false, nullptr, 424, 240, img));
+    auto px = [&](int x, int y) { return img[static_cast<std::size_t>(y) * 424 + x] & 0xFFFFFF; };
+    constexpr uint32_t kGreen = 0x00FF00, kBlue = 0xFF0000;
+    EXPECT_EQ(px(17, 105) & 0xFF, 0xFFu) << "world triangle in the left margin";
+    EXPECT_EQ(px(17, 105) & 0xFFFF00, 0u);
+    EXPECT_EQ(px(52 + 20, 20), kGreen) << "HUD box centred";
+    EXPECT_EQ(px(20, 20), 0u) << "nothing of the HUD in the margin";
+    EXPECT_EQ(px(3, 205), kBlue) << "edge-touching bar stretches into the left margin";
+    EXPECT_EQ(px(420, 205), kBlue) << "and the right one";
+
+    // The picture the game sees is unchanged: the triangle was clipped away and the extra columns are not VRAM.
+    std::vector<uint16_t> back(kPixels);
+    hw->read_vram(back);
+    EXPECT_EQ(back[105 * kVramWidth + 2], 0u);
+    EXPECT_EQ(back[205 * kVramWidth + 100], static_cast<uint16_t>(31 << 10));
+
+    // Stopping the mirror returns to the 4:3 picture.
+    hw->set_wide_mirror(false);
+    ASSERT_TRUE(hw->render_to_image(display, ScaleMode::Fit, false, nullptr, 424, 240, img));
+    EXPECT_EQ(px(3, 205), 0u);
+    EXPECT_EQ(px(53 + 20, 20), kGreen);
+}
+
+INSTANTIATE_TEST_SUITE_P(Wide, HwWideFrame, ::testing::ValuesIn(gpu_params({1, 2})), gpu_param_name);
+
 
 }  // namespace
 #endif  // DW3_HW_RENDERER

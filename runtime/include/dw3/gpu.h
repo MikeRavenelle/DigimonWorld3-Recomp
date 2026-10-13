@@ -100,6 +100,8 @@ struct DisplayState {
     int h_start = 0x200, h_end = 0xC00;   // GP1(06), video clocks
     int v_start = 0x10, v_end = 0x100;    // GP1(07), scanlines
     int width = 320, height = 240;        // from GP1(08)
+    // Shown at this aspect; the renderer widens it from 4:3 when it substitutes its wide frame copy.
+    int aspect_num = 4, aspect_den = 3;
 };
 
 class Gpu : public DmaDevice {

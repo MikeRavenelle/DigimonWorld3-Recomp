@@ -40,6 +40,7 @@ everything else applies immediately.
 | `graphics.color_grade` | `neutral`, `vivid`, `warm`, `cool` | |
 | `graphics.crt` | `off`, `scanlines`, `crt` | |
 | `graphics.scale_mode` | `fit`, `integer`, `stretch` | `--scale` |
+| `graphics.widescreen` | `off`, `16:9`, `16:10`, `21:9` | `--widescreen` |
 | `graphics.display_mode` | `windowed`, `borderless`, `exclusive` | `--display-mode`, `--fullscreen` (borderless) |
 | `graphics.monitor` | 0 (auto: where the window is), 1 and up | `--monitor` |
 | `graphics.window_width`, `graphics.window_height` | pixels; not listed in the in-game screen, which offers common sizes | `--window-size WxH` |
@@ -246,6 +247,19 @@ rows show at a time (six when the menu has CARD FOLDERS); the list scrolls.
 The same screen opens from the title menu: while Start / Continue waits for input, SELECT (the hint is shown at the top)
 opens the list over the dimmed title. The menu stands still until circle or triangle closes it, and then waits as
 before. Options that only matter in the field, such as the encounter rate, can be set there and apply once playing.
+
+## Widescreen battles
+
+- Needs the GPU renderer. While a battle runs, the picture is widened to the chosen aspect (16:9, 16:10 or 21:9) and
+  the arena continues past the sides of the original 4:3 view. Menus, status windows and message boxes keep their
+  original size and place in the centre; flat shapes that touch the frame's edge (fades, backdrops) stretch to the
+  new edges. Everything else (fields, scenes, the results screen, menus) stays 4:3 with borders.
+- The GPU renderer keeps a wider copy of the battle's frame buffers in extra render-target columns and draws each
+  battle primitive into it a second time, so the game itself is not changed. The extra columns cost memory only
+  while this setting is on: at internal resolution 8x and 21:9 the two VRAM targets grow from about 268 MB to
+  about 415 MB.
+- Anything the game itself skips outside its 4:3 view cannot be shown; the arena checked so far submits its ground
+  and sky well past the view. Pre-rendered 2D backgrounds are not widened.
 
 ## Display
 

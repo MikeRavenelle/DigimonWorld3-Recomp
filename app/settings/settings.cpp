@@ -29,6 +29,7 @@ constexpr std::string_view kDisplayModes[] = {"windowed", "borderless", "exclusi
 constexpr std::string_view kVsyncModes[] = {"off", "on", "adaptive"};
 constexpr std::string_view kFramePacing[] = {"off", "even"};
 constexpr std::string_view kScaleModes[] = {"fit", "integer", "stretch"};
+constexpr std::string_view kWidescreen[] = {"off", "16:9", "16:10", "21:9"};
 constexpr std::string_view kSpeeds[] = {"2x", "4x", "unlimited"};
 constexpr std::string_view kEncounters[] = {"normal", "half", "off", "double"};
 constexpr std::string_view kGameSpeeds[] = {"1x", "2x", "3x", "4x"};
@@ -61,6 +62,8 @@ const SettingInfo kSettings[] = {
      Group::Graphics, Type::Choice, Apply::Live, 0, 0, kOutputFilters, false, DW3_FIELD(graphics.output_filter)},
     {"graphics.scale_mode", "Scaling", "fit keeps 4:3 with borders, integer uses whole multiples only, stretch fills the window.",
      Group::Graphics, Type::Choice, Apply::Live, 0, 0, kScaleModes, false, DW3_FIELD(graphics.scale_mode)},
+    {"graphics.widescreen", "Widescreen battles", "Shows more of the arena to the sides in battles at the chosen aspect ratio, with the menus and status windows kept at their original size in the centre. Fields stay 4:3 with borders (GPU renderer only).",
+     Group::Graphics, Type::Choice, Apply::Live, 0, 0, kWidescreen, false, DW3_FIELD(graphics.widescreen)},
     {"graphics.display_mode", "Display mode", "windowed, borderless (a desktop-sized window without borders) or exclusive (the monitor switches to the chosen mode). F11 or Alt+Enter toggles between windowed and the last fullscreen mode.",
      Group::Graphics, Type::Choice, Apply::Live, 0, 0, kDisplayModes, false, DW3_FIELD(graphics.display_mode)},
     {"graphics.monitor", "Monitor", "Which monitor fullscreen uses and a window opens on: 0 is auto (where the window is), 1 and up follow the system's order.",

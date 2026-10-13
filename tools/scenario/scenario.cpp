@@ -190,6 +190,7 @@ Scenario parse(const std::string& text, const std::string& src) {
     s.frames = root["frames"].value_or(int64_t{0});
     s.skip_intro = root["skip_intro"].value_or(true);
     s.memcard = root["memcard"].value_or(std::string("none"));
+    s.gpu = root["gpu"].value_or(false);
     if (const auto* list = root["settings"].as_array())
         for (const auto& item : *list) {
             const auto text = item.value<std::string>();
@@ -320,6 +321,8 @@ Scenario parse(const std::string& text, const std::string& src) {
             }
             c.max_hash_distance = static_cast<int>(t["max_hash_distance"].value_or(int64_t{24}));
             c.screenshot = t["screenshot"].value_or(false);
+            if (auto v = t["margin_colors_min"].value<int64_t>()) c.margin_colors_min = static_cast<int>(*v);
+            if (auto v = t["margin_colors_max"].value<int64_t>()) c.margin_colors_max = static_cast<int>(*v);
             if (auto v = t["audio_min_rms"].value<double>()) c.audio_min_rms = *v;
             if (auto v = t["audio_max_rms"].value<double>()) c.audio_max_rms = *v;
             c.audio_frames = static_cast<int>(t["audio_frames"].value_or(int64_t{60}));

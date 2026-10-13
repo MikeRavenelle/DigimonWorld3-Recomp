@@ -683,3 +683,23 @@ TEST(DisplaySettings, AllOfThemApplyLive) {
         EXPECT_FALSE(info->hidden) << id;
     }
 }
+
+TEST(WidescreenSetting, DefaultsOffAndRoundTrips) {
+    Settings s = defaults();
+    EXPECT_EQ(get_text(s, *find_setting("graphics.widescreen")), "off");
+    for (const char* v : {"16:9", "16:10", "21:9", "off"}) {
+        EXPECT_TRUE(set(s, "graphics.widescreen", v)) << v;
+        EXPECT_EQ(get_text(s, *find_setting("graphics.widescreen")), v);
+        LoadReport report;
+        EXPECT_EQ(settings_from_toml(settings_to_toml(s), report), s) << v;
+    }
+    EXPECT_FALSE(set(s, "graphics.widescreen", "32:9"));
+}
+
+TEST(WidescreenSetting, IsNotPartOfAnyPreset) {
+    Settings s = defaults();
+    EXPECT_TRUE(set(s, "graphics.preset", "remaster"));
+    EXPECT_EQ(get_text(s, *find_setting("graphics.widescreen")), "off");
+    EXPECT_TRUE(set(s, "graphics.widescreen", "16:9"));
+    EXPECT_EQ(get_text(s, *find_setting("graphics.preset")), "remaster");
+}

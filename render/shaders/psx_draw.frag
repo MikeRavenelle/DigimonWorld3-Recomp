@@ -46,6 +46,8 @@ layout(set = 0, binding = 2) uniform texture2D uReplace;  // replacement texture
 layout(push_constant) uniform Params {
     int scale;    // internal resolution multiplier (1 = native)
     uint mode;    // bit1 true colour, bits 2-3 texture filter (0 nearest, 1 bilinear, 2 xBR); display layer variant only
+    int width;    // render target width in native pixels (used by the vertex stage)
+    int pad;
 } params;
 
 layout(location = 0) flat in ivec4 vPlanes0;

@@ -33,6 +33,7 @@
 #include <vector>
 
 #include "dw3/host.h"
+#include "dw3/hw_renderer.h"
 #include "dw3/recomp.h"
 #include "dw3/state.h"
 #include "dw3/texrep/stage_dump.h"
@@ -182,7 +183,8 @@ bool load_disc_keys(const std::string& disc, DiscKeys& keys, std::string& error)
 
 // Evaluates one check against the live machine. Returns the number of failures it added.
 int evaluate(const Options& opt, const sc::Scenario& s, const sc::Check& c, dw3::host::Host& host, Results& total,
-             const sc::AudioMeter& meter, const dw3::UploadRecorder* recorder, const DiscKeys& disc_keys) {
+             const sc::AudioMeter& meter, const dw3::UploadRecorder* recorder, const DiscKeys& disc_keys,
+             dw3::HwRenderer* hw) {
     dw3::Machine& m = host.machine();
     Results r;
     std::printf("  check @%lld \"%s\"\n", static_cast<long long>(c.at), c.label.c_str());
@@ -271,6 +273,28 @@ int evaluate(const Options& opt, const sc::Scenario& s, const sc::Check& c, dw3:
                            sc::hash_to_hex(actual));
             }
         }
+    }
+    // The GPU renderer's frame as a 1280x720 window would show it.
+    std::vector<uint32_t> gpu_pixels;
+    constexpr int kGpuW = 1280, kGpuH = 720;
+    const bool gpu_image = hw && hw->render_to_image(m.gpu().display(), dw3::ScaleMode::Fit, false, nullptr, kGpuW, kGpuH, gpu_pixels);
+    if (c.margin_colors_min || c.margin_colors_max) {
+        if (!gpu_image) {
+            report(r, false, "margin_colors", "no GPU renderer frame");
+        } else {
+            std::set<uint32_t> colours;
+            constexpr int kMargin = kGpuW / 10;
+            for (int y = 0; y < kGpuH; ++y)
+                for (int x = 0; x < kGpuW; ++x)
+                    if (x < kMargin || x >= kGpuW - kMargin) colours.insert(gpu_pixels[static_cast<std::size_t>(y) * kGpuW + x]);
+            const int n = static_cast<int>(colours.size());
+            if (c.margin_colors_min) report(r, n >= *c.margin_colors_min, "margin_colors_min", "actual " + num(n) + ", expected >= " + num(*c.margin_colors_min));
+            if (c.margin_colors_max) report(r, n <= *c.margin_colors_max, "margin_colors_max", "actual " + num(n) + ", expected <= " + num(*c.margin_colors_max));
+        }
+    }
+    if (gpu_image && (c.screenshot || r.fail > 0)) {
+        auto path = std::filesystem::path(opt.out) / s.name / (num(c.at) + "_" + slug(c.label) + "_gpu.bmp");
+        if (write_bmp(path, gpu_pixels, kGpuW, kGpuH)) std::printf("    screenshot %s\n", path.string().c_str());
     }
     if (have_image && (c.screenshot || r.fail > 0)) {
         auto path = std::filesystem::path(opt.out) / s.name / (num(c.at) + "_" + slug(c.label) + ".bmp");
@@ -380,6 +404,7 @@ int main(int argc, char** argv) {
     cfg.log = [](const std::string& s) { std::fprintf(stderr, "%s\n", s.c_str()); };
     std::string error;
     std::unique_ptr<dw3::host::Host> host;
+    std::unique_ptr<dw3::HwRenderer> hw;  // after the host so it goes first; null: the software rasterizer draws
     sc::Timeline timeline(scenario);
     DiscKeys disc_keys;
     std::unique_ptr<dw3::UploadRecorder> recorder;
@@ -434,6 +459,7 @@ int main(int argc, char** argv) {
     for (std::size_t boot = 0; boot <= scenario.reboots.size(); ++boot) {
         if (host) cfg.blank_card = host->card_image(0);
         host.reset();
+        hw.reset();
         host = dw3::host::Host::create(cfg, error);
         if (!host) {
             std::fprintf(stderr, "%s\n", error.c_str());
@@ -455,6 +481,17 @@ int main(int argc, char** argv) {
                 std::fprintf(stderr, "scenario setting %s: %s\n", entry.c_str(), info ? error.c_str() : "unknown id");
                 return 2;
             }
+        }
+        if (scenario.gpu || scenario_settings.graphics.widescreen != 0) {
+            dw3::HwOptions hw_options;
+            hw_options.wide_frame = dw3::make_wide_frame(static_cast<dw3::WideAspect>(scenario_settings.graphics.widescreen));
+            std::string hw_error;
+            hw = dw3::HwRenderer::create(nullptr, {}, hw_error, scenario_settings.graphics.internal_res, hw_options);
+            if (!hw) {
+                std::printf("SKIP no usable GPU: %s\n", hw_error.c_str());
+                return 77;
+            }
+            host->machine().gpu().set_rasterizer(hw.get());
         }
         dw3app::SettingsController settings_controller(scenario_settings, scenario_settings, nullptr, {});
         dw3app::ingame::FieldMenuSettings settings_screen(host->machine(), settings_controller);
@@ -486,6 +523,7 @@ int main(int argc, char** argv) {
         if (boot) std::printf("  reboot @%lld\n", static_cast<long long>(scenario.reboots[boot - 1]));
         result = host->run([&](uint64_t frame) {
             settings_screen.apply_pending();
+            if (hw) hw->set_wide_mirror(read_ram(0x800554D0, 4) == 6);
             last_frame = base + static_cast<int64_t>(frame);
             timeline.advance(last_frame, read_ram);
             const int64_t script = timeline.script_frame();
@@ -550,7 +588,7 @@ int main(int argc, char** argv) {
             for (auto& [path, snap] : snapshots)
                 if (snap.recording) snap.digests.push_back(digest_of(host->machine()));
             while (next < scenario.checks.size() && script >= scenario.checks[next].at)
-                evaluate(opt, scenario, scenario.checks[next++], *host, total, meter, recorder.get(), disc_keys);
+                evaluate(opt, scenario, scenario.checks[next++], *host, total, meter, recorder.get(), disc_keys, hw.get());
             while (save_next < scenario.saves.size() && script >= scenario.saves[save_next].at) {
                 const std::string name = scenario.saves[save_next++].path;
                 const std::string path = resolve_state_path(opt, name);

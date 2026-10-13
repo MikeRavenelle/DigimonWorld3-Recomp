@@ -26,6 +26,7 @@ std::unique_ptr<HwPresenter> HwPresenter::create(SDL_Window* window, dw3::Graphi
     hw.filter = static_cast<dw3::TextureFilter>(options.texture_filter);
     hw.precise_geometry = options.precise_geometry;
     hw.texture_pack = options.texture_pack;
+    hw.wide_frame = dw3::make_wide_frame(options.widescreen);
     p->renderer_ = dw3::HwRenderer::create(&native, required_instance_extensions(), error, options.internal_res, hw);
     if (!p->renderer_) return nullptr;
     p->name_ = api == dw3::GraphicsApi::D3D12 ? "GPU (plume/Direct3D 12)"
@@ -52,12 +53,13 @@ bool HwPresenter::update_options(const PresentOptions& options, dw3::Gpu& gpu) {
     bool ok = true;
     if (options.internal_res != options_.internal_res || options.true_color != options_.true_color ||
         options.texture_filter != options_.texture_filter || options.precise_geometry != options_.precise_geometry ||
-        options.texture_pack != options_.texture_pack) {
+        options.texture_pack != options_.texture_pack || options.widescreen != options_.widescreen) {
         dw3::HwOptions hw;
         hw.true_color = options.true_color;
         hw.filter = static_cast<dw3::TextureFilter>(options.texture_filter);
         hw.precise_geometry = options.precise_geometry;
         hw.texture_pack = options.texture_pack;
+        hw.wide_frame = dw3::make_wide_frame(options.widescreen);
         std::string error;
         if (renderer_->reconfigure(options.internal_res, hw, gpu.vram(), error)) {
             options_.internal_res = renderer_->internal_scale();
@@ -65,6 +67,7 @@ bool HwPresenter::update_options(const PresentOptions& options, dw3::Gpu& gpu) {
             options_.texture_filter = options.texture_filter;
             options_.precise_geometry = options.precise_geometry;
             options_.texture_pack = options.texture_pack;
+            options_.widescreen = options.widescreen;
         } else {
             SDL_Log("renderer reconfiguration failed: %s", error.c_str());
             ok = false;
@@ -76,6 +79,8 @@ bool HwPresenter::update_options(const PresentOptions& options, dw3::Gpu& gpu) {
     if (options.vsync != options_.vsync) set_vsync(options.vsync);
     return ok;
 }
+
+void HwPresenter::set_wide_active(bool active) { renderer_->set_wide_mirror(active); }
 
 void HwPresenter::attach(dw3::Gpu& gpu) { gpu.set_rasterizer(renderer_.get()); }
 

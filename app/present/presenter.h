@@ -11,6 +11,7 @@
 #include "dw3/postfx.h"
 #include "dw3/present_layout.h"
 #include "dw3/texrep/pack.h"
+#include "dw3/widescreen.h"
 #include "osd.h"
 
 struct SDL_Window;
@@ -27,6 +28,7 @@ struct PresentOptions {
     bool true_color = false;  // GPU renderer: no dithering, full precision shading
     int texture_filter = 0;   // GPU renderer: 0 nearest, 1 bilinear, 2 xBR
     bool precise_geometry = false;  // GPU renderer: sub-pixel 3D vertices from the GTE
+    dw3::WideAspect widescreen = dw3::WideAspect::Off;  // GPU renderer: wider battles (see dw3/widescreen.h)
     dw3::PostFx post;               // GPU renderer: post-processing (the software path ignores it)
     std::shared_ptr<const dw3::texrep::TexturePack> texture_pack;  // GPU renderer: replacement backgrounds (null: off)
 };
@@ -49,6 +51,9 @@ public:
     // current VRAM image carried over). Returns false if the renderer could not take the new configuration; it
     // then keeps the old one. Must be called from the thread that presents.
     virtual bool update_options(const PresentOptions& options, dw3::Gpu& gpu) = 0;
+    // Turns the wide picture on while the game is in a mode that has one (battles). Ignored without the GPU renderer
+    // or a widescreen option.
+    virtual void set_wide_active(bool) {}
     // Starts recording the background images the game draws into `directory` (see dw3::HwRenderer::set_texture_dump).
     // Returns false if this presenter cannot (the software path).
     virtual bool set_texture_dump(const std::string& directory) { return false; }

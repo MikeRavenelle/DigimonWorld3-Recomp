@@ -5,6 +5,13 @@
 // precise bit (state0 bit 11) instead carry float attributes in the plane slots, which the GPU interpolates:
 // colour in screen space, texel coordinates perspective-correct through the clip-space w.
 
+layout(push_constant) uniform Params {
+    int scale;
+    uint mode;
+    int width;  // render target width in native pixels (VRAM plus any wide frame columns)
+    int pad;
+} params;
+
 layout(location = 0) in vec2 inPos;
 layout(location = 1) in ivec4 inPlanes0;
 layout(location = 2) in ivec4 inPlanes1;
@@ -35,7 +42,7 @@ void main() {
         float depth = intBitsToFloat(inPlanes1.y);
         if (depth > 0.0) w = depth;
     }
-    gl_Position = vec4((inPos.x * (2.0 / 1024.0) - 1.0) * w, (inPos.y * (2.0 / 512.0) - 1.0) * w, 0.0, w);
+    gl_Position = vec4((inPos.x * (2.0 / float(params.width)) - 1.0) * w, (inPos.y * (2.0 / 512.0) - 1.0) * w, 0.0, w);
     vPlanes0 = inPlanes0;
     vPlanes1 = inPlanes1;
     vPlanes2 = inPlanes2;

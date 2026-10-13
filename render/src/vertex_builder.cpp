@@ -4,6 +4,8 @@
 #include <bit>
 #include <cstdlib>
 
+#include "dw3/widescreen.h"
+
 namespace dw3 {
 
 namespace {
@@ -104,7 +106,9 @@ HwState pack_state(const DrawState& s, const PrimitiveFlags& f, bool dither) {
 }
 
 Region clip_region(const DrawState& s) {
-    Region r{std::max(s.area_x1, 0), std::max(s.area_y1, 0), std::min(s.area_x2, kVramWidth - 1) + 1,
+    // An area inside the wide frame copy (columns beyond VRAM) may extend to its far edge; anything else stops at VRAM's.
+    const int last_x = s.area_x1 >= kVramWidth ? kVramWidth + WideFrame::kMaxColumns - 1 : kVramWidth - 1;
+    Region r{std::max(s.area_x1, 0), std::max(s.area_y1, 0), std::min(s.area_x2, last_x) + 1,
              std::min(s.area_y2, kVramHeight - 1) + 1};
     return r.empty() ? Region{} : r;
 }
