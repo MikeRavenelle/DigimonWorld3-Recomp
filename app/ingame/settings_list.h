@@ -39,6 +39,7 @@ struct RowContext {
     std::optional<input::Action> capturing;               // the binding row that waits for a key
     const MonitorList* monitors = nullptr;                // what the monitor and resolution rows choose from
     bool adaptive_vsync = false;                          // the presenter can do adaptive vertical sync
+    bool hdr_available = false;                           // the display is in HDR mode and the presenter can output it
 };
 
 // Rows in menu order: the visual preset first, then graphics, audio, controls (the live settings, one row per

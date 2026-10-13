@@ -33,9 +33,11 @@ public:
         float rcas_stops = 0.0f;
         CrtParams crt;
         float lines = 240.0f;  // the console's lines in the picture (for the scanlines)
+        HdrParams hdr;         // output transform of the last pass (mode Off for an SDR swap chain)
     };
 
-    PostChain(plume::RenderDevice* device, plume::RenderShaderFormat format);
+    // `target_format` is the swap chain's colour format; the passes' images use it too, so one pipeline serves all.
+    PostChain(plume::RenderDevice* device, plume::RenderShaderFormat format, plume::RenderFormat target_format);
     ~PostChain();
 
     // Makes the targets for a picture of src_w x src_h pixels shown in a pic_w x pic_h rectangle of the window, and uploads
@@ -71,7 +73,7 @@ private:
     void to_read(plume::RenderCommandList* cmd, Target& t);
     bool draw_pass(plume::RenderCommandList* cmd, PassId id, plume::RenderFramebuffer* fb, uint32_t win_w, uint32_t win_h,
                    float dx, float dy, float dw, float dh, plume::RenderDescriptorSet* set, uint32_t src_w, uint32_t src_h,
-                   const float a[4], const float b[4]);
+                   const float a[4], const float b[4], const float c[4] = nullptr);
     // Draws pass `id` over the whole of `out`; the inputs are made readable first.
     bool pass_to_target(plume::RenderCommandList* cmd, PassId id, Target& out, plume::RenderDescriptorSet* set,
                         std::initializer_list<Target*> inputs, uint32_t src_w, uint32_t src_h, const float a[4],
@@ -81,6 +83,7 @@ private:
 
     plume::RenderDevice* device_;
     plume::RenderShaderFormat format_;
+    plume::RenderFormat target_format_;
     std::unique_ptr<plume::RenderShader> vs_;
     std::unique_ptr<plume::RenderPipelineLayout> layouts_[4];  // by number of input textures
     Pass passes_[PassCount];

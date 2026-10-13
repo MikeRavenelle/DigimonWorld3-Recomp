@@ -41,7 +41,7 @@ dw3_add_test(test_runtime
             runtime/test_state_cdrom.cpp runtime/test_state_sio.cpp runtime/test_state_spu.cpp runtime/test_soft_rasterizer.cpp runtime/test_sio.cpp
             runtime/test_mdec.cpp runtime/test_memcard.cpp runtime/test_disc_ref.cpp
             runtime/test_spu_dsp.cpp runtime/test_spu_voices.cpp runtime/test_xa.cpp
-            runtime/test_present_layout.cpp runtime/test_display_snapshot.cpp runtime/test_precise_vertex.cpp
+            runtime/test_present_layout.cpp runtime/test_widescreen.cpp runtime/test_hdr.cpp runtime/test_display_snapshot.cpp runtime/test_precise_vertex.cpp
     LIBS dw3runtime)
 
 # Differential emitter tests: emit_testgen recompiles the programs of psxrecomp/test_programs.h at build

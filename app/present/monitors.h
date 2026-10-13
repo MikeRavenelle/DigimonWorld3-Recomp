@@ -15,6 +15,9 @@ MonitorList query_monitors(SDL_Window* window);
 // mode switches the monitor to the nearest mode it offers.
 void apply_display_settings(SDL_Window* window, const Settings::Graphics& graphics);
 
+// Whether the display the window is on is in HDR mode (SDL's window HDR property).
+bool window_hdr_enabled(SDL_Window* window);
+
 // The refresh rate of the monitor the window is on, in hertz; 0 when unknown.
 double window_refresh_hz(SDL_Window* window);
 

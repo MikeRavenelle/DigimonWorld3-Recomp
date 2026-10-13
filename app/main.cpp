@@ -43,6 +43,7 @@
 //   --fullscreen-at F  toggle fullscreen at frame F (repeatable)
 //   --compare-at F     press the Original/enhanced comparison hotkey at frame F (repeatable; for audit runs)
 //   --scale M          fit (default, 4:3 letterbox), integer or stretch
+//   --widescreen A     off (default), 16:9, 16:10 or 21:9: a wider arena in battles (GPU renderer)
 //   --filter F         nearest (default), linear or fsr
 //   --no-vsync         present without waiting for the display refresh (always on with --uncapped/--frames)
 //   --mute             no audio output (the SPU still runs; audio is also off for --frames audit runs)
@@ -81,6 +82,7 @@
 #include <vector>
 
 #include "audio_out.h"
+#include "dw3/recomp.h"
 #include "dw3/host.h"
 #include "dw3/platform.h"
 #include "host_input.h"
@@ -204,6 +206,7 @@ Options parse(int argc, char** argv) {
         else if (a == "--renderer" && i + 1 < argc) set("graphics.renderer", argv[++i]);
         else if (a == "--preset" && i + 1 < argc) set("graphics.preset", argv[++i]);
         else if (a == "--scale" && i + 1 < argc) set("graphics.scale_mode", argv[++i]);
+        else if (a == "--widescreen" && i + 1 < argc) set("graphics.widescreen", argv[++i]);
         else if (a == "--filter" && i + 1 < argc) set("graphics.output_filter", argv[++i]);
         else if (a == "--internal-res" && i + 1 < argc) set("graphics.internal_res", argv[++i]);
         else if (a == "--true-color") set("graphics.true_color", "true");
@@ -373,6 +376,7 @@ int main(int argc, char** argv) {
         po.true_color = g.true_color;
         po.texture_filter = g.texture_filter;
         po.precise_geometry = g.precise_geometry;
+        po.widescreen = static_cast<dw3::WideAspect>(g.widescreen);
         po.texture_pack = texture_packs.get(g);
         const char* modes[] = {"fit", "integer", "stretch"};
         dw3::parse_scale_mode(modes[g.scale_mode], po.scale);
@@ -390,9 +394,11 @@ int main(int argc, char** argv) {
     SDL_Log("presenting with %s", presenter->name());
     dw3app::MonitorList monitors;
     double refresh_hz = 0.0;
+    bool display_hdr = false;
     auto refresh_display_state = [&] {
         monitors = dw3app::query_monitors(window);
         refresh_hz = dw3app::window_refresh_hz(window);
+        display_hdr = dw3app::window_hdr_enabled(window);
     };
     dw3app::apply_display_settings(window, active.graphics);
     refresh_display_state();
@@ -639,6 +645,7 @@ int main(int argc, char** argv) {
     auto on_frame = [&](uint64_t frame) {
         host_input.frame = static_cast<int64_t>(frame);
         settings_screen.apply_pending();
+        settings_screen.set_hdr_available(display_hdr && presenter->supports_hdr());
         for (const auto& act : opt.window_actions) {
             if (act.frame != static_cast<int64_t>(frame)) continue;
             if (act.w > 0) {
@@ -663,7 +670,8 @@ int main(int argc, char** argv) {
         SDL_Event e;
         while (SDL_PollEvent(&e)) {
             if (e.type == SDL_EVENT_QUIT) dw3::host::Host::stop();
-            if ((e.type >= SDL_EVENT_DISPLAY_FIRST && e.type <= SDL_EVENT_DISPLAY_LAST) || e.type == SDL_EVENT_WINDOW_DISPLAY_CHANGED)
+            if ((e.type >= SDL_EVENT_DISPLAY_FIRST && e.type <= SDL_EVENT_DISPLAY_LAST) || e.type == SDL_EVENT_WINDOW_DISPLAY_CHANGED ||
+                e.type == SDL_EVENT_WINDOW_HDR_STATE_CHANGED)
                 display_changed = true;
             if (host_input.handle_event(e)) continue;
             if (e.type == SDL_EVENT_KEY_DOWN && !e.key.repeat) {
@@ -692,6 +700,9 @@ int main(int argc, char** argv) {
         const bool last = opt.max_frames >= 0 && static_cast<int64_t>(frame) >= opt.max_frames;
         const bool periodic = opt.shot_every > 0 && frame % static_cast<uint64_t>(opt.shot_every) == 0;
         const bool want_shot = periodic || (last && !opt.screenshot.empty());
+        constexpr uint32_t kGameMode = 0x800554D0, kBattleMode = 6;
+        presenter->set_wide_active(settings.active().graphics.widescreen != 0 &&
+                                   dw3_read32(&machine.ctx(), kGameMode) == kBattleMode);
         presenter->present(machine.gpu(), want_shot ? &capture : nullptr);
         // On a display that runs at a multiple of 60 Hz, each frame is shown for the same whole number of refreshes.
         const auto& shown = settings.active().graphics;

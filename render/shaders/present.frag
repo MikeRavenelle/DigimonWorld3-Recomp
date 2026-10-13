@@ -44,7 +44,8 @@ vec3 pixelAt(ivec2 s) {
     }
     // Scaled coordinates relative to the display origin.
     s = clamp(s, ivec2(0), params.src.zw * params.scale - 1);
-    ivec2 t = (params.src.xy * params.scale + s) % ivec2(1024 * params.scale, 512 * params.scale);
+    ivec2 t = params.src.xy * params.scale + s;
+    if (params.src.x < 1024) t %= ivec2(1024 * params.scale, 512 * params.scale);  // the display wraps at the VRAM edge
     uint w = packWord(t);
     if (params.layer != 0) {
         // The layer pixel counts only while it was produced for the word that is in VRAM now.

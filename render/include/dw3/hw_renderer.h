@@ -37,6 +37,14 @@
 // The exact PS1 target still receives the original texels, so what the game reads back never changes and the
 // replacement only exists where the display layer is shown. With no pack nothing is tracked and the output is
 // byte-identical to a build without this feature.
+// HDR output. With HwOptions::hdr the swap chain is created as R16G16B16A16_FLOAT in the scRGB colour space where the
+// backend can (plume patch: Vulkan VK_EXT_swapchain_colorspace extended sRGB, Direct3D 12 DXGI G10_NONE_P709).
+// The final post-processing pass then turns the SDR picture into scRGB (render/shaders/post/hdr.glsl, hdr.h):
+// SDR white lands on the paper white level and only the brightest part is lifted towards the peak.
+// Wide frame copy. With HwOptions::wide_frame the targets get extra columns to the right of VRAM. While mirroring is
+// on, every primitive and fill that lands in a frame buffer is drawn a second time, shifted into those columns with
+// the drawing area widened (see widescreen.h for how edge-touching 2D shapes are stretched); the copy is never read
+// back. 3D geometry is clipped by the game's 320 px drawing area only, so the copy shows what lies beyond it.
 // Precise geometry. With HwOptions::precise_geometry, triangles that have sub-pixel vertex positions are drawn from
 // interpolated float attributes instead of the fixed-point planes (see build_precise_triangle); everything else
 // is unchanged. At scale 1 the triangle covers the same pixels as the integer one.
@@ -51,6 +59,7 @@
 #include "dw3/postfx.h"
 #include "dw3/present_layout.h"
 #include "dw3/texrep/pack.h"
+#include "dw3/widescreen.h"
 
 namespace dw3 {
 
@@ -85,6 +94,11 @@ struct HwOptions {
     // Replacement images for background blocks (texrep/blocks.h). When set, the display layer shows them in place of
     // the matching original images; the exact picture underneath is unchanged. Implies the display layer.
     std::shared_ptr<const texrep::TexturePack> texture_pack;
+    // Extra render-target columns that hold a wider copy of the frame buffers (widescreen.h). Margin 0: none.
+    WideFrame wide_frame;
+    // Ask for an HDR swap chain (scRGB: linear Rec. 709 half floats, 1.0 = 80 nits) where the window system and the
+    // display offer one. Whether it was obtained is hdr_active(); without it the picture stays SDR.
+    bool hdr = false;
 };
 
 // A small RGBA8 image (red in the lowest byte, straight alpha) blended over the window at (x, y) in window pixels.
@@ -138,6 +152,12 @@ public:
     bool render_to_image(const DisplayState& display, ScaleMode mode, bool linear, const PostFx* post, int width, int height,
                          std::vector<uint32_t>& rgba);
     void set_vsync(bool enabled);
+    // True when the swap chain presents scRGB. Post-processing then ends in the HDR output transform of PostFx::hdr
+    // (scaled to the nits it carries), and window captures are not available.
+    bool hdr_active() const;
+    // Starts or stops duplicating frame-buffer draws into the wide copy (needs HwOptions::wide_frame). While it
+    // runs, present() shows the copy, at its own aspect, whenever the displayed buffer has one.
+    void set_wide_mirror(bool active);
 
     // Starts recording the background images the game draws (empty directory stops it). write_texture_dump() saves
     // what was seen so far (see texrep/dump.h); the pack generator takes it from there.

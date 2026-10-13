@@ -9,6 +9,7 @@ layout(push_constant) uniform Params {
     vec2 srcSize;  // size of the main input texture in pixels
     vec4 a;        // pass parameters
     vec4 b;
+    vec4 c;        // HDR output (hdr.glsl); zero for every pass but the last
 } params;
 
 layout(location = 0) in vec2 vFrac;

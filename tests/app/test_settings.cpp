@@ -683,3 +683,63 @@ TEST(DisplaySettings, AllOfThemApplyLive) {
         EXPECT_FALSE(info->hidden) << id;
     }
 }
+
+TEST(WidescreenSetting, DefaultsOffAndRoundTrips) {
+    Settings s = defaults();
+    EXPECT_EQ(get_text(s, *find_setting("graphics.widescreen")), "off");
+    for (const char* v : {"16:9", "16:10", "21:9", "off"}) {
+        EXPECT_TRUE(set(s, "graphics.widescreen", v)) << v;
+        EXPECT_EQ(get_text(s, *find_setting("graphics.widescreen")), v);
+        LoadReport report;
+        EXPECT_EQ(settings_from_toml(settings_to_toml(s), report), s) << v;
+    }
+    EXPECT_FALSE(set(s, "graphics.widescreen", "32:9"));
+}
+
+TEST(HdrSettings, DefaultsAndRoundTrip) {
+    Settings s = defaults();
+    EXPECT_EQ(get_text(s, *find_setting("graphics.hdr")), "false");
+    EXPECT_EQ(get_text(s, *find_setting("graphics.hdr_peak_nits")), "1000");
+    EXPECT_EQ(get_text(s, *find_setting("graphics.hdr_paper_white")), "203");
+    EXPECT_TRUE(set(s, "graphics.hdr", "true"));
+    EXPECT_TRUE(set(s, "graphics.hdr_peak_nits", "1500"));
+    EXPECT_TRUE(set(s, "graphics.hdr_paper_white", "100"));
+    LoadReport report;
+    const Settings back = settings_from_toml(settings_to_toml(s), report);
+    EXPECT_EQ(back, s);
+    EXPECT_TRUE(back.graphics.hdr);
+    EXPECT_EQ(back.graphics.hdr_peak_nits, 1500);
+    EXPECT_EQ(back.graphics.hdr_paper_white, 100);
+}
+
+TEST(HdrSettings, RangesAreEnforced) {
+    Settings s = defaults();
+    EXPECT_FALSE(set(s, "graphics.hdr_peak_nits", "399"));
+    EXPECT_FALSE(set(s, "graphics.hdr_peak_nits", "1501"));
+    EXPECT_TRUE(set(s, "graphics.hdr_peak_nits", "400"));
+    EXPECT_FALSE(set(s, "graphics.hdr_paper_white", "99"));
+    EXPECT_FALSE(set(s, "graphics.hdr_paper_white", "301"));
+    EXPECT_TRUE(set(s, "graphics.hdr_paper_white", "300"));
+    LoadReport report;
+    settings_from_toml("[graphics]\nhdr_peak_nits = 5000\n", report);
+    EXPECT_FALSE(report.messages.empty());
+}
+
+TEST(HdrSettings, NotPartOfAnyPreset) {
+    Settings s = defaults();
+    EXPECT_TRUE(set(s, "graphics.hdr", "true"));
+    EXPECT_TRUE(set(s, "graphics.hdr_peak_nits", "800"));
+    EXPECT_TRUE(set(s, "graphics.preset", "remaster"));
+    EXPECT_TRUE(s.graphics.hdr);
+    EXPECT_EQ(s.graphics.hdr_peak_nits, 800);
+    EXPECT_TRUE(set(s, "graphics.preset", "original"));
+    EXPECT_TRUE(s.graphics.hdr);
+}
+
+TEST(WidescreenSetting, IsNotPartOfAnyPreset) {
+    Settings s = defaults();
+    EXPECT_TRUE(set(s, "graphics.preset", "remaster"));
+    EXPECT_EQ(get_text(s, *find_setting("graphics.widescreen")), "off");
+    EXPECT_TRUE(set(s, "graphics.widescreen", "16:9"));
+    EXPECT_EQ(get_text(s, *find_setting("graphics.preset")), "remaster");
+}

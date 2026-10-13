@@ -40,6 +40,7 @@ everything else applies immediately.
 | `graphics.color_grade` | `neutral`, `vivid`, `warm`, `cool` | |
 | `graphics.crt` | `off`, `scanlines`, `crt` | |
 | `graphics.scale_mode` | `fit`, `integer`, `stretch` | `--scale` |
+| `graphics.widescreen` | `off`, `16:9`, `16:10`, `21:9` | `--widescreen` |
 | `graphics.display_mode` | `windowed`, `borderless`, `exclusive` | `--display-mode`, `--fullscreen` (borderless) |
 | `graphics.monitor` | 0 (auto: where the window is), 1 and up | `--monitor` |
 | `graphics.window_width`, `graphics.window_height` | pixels; not listed in the in-game screen, which offers common sizes | `--window-size WxH` |
@@ -49,6 +50,9 @@ everything else applies immediately.
 | `graphics.show_fps` | bool | `--show-fps` |
 | `graphics.gamma` | 80 to 140 (percent) | `--gamma` |
 | `graphics.brightness` | -50 to 50 (percent) | `--brightness` |
+| `graphics.hdr` | bool | |
+| `graphics.hdr_peak_nits` | 400 to 1500 (steps of 50 in the in-game screen) | |
+| `graphics.hdr_paper_white` | 100 to 300 (steps of 10 in the in-game screen) | |
 | `audio.mute` | bool | `--mute` |
 | `audio.volume` | 0 to 100 | |
 | `audio.music_volume` | 0 to 100 (percent; steps of 10 in the in-game screen) | |
@@ -246,6 +250,32 @@ rows show at a time (six when the menu has CARD FOLDERS); the list scrolls.
 The same screen opens from the title menu: while Start / Continue waits for input, SELECT (the hint is shown at the top)
 opens the list over the dimmed title. The menu stands still until circle or triangle closes it, and then waits as
 before. Options that only matter in the field, such as the encounter rate, can be set there and apply once playing.
+
+## HDR output
+
+- Needs the GPU renderer on Direct3D 12 or Vulkan, with the display in HDR mode (Windows: Settings > Display > HDR;
+  Linux: a compositor with HDR support, for example KDE Plasma 6.x on Wayland). The in-game rows read `N/A` until the
+  display reports HDR; they also stay `N/A` on macOS, where HDR output is not implemented yet.
+- The picture is converted to scRGB (linear Rec. 709 half floats): SDR white is placed at the paper white level
+  (`graphics.hdr_paper_white`, default 203 nits) and only the brightest part is lifted, smoothly, towards the peak
+  (`graphics.hdr_peak_nits`, default 1000). Colours keep their hue and saturation; there is no gamut expansion.
+- If the driver or compositor does not offer an HDR swap chain the picture stays SDR (the log says so). Screenshots
+  of the window (`--screenshot`) are not taken while HDR output is on.
+- Not verified on real HDR hardware by the author: the maths and the shader are covered by tests against the CPU
+  formulas, the swap chain selection is not.
+
+## Widescreen battles
+
+- Needs the GPU renderer. While a battle runs, the picture is widened to the chosen aspect (16:9, 16:10 or 21:9) and
+  the arena continues past the sides of the original 4:3 view. Menus, status windows and message boxes keep their
+  original size and place in the centre; flat shapes that touch the frame's edge (fades, backdrops) stretch to the
+  new edges. Everything else (fields, scenes, the results screen, menus) stays 4:3 with borders.
+- The GPU renderer keeps a wider copy of the battle's frame buffers in extra render-target columns and draws each
+  battle primitive into it a second time, so the game itself is not changed. The extra columns cost memory only
+  while this setting is on: at internal resolution 8x and 21:9 the two VRAM targets grow from about 268 MB to
+  about 415 MB.
+- Anything the game itself skips outside its 4:3 view cannot be shown; the arena checked so far submits its ground
+  and sky well past the view. Pre-rendered 2D backgrounds are not widened.
 
 ## Display
 

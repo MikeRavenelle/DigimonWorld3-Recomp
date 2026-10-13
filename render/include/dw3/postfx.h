@@ -4,6 +4,8 @@
 // VRAM, at the internal resolution) and never touch VRAM itself. With every option at its default the renderer takes
 // the plain path and its output is unchanged. See docs/ARCHITECTURE.md ("Post-processing") for the order of the passes.
 
+#include "dw3/hdr.h"
+
 namespace dw3 {
 
 // How the picture is scaled to its place in the window.
@@ -42,9 +44,13 @@ struct PostFx {
     OutputScaler scaler = OutputScaler::Nearest;
     GradeParams grade;
     CrtParams crt;
+    // Output transform for an HDR swap chain (hdr.h). A renderer without one ignores it.
+    HdrParams hdr;
 
     // True if anything beyond plain scaling is switched on.
-    bool active() const { return smaa || sharpness > 0.0f || scaler == OutputScaler::Fsr || !grade.neutral() || crt.enabled(); }
+    bool active() const {
+        return smaa || sharpness > 0.0f || scaler == OutputScaler::Fsr || !grade.neutral() || crt.enabled() || hdr.mode != HdrMode::Off;
+    }
 };
 
 }  // namespace dw3

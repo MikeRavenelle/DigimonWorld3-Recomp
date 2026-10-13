@@ -1,0 +1,15 @@
+name = "widescreen_battle_4x3"
+description = "The same battle menu at 4:3 on the headless GPU renderer: the picture is pillarboxed, so the columns beside it are black and differ from the widescreen frame."
+start_state = "battle_menu.state"   # written by widescreen_battle.toml
+start_frame = 2104
+frames = 2120
+memcard = "blank"
+gpu = true
+
+[[check]]
+at = 2112
+label = "battle menu at 4:3"
+display_enabled = true
+ram = [{ addr = 0x800554D0, size = 4, value = 6 }]
+margin_colors_max = 1
+screenshot = true

@@ -21,6 +21,7 @@
 
 layout(set = 0, binding = 0) uniform texture2D uTex;
 #include "common.glsl"
+#include "hdr.glsl"
 
 void main() {
     ivec2 sp = ivec2(vFrac * params.srcSize);
@@ -39,5 +40,5 @@ void main() {
     const float limit = 0.25 - 1.0 / 16.0;
     float lobe = max(-limit, min(max(lobeRgb.r, max(lobeRgb.g, lobeRgb.b)), 0.0)) * exp2(-params.a.x);
     float rcpL = 1.0 / (4.0 * lobe + 1.0);
-    outColor = vec4((lobe * b + lobe * d + lobe * h + lobe * f + e) * rcpL, 1.0);
+    outColor = vec4(hdrOutput((lobe * b + lobe * d + lobe * h + lobe * f + e) * rcpL), 1.0);
 }

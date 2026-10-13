@@ -38,6 +38,8 @@ public:
         model_.monitors = monitors;
         model_.adaptive_vsync = adaptive_vsync;
     }
+    // Whether the display is in HDR mode and the presenter can output it; the HDR rows read N/A and stay put without.
+    void set_hdr_available(bool available) { model_.hdr_available = available; }
 
 private:
     friend struct MenuHook;

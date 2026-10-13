@@ -87,7 +87,8 @@ if(DW3_HW_RENDERER)
             # Pinned commit; plume has no release tags. The patch adds the texture-to-buffer copy the Vulkan
             # backend lacks (used to read VRAM back to the CPU), and lets a window be described by callbacks so that SDL
             # can supply the surface (X11 and Wayland alike). The Direct3D 12 and Metal patches make that readback work
-            # there too; the Metal one also lets a shader be given as source text, compiled when the device loads it.
+            # there too; the Metal one also lets a shader be given as source text, compiled when the device loads it. The HDR patch
+            # lets a swap chain ask for scRGB (extended sRGB on Vulkan, G10_NONE_P709 on Direct3D 12).
             set(DW3_PLUME_SUBMODULES contrib/volk contrib/VulkanMemoryAllocator contrib/Vulkan-Headers)
             if(DW3_RENDER_D3D12)
                 list(APPEND DW3_PLUME_SUBMODULES contrib/D3D12MemoryAllocator)
@@ -104,6 +105,8 @@ if(DW3_HW_RENDERER)
                       COMMAND ${CMAKE_COMMAND} -DPATCH=${CMAKE_CURRENT_LIST_DIR}/patches/plume-d3d12.patch
                               -P ${CMAKE_CURRENT_LIST_DIR}/ApplyPatch.cmake
                       COMMAND ${CMAKE_COMMAND} -DPATCH=${CMAKE_CURRENT_LIST_DIR}/patches/plume-metal.patch
+                              -P ${CMAKE_CURRENT_LIST_DIR}/ApplyPatch.cmake
+                      COMMAND ${CMAKE_COMMAND} -DPATCH=${CMAKE_CURRENT_LIST_DIR}/patches/plume-hdr.patch
                               -P ${CMAKE_CURRENT_LIST_DIR}/ApplyPatch.cmake)
             FetchContent_MakeAvailable(plume)
             # Third-party code: build quietly and treat its headers as system headers.

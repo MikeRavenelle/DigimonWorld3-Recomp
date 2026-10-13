@@ -10,11 +10,13 @@
 #include <map>
 #include <set>
 
+#include "dw3/hdr.h"
 #include "dw3/texrep/blocks.h"
 #include "dw3/texrep/dump.h"
 #include "dw3/texrep/pack.h"
 #include "dw3/vertex_builder.h"
 #include "dw3/vram_regions.h"
+#include "dw3/widescreen.h"
 #include "plume_render_interface.h"
 #include "post_chain.h"
 #ifdef _WIN32
@@ -98,7 +100,7 @@ struct OsdParams {
     float dest[4];
     float window[2];
     float opacity;
-    float pad;
+    float hdr_scale;  // paper white / 80 nits on a scRGB swap chain, otherwise 0
 };
 static_assert(sizeof(OsdParams) == 32);
 
@@ -185,6 +187,20 @@ struct HwRenderer::Impl {
     std::set<std::pair<uint64_t, uint64_t>> unusable;            // entries whose image could not be loaded
     int atlas_epoch = 0;  // incremented whenever the atlas is cleared
     bool tracking() const { return pack || dump; }
+    // Wide frame copy (see widescreen.h): the targets have extra columns when it is enabled, `mirror` says whether
+    // frame-buffer draws are currently duplicated into it, and `wide_ready[i]` that frame buffer i (y = 0, 256)
+    // has had its copy drawn since mirroring started.
+    WideFrame wide;
+    bool mirror = false;
+    bool wide_ready[2] = {false, false};
+    int target_width() const { return kVramWidth + (wide.enabled() ? wide.width() : 0); }
+    bool mirrors(const DrawState& s) const {
+        return mirror && wide.in_frame(s.area_x1, s.area_y1, s.area_x2, s.area_y2);
+    }
+    DisplayState wide_display(const DisplayState& d) const;
+    // The post-processing request the swap chain can honour: the HDR output transform is on exactly when the swap chain
+    // is HDR (a headless renderer keeps what it is given, for tests).
+    const PostFx* effective_post(const PostFx* in, PostFx& storage);
     uint32_t draw_mode = 0;  // push constant of the draw shader: bit0 layer, bit1 true colour, bits 2-3 filter
 
     // VRAM: `rt` is drawn into; `tex` is the sampled copy. With scale > 1, `nat` is a native-resolution texture
@@ -227,6 +243,14 @@ struct HwRenderer::Impl {
     // Post-processing passes, created the first time they are used.
     std::unique_ptr<PostChain> post_chain;
 
+    // The swap chain's format: B8G8R8A8 normally, half floats when HDR output is active.
+    RenderFormat swap_format = kSwapFormat;
+    bool hdr_wanted = false;
+    bool hdr_active = false;
+    HdrParams hdr_params;  // the nits of the most recent post-processing request (for the overlay)
+    NativeWindow native_window;
+    bool has_window = false;
+
     // Notification image: `osd_tex` holds the last uploaded overlay.
     std::unique_ptr<RenderTexture> osd_tex;
     RenderTextureLayout osd_tex_layout = RenderTextureLayout::UNKNOWN;
@@ -239,6 +263,7 @@ struct HwRenderer::Impl {
     bool create_targets(std::string& error);
     bool create_pipelines();
     bool create_swapchain(const NativeWindow& window);
+    bool recreate_swapchain();
     void create_swap_framebuffers();
     void clear_vram();
 
@@ -299,6 +324,11 @@ struct HwRenderer::Impl {
 
     // ---- presentation -------------------------------------------------------------------------------
 
+    void draw_triangle(const DrawState& s, const PrimitiveFlags& f, const GpuVertex v[3], bool tracked);
+    void draw_rect(std::span<uint16_t> vram, const DrawState& s, const PrimitiveFlags& f, const GpuVertex& v, int width,
+                   int height, bool tracked);
+    void draw_line(const DrawState& s, const PrimitiveFlags& f, const GpuVertex& a, const GpuVertex& b, bool tracked);
+    DrawState wide_state(const DrawState& s);
     void draw_display(RenderFramebuffer* fb, uint32_t w, uint32_t h, const DisplayState& d, ScaleMode mode, bool linear,
                       const PostChain::Plan* plan = nullptr);
     bool run_post(const PostFx& fx, const DisplayState& d, const PresentRect& pr, PostChain::Plan& plan);
@@ -315,6 +345,7 @@ struct HwRenderer::Impl {
 bool HwRenderer::Impl::init(const NativeWindow* window, int internal_scale, const HwOptions& options, std::string& error) {
     scale = std::clamp(internal_scale, 1, 8);
     precise = options.precise_geometry;
+    wide = options.wide_frame;
     pack = options.texture_pack;
     layer = options.true_color || options.filter != TextureFilter::Nearest || pack;
     draw_mode = (layer ? 1u : 0u) | (options.true_color ? 2u : 0u) | (static_cast<uint32_t>(options.filter) << 2);
@@ -372,12 +403,17 @@ bool HwRenderer::Impl::init(const NativeWindow* window, int internal_scale, cons
         return false;
     }
 
+    hdr_wanted = options.hdr;
+    if (window) {
+        native_window = *window;
+        has_window = true;
+        if (!create_swapchain(*window)) {
+            error = "swap chain creation failed";
+            return false;
+        }
+    }
     if (!create_pipelines()) {
         error = "pipeline creation failed";
-        return false;
-    }
-    if (window && !create_swapchain(*window)) {
-        error = "swap chain creation failed";
         return false;
     }
     clear_vram();
@@ -401,8 +437,8 @@ bool HwRenderer::Impl::create_targets(std::string& error) {
     atlas_alloc.reset();
     ++atlas_epoch;
     rt_layout = tex_layout = nat_layout = hi_layout = hi_tex_layout = RenderTextureLayout::UNKNOWN;
-    rt = device->createTexture(RenderTextureDesc::ColorTarget(1024 * scale, 512 * scale, kVramFormat));
-    tex = device->createTexture(RenderTextureDesc::Texture2D(1024 * scale, 512 * scale, 1, kVramFormat));
+    rt = device->createTexture(RenderTextureDesc::ColorTarget(target_width() * scale, 512 * scale, kVramFormat));
+    tex = device->createTexture(RenderTextureDesc::Texture2D(target_width() * scale, 512 * scale, 1, kVramFormat));
     if (scale > 1) nat = device->createTexture(RenderTextureDesc::ColorTarget(1024, 512, kVramFormat));
     if (!rt || !tex || (scale > 1 && !nat)) {
         error = "VRAM texture creation failed";
@@ -414,8 +450,8 @@ bool HwRenderer::Impl::create_targets(std::string& error) {
     fbd.colorAttachmentsCount = 1;
     rt_fb = device->createFramebuffer(fbd);
     if (layer) {
-        hi = device->createTexture(RenderTextureDesc::ColorTarget(1024 * scale, 512 * scale, kLayerFormat));
-        hi_tex = device->createTexture(RenderTextureDesc::Texture2D(1024 * scale, 512 * scale, 1, kLayerFormat));
+        hi = device->createTexture(RenderTextureDesc::ColorTarget(target_width() * scale, 512 * scale, kLayerFormat));
+        hi_tex = device->createTexture(RenderTextureDesc::Texture2D(target_width() * scale, 512 * scale, 1, kLayerFormat));
         if (!hi || !hi_tex) {
             error = "display layer creation failed";
             return false;
@@ -517,7 +553,7 @@ bool HwRenderer::Impl::create_pipelines() {
     }
 
     {
-        const RenderPushConstantRange pc(0, 0, 0, 16, RenderShaderStageFlag::PIXEL);
+        const RenderPushConstantRange pc(0, 0, 0, 16, RenderShaderStageFlag::VERTEX | RenderShaderStageFlag::PIXEL);
         RenderPipelineLayoutDesc ld;
         ld.pushConstantRanges = &pc;
         ld.pushConstantRangesCount = 1;
@@ -570,7 +606,7 @@ bool HwRenderer::Impl::create_pipelines() {
         pd.pipelineLayout = present_layout.get();
         pd.vertexShader = present_vs.get();
         pd.pixelShader = present_fs.get();
-        pd.renderTargetFormat[0] = kSwapFormat;
+        pd.renderTargetFormat[0] = swap_format;
         pd.renderTargetBlend[0] = RenderBlendDesc::Copy();
         pd.renderTargetCount = 1;
         pd.primitiveTopology = RenderPrimitiveTopology::TRIANGLE_LIST;
@@ -609,7 +645,7 @@ bool HwRenderer::Impl::create_pipelines() {
         pd.pipelineLayout = osd_layout.get();
         pd.vertexShader = osd_vs.get();
         pd.pixelShader = osd_fs.get();
-        pd.renderTargetFormat[0] = kSwapFormat;
+        pd.renderTargetFormat[0] = swap_format;
         pd.renderTargetBlend[0] = RenderBlendDesc::AlphaBlend();
         pd.renderTargetCount = 1;
         pd.primitiveTopology = RenderPrimitiveTopology::TRIANGLE_LIST;
@@ -632,11 +668,36 @@ bool HwRenderer::Impl::create_swapchain(const NativeWindow& window) {
     w.createSurface = window.create_surface;
     w.getSize = window.get_size;
 #endif
-    swap = queue->createSwapChain(RenderSwapChainDesc(w, kSwapFormat, 2));
+    swap_format = kSwapFormat;
+    hdr_active = false;
+    if (hdr_wanted) {
+        RenderSwapChainDesc hdr_desc(w, RenderFormat::R16G16B16A16_FLOAT, 2);
+        hdr_desc.hdr = true;
+        swap = queue->createSwapChain(hdr_desc);
+        if (swap && swap->resize() && swap->hdrActive) {
+            swap_format = RenderFormat::R16G16B16A16_FLOAT;
+            hdr_active = true;
+        } else {
+            swap.reset();  // not offered: the plain swap chain below takes over
+        }
+    }
+    if (!swap) swap = queue->createSwapChain(RenderSwapChainDesc(w, kSwapFormat, 2));
     if (!swap || !swap->resize()) return false;
     for (Slot& sl : slots) sl.acquire_sem = device->createCommandSemaphore();
     create_swap_framebuffers();
     return !swap_fbs.empty();
+}
+
+// Builds the swap chain again, after hdr_wanted changed: the pipelines that draw into it depend on its format.
+bool HwRenderer::Impl::recreate_swapchain() {
+    if (!has_window) return true;
+    wait_all();
+    swap_fbs.clear();
+    release_sems.clear();
+    post_chain.reset();
+    swap.reset();
+    if (!create_swapchain(native_window)) return false;
+    return create_pipelines();
 }
 
 void HwRenderer::Impl::create_swap_framebuffers() {
@@ -725,13 +786,13 @@ void HwRenderer::Impl::record_draws() {
     cmd->setFramebuffer(layer ? draw_fb.get() : rt_fb.get());
     // The pipeline has one viewport and scissor per render target.
     const uint32_t targets = layer ? 2 : 1;
-    const RenderViewport viewports[2] = {RenderViewport(0.0f, 0.0f, 1024.0f * scale, 512.0f * scale),
-                                         RenderViewport(0.0f, 0.0f, 1024.0f * scale, 512.0f * scale)};
+    const RenderViewport viewports[2] = {RenderViewport(0.0f, 0.0f, static_cast<float>(target_width()) * scale, 512.0f * scale),
+                                         RenderViewport(0.0f, 0.0f, static_cast<float>(target_width()) * scale, 512.0f * scale)};
     cmd->setViewports(viewports, targets);
     cmd->setGraphicsPipelineLayout(draw_layout.get());
     cmd->setPipeline(draw_pipeline.get());
     cmd->setGraphicsDescriptorSet(draw_set.get(), 0);
-    const uint32_t constants[4] = {static_cast<uint32_t>(scale), draw_mode, 0, 0};
+    const uint32_t constants[4] = {static_cast<uint32_t>(scale), draw_mode, static_cast<uint32_t>(target_width()), 0};
     cmd->setGraphicsPushConstants(0, constants);
     const RenderVertexBufferView view(vertex_buf->at(0), static_cast<uint32_t>(kVertexBufferBytes));
     cmd->setVertexBuffers(0, &view, 1, &input_slot);
@@ -776,7 +837,7 @@ void HwRenderer::Impl::begin_vram_pass(const CopyParams& p) {
     transition(rt.get(), rt_layout, RenderTextureLayout::COLOR_WRITE);
     transition(tex.get(), tex_layout, RenderTextureLayout::SHADER_READ);
     cmd->setFramebuffer(rt_fb.get());
-    cmd->setViewports(RenderViewport(0.0f, 0.0f, 1024.0f * scale, 512.0f * scale));
+    cmd->setViewports(RenderViewport(0.0f, 0.0f, static_cast<float>(target_width()) * scale, 512.0f * scale));
     cmd->setGraphicsPipelineLayout(copy_layout.get());
     cmd->setPipeline(copy_pipeline.get());
     cmd->setGraphicsDescriptorSet(vram_set.get(), 0);
@@ -835,7 +896,7 @@ void HwRenderer::Impl::queue_primitive(const DrawState& s, const Region& bounds,
         ranges.push_back({first, count, clip});
     }
     stale.add(bounds);
-    dirty.add(bounds);
+    if (bounds.x0 < kVramWidth) dirty.add(bounds);  // the wide frame copy is never read back
     if (pending.size() >= kMaxPendingVertices) record_draws();
 }
 
@@ -850,7 +911,7 @@ void HwRenderer::Impl::scaled_pass(RenderFramebuffer* fb, RenderDescriptorSet* s
     p.scale = scale;
     const int mul = to_rt ? scale : 1;
     cmd->setFramebuffer(fb);
-    cmd->setViewports(RenderViewport(0.0f, 0.0f, 1024.0f * mul, 512.0f * mul));
+    cmd->setViewports(RenderViewport(0.0f, 0.0f, static_cast<float>(to_rt ? target_width() : kVramWidth) * mul, 512.0f * mul));
     cmd->setScissors(RenderRect(r.x0 * mul, r.y0 * mul, r.x1 * mul, r.y1 * mul));
     cmd->setGraphicsPipelineLayout(copy_layout.get());
     cmd->setPipeline(copy_pipeline.get());
@@ -1064,6 +1125,35 @@ bool HwRenderer::Impl::draw_background_rect(std::span<uint16_t> vram, const Draw
 // -------------------------------------------------------------------------------------------------------
 // Presentation
 
+const PostFx* HwRenderer::Impl::effective_post(const PostFx* in, PostFx& storage) {
+    if (hdr_active) {
+        storage = in ? *in : PostFx{};
+        if (storage.hdr.mode == HdrMode::Off) storage.hdr = hdr_params;
+        storage.hdr.mode = HdrMode::ScRgb;
+        hdr_params = storage.hdr;
+        return &storage;
+    }
+    if (has_window && in && in->hdr.mode != HdrMode::Off) {
+        storage = *in;
+        storage.hdr.mode = HdrMode::Off;
+        return &storage;
+    }
+    return in;
+}
+
+// The picture to show: the wide frame copy while it is being drawn and the display is one of the frame buffers.
+DisplayState HwRenderer::Impl::wide_display(const DisplayState& d) const {
+    if (!mirror || !wide.enabled() || !d.enabled || d.color24 || d.width != wide.frame_w || d.height != wide.frame_h ||
+        d.vram_x != 0 || (d.vram_y != 0 && d.vram_y != 256) || !wide_ready[d.vram_y == 256 ? 1 : 0])
+        return d;
+    DisplayState w = d;
+    w.vram_x = WideFrame::kOriginX;
+    w.width = wide.width();
+    w.aspect_num = wide.width();
+    w.aspect_den = wide.frame_h;
+    return w;
+}
+
 void HwRenderer::Impl::draw_display(RenderFramebuffer* fb, uint32_t w, uint32_t h, const DisplayState& d, ScaleMode mode, bool linear,
                                     const PostChain::Plan* plan) {
     cmd->setFramebuffer(fb);
@@ -1071,7 +1161,7 @@ void HwRenderer::Impl::draw_display(RenderFramebuffer* fb, uint32_t w, uint32_t 
     cmd->setScissors(RenderRect(0, 0, static_cast<int32_t>(w), static_cast<int32_t>(h)));
     cmd->clearColor(0, RenderColor(0.0f, 0.0f, 0.0f, 1.0f));
     if (!d.enabled) return;
-    const PresentRect pr = compute_present_rect(d.width, d.height, static_cast<int>(w), static_cast<int>(h), mode);
+    const PresentRect pr = compute_present_rect(d.width, d.height, static_cast<int>(w), static_cast<int>(h), mode, d.aspect_num, d.aspect_den);
     if (pr.w <= 0 || pr.h <= 0) return;
     if (plan) {
         post_chain->draw(cmd, *plan, nullptr, w, h, pr.x, pr.y, pr.w, pr.h);
@@ -1108,7 +1198,7 @@ void HwRenderer::Impl::push_present(const PresentParams& p) {
 // Post-processing: draws the display area 1:1 (nearest) into the chain's source image, then runs the passes up to the
 // last one, which draw_display repeats for each window-sized target.
 bool HwRenderer::Impl::run_post(const PostFx& fx, const DisplayState& d, const PresentRect& pr, PostChain::Plan& plan) {
-    if (!post_chain) post_chain = std::make_unique<PostChain>(device.get(), iface->getCapabilities().shaderFormat);
+    if (!post_chain) post_chain = std::make_unique<PostChain>(device.get(), iface->getCapabilities().shaderFormat, swap_format);
     const uint32_t k = d.color24 ? 1u : static_cast<uint32_t>(scale);
     const uint32_t sw = static_cast<uint32_t>(d.width) * k, sh = static_cast<uint32_t>(d.height) * k;
     if (!post_chain->prepare(cmd, fx, sw, sh, static_cast<uint32_t>(pr.w), static_cast<uint32_t>(pr.h), [this] { wait_all(); }))
@@ -1174,6 +1264,7 @@ void HwRenderer::Impl::draw_overlay(uint32_t w, uint32_t h, const HwOverlay& o) 
     p.window[0] = static_cast<float>(w);
     p.window[1] = static_cast<float>(h);
     p.opacity = o.opacity;
+    p.hdr_scale = hdr_active ? hdr_params.paper_white_nits / kScRgbWhiteNits : 0.0f;
     cmd->setGraphicsPipelineLayout(osd_layout.get());
     cmd->setPipeline(osd_pipeline.get());
     cmd->setGraphicsDescriptorSet(osd_set.get(), 0);
@@ -1259,55 +1350,114 @@ std::unique_ptr<HwRenderer> HwRenderer::create(const NativeWindow* window, const
     return r;
 }
 
-void HwRenderer::triangle(std::span<uint16_t>, const DrawState& s, const PrimitiveFlags& f, const GpuVertex v[3]) {
-    Impl& m = *impl_;
+DrawState HwRenderer::Impl::wide_state(const DrawState& s) {
+    DrawState d = s;
+    if (wide.covers_width(s.area_x1, s.area_x2)) {
+        d.area_x1 = WideFrame::kOriginX;
+        d.area_x2 = WideFrame::kOriginX + wide.width() - 1;
+    } else {
+        d.area_x1 = wide.map_x(s.area_x1);
+        d.area_x2 = wide.map_x(s.area_x2);
+    }
+    wide_ready[s.area_y1 >= 256 ? 1 : 0] = true;
+    return d;
+}
+
+void HwRenderer::Impl::draw_triangle(const DrawState& s, const PrimitiveFlags& f, const GpuVertex v[3], bool tracked) {
     const Region bounds = triangle_bounds(s, v);
     if (bounds.empty()) return;
-    if (m.tracking()) m.blocks.invalidate(bounds);
-    const std::size_t before = m.pending.size();
-    if (m.precise && has_precise(v)) build_precise_triangle(m.pending, s, f, v, m.scale);
-    else build_triangle(m.pending, s, f, v, m.scale);
+    if (tracked && tracking()) blocks.invalidate(bounds);
+    const std::size_t before = pending.size();
+    if (precise && has_precise(v)) build_precise_triangle(pending, s, f, v, scale);
+    else build_triangle(pending, s, f, v, scale);
     const bool tex = uses_texture(s, f);
     Region t, c;
     if (tex) {
         t = triangle_texture_region(s, v);
         c = clut_region(s, f);
     }
-    m.queue_primitive(s, bounds, f.semi_transparent || s.check_mask, tex ? &t : nullptr, tex ? &c : nullptr, before);
+    queue_primitive(s, bounds, f.semi_transparent || s.check_mask, tex ? &t : nullptr, tex ? &c : nullptr, before);
 }
 
-void HwRenderer::rect(std::span<uint16_t> vram, const DrawState& s, const PrimitiveFlags& f, const GpuVertex& v, int width,
-                      int height) {
+void HwRenderer::triangle(std::span<uint16_t>, const DrawState& s, const PrimitiveFlags& f, const GpuVertex v[3]) {
     Impl& m = *impl_;
+    if (m.mirrors(s)) {
+        // World geometry (drawn with a screen-centre offset) keeps its position relative to the centre; flat 2D
+        // shapes that touch the frame edge stretch to the edge of the wide frame.
+        const bool world = s.off_x != 0 || s.off_y != 0;
+        const bool stretch = !world && !uses_texture(s, f);
+        GpuVertex t[3] = {v[0], v[1], v[2]};
+        for (GpuVertex& g : t) {
+            const int mapped = stretch ? m.wide.snap_x(g.x) : m.wide.map_x(g.x);
+            if (mapped != g.x + m.wide.shift()) g.precise = false;
+            g.fx += static_cast<float>(m.wide.shift());
+            g.x = mapped;
+        }
+        m.draw_triangle(m.wide_state(s), f, t, false);
+    }
+    m.draw_triangle(s, f, v, true);
+}
+
+void HwRenderer::Impl::draw_rect(std::span<uint16_t> vram, const DrawState& s, const PrimitiveFlags& f, const GpuVertex& v,
+                                 int width, int height, bool tracked) {
     const Region bounds = rect_bounds(s, v, width, height);
     if (bounds.empty()) return;
-    if (m.tracking()) {
-        m.blocks.invalidate(bounds);
+    if (tracked && tracking()) {
+        blocks.invalidate(bounds);
         // Opaque sprites that read 8-bit texels one to one: the candidates for background images.
         if (s.depth == TexDepth::Bit8 && uses_texture(s, f) && !f.semi_transparent && !s.rect_flip_x && !s.rect_flip_y &&
-            s.win_mask_x == 0 && s.win_mask_y == 0 && m.draw_background_rect(vram, s, f, v, width, height))
+            s.win_mask_x == 0 && s.win_mask_y == 0 && draw_background_rect(vram, s, f, v, width, height))
             return;
     }
-    const std::size_t before = m.pending.size();
-    build_rect(m.pending, s, f, v, width, height);
+    const std::size_t before = pending.size();
+    build_rect(pending, s, f, v, width, height);
     const bool tex = uses_texture(s, f);
     Region t, c;
     if (tex) {
         t = rect_texture_region(s, v, width, height);
         c = clut_region(s, f);
     }
-    m.queue_primitive(s, bounds, f.semi_transparent || s.check_mask, tex ? &t : nullptr, tex ? &c : nullptr, before);
+    queue_primitive(s, bounds, f.semi_transparent || s.check_mask, tex ? &t : nullptr, tex ? &c : nullptr, before);
+}
+
+void HwRenderer::rect(std::span<uint16_t> vram, const DrawState& s, const PrimitiveFlags& f, const GpuVertex& v, int width,
+                      int height) {
+    Impl& m = *impl_;
+    if (m.mirrors(s)) {
+        GpuVertex t = v;
+        int w = width;
+        if (!uses_texture(s, f)) {
+            const int left = m.wide.snap_x(v.x), right = m.wide.snap_x(v.x + width);
+            t.x = left;
+            w = right - left;
+        } else {
+            t.x = m.wide.map_x(v.x);
+        }
+        m.draw_rect(vram, m.wide_state(s), f, t, w, height, false);
+    }
+    m.draw_rect(vram, s, f, v, width, height, true);
+}
+
+void HwRenderer::Impl::draw_line(const DrawState& s, const PrimitiveFlags& f, const GpuVertex& a, const GpuVertex& b,
+                                 bool tracked) {
+    const Region bounds = line_bounds(s, a, b);
+    if (bounds.empty()) return;
+    if (tracked && tracking()) blocks.invalidate(bounds);
+    const std::size_t before = pending.size();
+    if (build_line(pending, s, f, a, b) == 0) return;
+    queue_primitive(s, bounds, f.semi_transparent || s.check_mask, nullptr, nullptr, before);
 }
 
 void HwRenderer::line(std::span<uint16_t>, const DrawState& s, const PrimitiveFlags& f, const GpuVertex& a,
                       const GpuVertex& b) {
     Impl& m = *impl_;
-    const Region bounds = line_bounds(s, a, b);
-    if (bounds.empty()) return;
-    if (m.tracking()) m.blocks.invalidate(bounds);
-    const std::size_t before = m.pending.size();
-    if (build_line(m.pending, s, f, a, b) == 0) return;
-    m.queue_primitive(s, bounds, f.semi_transparent || s.check_mask, nullptr, nullptr, before);
+    if (m.mirrors(s)) {
+        GpuVertex wa = a, wb = b;
+        wa.x = m.wide.map_x(a.x);
+        wb.x = m.wide.map_x(b.x);
+        m.draw_line(m.wide_state(s), f, wa, wb, false);
+    }
+    m.draw_line(s, f, a, b, true);
 }
 
 void HwRenderer::vram_written(std::span<const uint16_t> vram, const VramRect& r) {
@@ -1339,6 +1489,17 @@ bool HwRenderer::vram_fill(const VramRect& r, uint16_t color) {
         ++m.stats.draw_calls;
     }
     const Region b = region_from(r);
+    if (m.mirror && m.wide.in_frame(r.x, r.y, r.x + r.w - 1, r.y + r.h - 1)) {
+        // The same fill in the wide copy; one that spans the frame spans the whole copy.
+        const bool full = m.wide.covers_width(r.x, r.x + r.w - 1);
+        const int x0 = full ? WideFrame::kOriginX : m.wide.map_x(r.x);
+        const int x1 = full ? WideFrame::kOriginX + m.wide.width() : m.wide.map_x(r.x + r.w);
+        m.cmd->setScissors(RenderRect(x0 * m.scale, r.y * m.scale, x1 * m.scale, (r.y + r.h) * m.scale));
+        m.cmd->drawInstanced(3, 1, 0, 0);
+        ++m.stats.draw_calls;
+        m.stale.add({x0, r.y, x1, r.y + r.h});
+        m.wide_ready[r.y >= 256 ? 1 : 0] = true;
+    }
     if (m.tracking()) m.blocks.invalidate(b);
     m.stale.add(b);
     m.dirty.add(b);
@@ -1425,9 +1586,12 @@ bool HwRenderer::read_display(const VramRect& r, std::vector<uint32_t>& rgba) {
     return true;
 }
 
-bool HwRenderer::present(const DisplayState& display, ScaleMode mode, bool linear, std::vector<uint32_t>* capture,
+bool HwRenderer::present(const DisplayState& shown, ScaleMode mode, bool linear, std::vector<uint32_t>* capture,
                          int* capture_w, int* capture_h, const HwOverlay* overlay, const PostFx* post) {
     Impl& m = *impl_;
+    const DisplayState display = m.wide_display(shown);
+    PostFx post_storage;
+    post = m.effective_post(post, post_storage);
     if (m.dump) m.dump->end_frame();
     if (!m.swap) return false;
     m.record_draws();
@@ -1459,7 +1623,8 @@ bool HwRenderer::present(const DisplayState& display, ScaleMode mode, bool linea
     PostChain::Plan plan;
     const PostChain::Plan* plan_ptr = nullptr;
     if (post && post->active() && display.enabled) {
-        const PresentRect pr = compute_present_rect(display.width, display.height, static_cast<int>(w), static_cast<int>(h), mode);
+        const PresentRect pr = compute_present_rect(display.width, display.height, static_cast<int>(w), static_cast<int>(h), mode,
+                                                 display.aspect_num, display.aspect_den);
         if (pr.w > 0 && pr.h > 0 && m.run_post(*post, display, pr, plan)) plan_ptr = &plan;
     }
     RenderTexture* target = m.swap->getTexture(index);
@@ -1467,7 +1632,7 @@ bool HwRenderer::present(const DisplayState& display, ScaleMode mode, bool linea
     m.draw_display(m.swap_fbs[index].get(), w, h, display, mode, linear, plan_ptr);
     if (overlay) m.draw_overlay(w, h, *overlay);
 
-    const bool grab = capture != nullptr && m.ensure_capture(w, h);
+    const bool grab = capture != nullptr && !m.hdr_active && m.ensure_capture(w, h);  // the capture target is 8-bit
     if (grab) {
         m.transition(m.capture_tex.get(), m.capture_layout, RenderTextureLayout::COLOR_WRITE);
         m.draw_display(m.capture_fb.get(), w, h, display, mode, linear, plan_ptr);
@@ -1492,9 +1657,12 @@ bool HwRenderer::present(const DisplayState& display, ScaleMode mode, bool linea
     return true;
 }
 
-bool HwRenderer::render_to_image(const DisplayState& display, ScaleMode mode, bool linear, const PostFx* post, int width,
+bool HwRenderer::render_to_image(const DisplayState& shown, ScaleMode mode, bool linear, const PostFx* post, int width,
                                  int height, std::vector<uint32_t>& rgba) {
     Impl& m = *impl_;
+    const DisplayState display = m.wide_display(shown);
+    PostFx post_storage;
+    post = m.effective_post(post, post_storage);
     if (width <= 0 || height <= 0) return false;
     const uint32_t w = static_cast<uint32_t>(width), h = static_cast<uint32_t>(height);
     m.record_draws();
@@ -1505,7 +1673,8 @@ bool HwRenderer::render_to_image(const DisplayState& display, ScaleMode mode, bo
     PostChain::Plan plan;
     const PostChain::Plan* plan_ptr = nullptr;
     if (post && post->active() && display.enabled) {
-        const PresentRect pr = compute_present_rect(display.width, display.height, width, height, mode);
+        const PresentRect pr = compute_present_rect(display.width, display.height, width, height, mode, display.aspect_num,
+                                                 display.aspect_den);
         if (pr.w > 0 && pr.h > 0 && m.run_post(*post, display, pr, plan)) plan_ptr = &plan;
     }
     m.transition(m.capture_tex.get(), m.capture_layout, RenderTextureLayout::COLOR_WRITE);
@@ -1527,7 +1696,17 @@ bool HwRenderer::reconfigure(int internal_scale, const HwOptions& options, std::
     const uint32_t new_mode = (new_layer ? 1u : 0u) | (options.true_color ? 2u : 0u) | (static_cast<uint32_t>(options.filter) << 2);
     m.record_draws();
     const bool pack_present_changed = static_cast<bool>(options.texture_pack) != static_cast<bool>(m.pack);
-    if (new_scale == m.scale && new_layer == m.layer && !pack_present_changed) {
+    if (options.hdr != m.hdr_wanted) {
+        m.hdr_wanted = options.hdr;
+        if (!m.recreate_swapchain()) {
+            error = "swap chain creation failed";
+            m.hdr_wanted = !options.hdr;
+            m.recreate_swapchain();
+            return false;
+        }
+    }
+    const bool wide_changed = options.wide_frame.margin != m.wide.margin;
+    if (new_scale == m.scale && new_layer == m.layer && !pack_present_changed && !wide_changed) {
         // Only the draw shader's mode word and the vertex path change: nothing to rebuild. A different pack empties
         // the atlas, which the new pack's images will fill again.
         if (options.texture_pack != m.pack) {
@@ -1538,6 +1717,7 @@ bool HwRenderer::reconfigure(int internal_scale, const HwOptions& options, std::
             m.pack = options.texture_pack;
         }
         m.precise = options.precise_geometry;
+        m.wide = options.wide_frame;
         m.draw_mode = new_mode;
         return true;
     }
@@ -1548,6 +1728,9 @@ bool HwRenderer::reconfigure(int internal_scale, const HwOptions& options, std::
     const int old_scale = m.scale;
     const bool old_layer = m.layer;
     const auto old_pack = m.pack;
+    const WideFrame old_wide = m.wide;
+    m.wide = options.wide_frame;
+    m.wide_ready[0] = m.wide_ready[1] = false;
     auto rebuild = [&](int s, bool l, std::string& err) {
         m.scale = s;
         m.layer = l;
@@ -1568,12 +1751,22 @@ bool HwRenderer::reconfigure(int internal_scale, const HwOptions& options, std::
         std::string ignored;
         m.wait_all();
         m.pack = old_pack;
+        m.wide = old_wide;
         rebuild(old_scale, old_layer, ignored);
         return false;
     }
     m.precise = options.precise_geometry;
     m.draw_mode = new_mode;
     return true;
+}
+
+bool HwRenderer::hdr_active() const { return impl_->hdr_active; }
+
+void HwRenderer::set_wide_mirror(bool active) {
+    Impl& m = *impl_;
+    if (active == m.mirror) return;
+    m.mirror = active && m.wide.enabled();
+    m.wide_ready[0] = m.wide_ready[1] = false;
 }
 
 void HwRenderer::set_texture_dump(const std::string& directory) {

@@ -1,0 +1,81 @@
+--- a/plume_render_interface_types.h
++++ b/plume_render_interface_types.h
+@@ -1153,6 +1153,11 @@
+         bool enablePresentWait = false;
+         uint32_t maxFrameLatency = 0;
+ 
++        // Ask for extended-range output: the format must be R16G16B16A16_FLOAT, and the presented values are linear
++        // Rec. 709 with 1.0 = 80 nits (scRGB). RenderSwapChain::hdrActive tells whether the backend got it; if not,
++        // the swap chain keeps the plain sRGB colour space or stays empty.
++        bool hdr = false;
++
+         RenderSwapChainDesc() = default;
+ 
+         RenderSwapChainDesc(RenderWindow renderWindow, RenderFormat format, uint32_t textureCount, bool enablePresentWait = false, uint32_t maxFrameLatency = 0) {
+--- a/plume_render_interface.h
++++ b/plume_render_interface.h
+@@ -87,6 +87,10 @@
+ 
+     struct RenderSwapChain {
+         virtual ~RenderSwapChain() { }
++
++        // Set by the backend: the swap chain presents scRGB (see RenderSwapChainDesc::hdr).
++        bool hdrActive = false;
++
+         virtual bool present(uint32_t textureIndex, RenderCommandSemaphore **waitSemaphores, uint32_t waitSemaphoreCount) = 0;
+         virtual void wait() = 0;
+         virtual bool resize() = 0;
+--- a/plume_vulkan.cpp
++++ b/plume_vulkan.cpp
+@@ -73,6 +73,7 @@
+     };
+ 
+     static const std::unordered_set<std::string> OptionalInstanceExtensions = {
++        VK_EXT_SWAPCHAIN_COLOR_SPACE_EXTENSION_NAME,
+ #   if defined(__APPLE__)
+         // Tells the system Vulkan loader to enumerate portability drivers, if supported.
+         VK_KHR_PORTABILITY_ENUMERATION_EXTENSION_NAME,
+@@ -2220,7 +2221,6 @@
+         for (uint32_t i = 0; i < surfaceFormatCount; i++) {
+             if (surfaceFormats[i].format == requestedFormat) {
+                 compatibleSurfaceFormats.emplace_back(surfaceFormats[i]);
+-                break;
+             }
+         }
+ 
+@@ -2229,10 +2229,13 @@
+             return;
+         }
+ 
+-        // Pick the preferred color space, if not available, pick whatever first shows up on the list.
++        // Pick the preferred color space (extended linear sRGB when HDR was asked for), if not available, pick
++        // whatever first shows up on the list.
++        const VkColorSpaceKHR preferredColorSpace = desc.hdr ? VK_COLOR_SPACE_EXTENDED_SRGB_LINEAR_EXT : VK_COLOR_SPACE_SRGB_NONLINEAR_KHR;
+         for (const VkSurfaceFormatKHR &surfaceFormat : compatibleSurfaceFormats) {
+-            if (surfaceFormat.colorSpace == VK_COLOR_SPACE_SRGB_NONLINEAR_KHR) {
++            if (surfaceFormat.colorSpace == preferredColorSpace) {
+                 pickedSurfaceFormat = surfaceFormat;
++                hdrActive = desc.hdr;
+                 break;
+             }
+         }
+--- a/plume_d3d12.cpp
++++ b/plume_d3d12.cpp
+@@ -1357,6 +1357,17 @@
+         }
+ 
+         d3d = static_cast<IDXGISwapChain3 *>(swapChain1);
++
++        // Extended-range output: linear Rec. 709 floating point (scRGB), if the output can present it.
++        if (desc.hdr && desc.format == RenderFormat::R16G16B16A16_FLOAT) {
++            UINT colorSpaceSupport = 0;
++            if (SUCCEEDED(d3d->CheckColorSpaceSupport(DXGI_COLOR_SPACE_RGB_FULL_G10_NONE_P709, &colorSpaceSupport)) &&
++                (colorSpaceSupport & DXGI_SWAP_CHAIN_COLOR_SPACE_SUPPORT_FLAG_PRESENT) &&
++                SUCCEEDED(d3d->SetColorSpace1(DXGI_COLOR_SPACE_RGB_FULL_G10_NONE_P709))) {
++                hdrActive = true;
++            }
++        }
++
+         d3d->SetMaximumFrameLatency(desc.maxFrameLatency);
+         waitableObject = d3d->GetFrameLatencyWaitableObject();
+ 

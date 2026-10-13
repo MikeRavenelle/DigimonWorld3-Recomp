@@ -81,3 +81,21 @@ TEST(PresentLayout, UploadRowAlignment) {
     EXPECT_EQ(upload_row_pixels(320), 320u);
     EXPECT_EQ(upload_row_pixels(368), 384u);
 }
+
+TEST(PresentRectAspect, WideFrameFitsA16x9WindowExactly) {
+    EXPECT_EQ(compute_present_rect(424, 240, 1920, 1080, ScaleMode::Fit, 16, 9), (PresentRect{0, 0, 1920, 1080}));
+}
+
+TEST(PresentRectAspect, FourByThreeInAWideWindowIsPillarboxed) {
+    EXPECT_EQ(compute_present_rect(320, 240, 1920, 1080, ScaleMode::Fit), (PresentRect{240, 0, 1440, 1080}));
+}
+
+TEST(PresentRectAspect, WideFrameInAFourByThreeWindowIsLetterboxed) {
+    EXPECT_EQ(compute_present_rect(424, 240, 1024, 768, ScaleMode::Fit, 16, 9), (PresentRect{0, 96, 1024, 576}));
+}
+
+TEST(PresentRectAspect, IntegerModeUsesTheWideWidth) {
+    const PresentRect r = compute_present_rect(424, 240, 1920, 1080, ScaleMode::Integer, 16, 9);
+    EXPECT_EQ(r.h % 240, 0);
+    EXPECT_EQ(r.w, 426 * (r.h / 240));  // 426 = 240 * 16 / 9
+}

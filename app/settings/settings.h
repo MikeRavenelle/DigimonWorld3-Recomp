@@ -29,6 +29,7 @@ struct Settings {
         bool precise_geometry = false;
         int output_filter = 0;       // nearest, linear, fsr (scaling the picture to the window)
         int scale_mode = 0;          // fit, integer, stretch
+        int widescreen = 0;          // battles: off, 16:9, 16:10, 21:9 (more of the arena on each side; fields stay 4:3)
         int display_mode = 0;        // choice: windowed, borderless, exclusive
         int monitor = 0;             // 0 is auto (where the window is), 1.. the monitors in the system's order
         int window_width = 1280;     // windowed size
@@ -41,6 +42,9 @@ struct Settings {
         bool show_fps = false;
         int gamma = 100;             // percent, 80..140
         int brightness = 0;          // percent, -50..50
+        bool hdr = false;            // HDR output on a display that is in HDR mode (GPU renderer)
+        int hdr_peak_nits = 1000;    // 400..1500: the brightness white is lifted towards
+        int hdr_paper_white = 203;   // 100..300 nits: where SDR white is placed
         // Post-processing (GPU renderer only; see docs/SETTINGS.md).
         int antialiasing = 0;        // off, smaa
         int sharpening = 0;          // off, low, medium, high

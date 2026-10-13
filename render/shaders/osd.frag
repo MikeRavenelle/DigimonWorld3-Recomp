@@ -8,6 +8,7 @@ layout(push_constant) uniform Params {
     vec4 dest;
     vec2 window;
     float opacity;
+    float hdrScale;  // 0 for an SDR swap chain; otherwise paper white / 80 nits, for scRGB
 } params;
 
 layout(location = 0) in vec2 vFrac;
@@ -16,5 +17,10 @@ layout(location = 0) out vec4 outColor;
 void main() {
     ivec2 size = textureSize(uOsd, 0);
     vec4 c = texelFetch(uOsd, clamp(ivec2(vFrac * vec2(size)), ivec2(0), size - 1), 0);
-    outColor = vec4(c.rgb, c.a * params.opacity);
+    vec3 rgb = c.rgb;
+    if (params.hdrScale > 0.0) {
+        rgb = clamp(rgb, 0.0, 1.0);
+        rgb = mix(pow((rgb + 0.055) / 1.055, vec3(2.4)), rgb / 12.92, lessThanEqual(rgb, vec3(0.04045))) * params.hdrScale;
+    }
+    outColor = vec4(rgb, c.a * params.opacity);
 }
