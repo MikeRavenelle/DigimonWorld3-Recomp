@@ -6,19 +6,17 @@
 //   texpack extract --disc <disc image or folder> --out <dump dir>    only writes the dump of the disc's field maps
 //
 // The upscaler is realesrgan-ncnn-vulkan (https://github.com/xinntao/Real-ESRGAN-ncnn-vulkan); it and its model files
-// are not shipped and are never downloaded by this tool. Point --upscaler and --models at an installation, or put them
-// in <user data dir>/tools (realesrgan-ncnn-vulkan and models/).
-#include <algorithm>
+// are not shipped and are never downloaded by this tool (the first-run wizard of dw3recomp does that, on request).
+// Point --upscaler and --models at an installation, or put them in <user data dir>/tools (realesrgan-ncnn-vulkan and
+// models/).
 #include <cstdio>
 #include <cstdlib>
 #include <filesystem>
-#include <memory>
 #include <string>
 #include <vector>
 
 #include "dw3/platform.h"
-#include "dw3/texrep/generate.h"
-#include "dw3/texrep/stage_dump.h"
+#include "dw3/texrep/pack_job.h"
 
 namespace fs = std::filesystem;
 using namespace dw3::texrep;
@@ -73,40 +71,7 @@ int run(const std::vector<std::string>& args) {
     return std::system(cmd.c_str());
 }
 
-struct Config {
-    std::vector<fs::path> dumps;
-    std::vector<std::string> maps;
-    fs::path disc;
-    fs::path out, upscaler, models, work;
-    std::string name, model = "RealESRGAN_General_x4_v3", gpu;
-    int scale = 4, model_scale = 4, pad = 16;
-};
-
-// Writes the dump of the field maps found on the disc (or the chosen ones) to `dir`.
-bool extract_disc(const fs::path& disc, const fs::path& dir, const std::vector<std::string>& only, std::string& error) {
-    std::unique_ptr<StageSource> source = StageSource::open(disc, error);
-    if (!source) return false;
-    StageDumpWriter writer(dir);
-    std::vector<uint8_t> data;
-    std::size_t index = 0;
-    for (const std::string& map : source->maps()) {
-        ++index;
-        if (!only.empty() && std::find(only.begin(), only.end(), map) == only.end()) continue;
-        StagePack pack;
-        std::string detail;
-        if (!source->read(map, data, detail) || !parse_stage_pack(data, pack, detail)) {
-            error = map + ": " + detail;
-            return false;
-        }
-        if (!writer.add_map(map, pack, error)) return false;
-        if (index % 20 == 0) std::fprintf(stderr, "texpack: read %zu / %zu maps\n", index, source->maps().size());
-    }
-    if (!writer.finish(error)) return false;
-    const StageDumpStats& st = writer.stats();
-    std::fprintf(stderr, "texpack: %zu maps, %zu pictures, %zu distinct images (%zu not trackable, %zu empty) -> %s\n", st.maps, st.cells,
-                 st.images, st.untracked, st.transparent, dw3::platform::path_to_utf8(dir).c_str());
-    return true;
-}
+void log_line(const std::string& line) { std::fprintf(stderr, "texpack: %s\n", line.c_str()); }
 
 }  // namespace
 
@@ -121,7 +86,7 @@ int main(int argc, char** argv) {
         return 2;
     }
     const bool extract_only = args[1] == "extract";
-    Config c;
+    PackJob job;
     for (std::size_t i = 2; i < args.size(); ++i) {
         const std::string& a = args[i];
         auto value = [&]() -> const std::string& {
@@ -131,19 +96,19 @@ int main(int argc, char** argv) {
             }
             return args[++i];
         };
-        if (a == "--dump") c.dumps.push_back(dw3::platform::path_from_utf8(value()));
-        else if (a == "--disc") c.disc = dw3::platform::path_from_utf8(value());
-        else if (a == "--map") c.maps.push_back(value());
-        else if (a == "--out") c.out = dw3::platform::path_from_utf8(value());
-        else if (a == "--name") c.name = value();
-        else if (a == "--scale") c.scale = std::atoi(value().c_str());
-        else if (a == "--upscaler") c.upscaler = dw3::platform::path_from_utf8(value());
-        else if (a == "--models") c.models = dw3::platform::path_from_utf8(value());
-        else if (a == "--model") c.model = value();
-        else if (a == "--model-scale") c.model_scale = std::atoi(value().c_str());
-        else if (a == "--pad") c.pad = std::atoi(value().c_str());
-        else if (a == "--gpu") c.gpu = value();
-        else if (a == "--work") c.work = dw3::platform::path_from_utf8(value());
+        if (a == "--dump") job.dumps.push_back(dw3::platform::path_from_utf8(value()));
+        else if (a == "--disc") job.disc = dw3::platform::path_from_utf8(value());
+        else if (a == "--map") job.maps.push_back(value());
+        else if (a == "--out") job.out = dw3::platform::path_from_utf8(value());
+        else if (a == "--name") job.name = value();
+        else if (a == "--scale") job.scale = std::atoi(value().c_str());
+        else if (a == "--upscaler") job.upscaler = dw3::platform::path_from_utf8(value());
+        else if (a == "--models") job.models = dw3::platform::path_from_utf8(value());
+        else if (a == "--model") job.model = value();
+        else if (a == "--model-scale") job.model_scale = std::atoi(value().c_str());
+        else if (a == "--pad") job.pad = std::atoi(value().c_str());
+        else if (a == "--gpu") job.gpu = value();
+        else if (a == "--work") job.work = dw3::platform::path_from_utf8(value());
         else {
             std::fprintf(stderr, "texpack: unknown option %s\n", a.c_str());
             usage();
@@ -151,18 +116,18 @@ int main(int argc, char** argv) {
         }
     }
     if (extract_only) {
-        if (c.disc.empty() || c.out.empty()) {
+        if (job.disc.empty() || job.out.empty()) {
             usage();
             return 2;
         }
         std::string error;
-        if (!extract_disc(c.disc, c.out, c.maps, error)) {
+        if (!extract_disc(job.disc, job.out, job.maps, log_line, error)) {
             std::fprintf(stderr, "texpack: %s\n", error.c_str());
             return 1;
         }
         return 0;
     }
-    if ((c.dumps.empty() && c.disc.empty()) || c.out.empty()) {
+    if ((job.dumps.empty() && job.disc.empty()) || job.out.empty()) {
         usage();
         return 2;
     }
@@ -172,79 +137,28 @@ int main(int argc, char** argv) {
 #else
     const char* exe = "realesrgan-ncnn-vulkan";
 #endif
-    if (c.upscaler.empty()) c.upscaler = tools / exe;
-    if (c.models.empty()) c.models = tools / "models";
-    if (!fs::exists(c.upscaler)) {
-        std::fprintf(stderr, "texpack: upscaler not found: %s (see --upscaler)\n", dw3::platform::path_to_utf8(c.upscaler).c_str());
+    if (job.upscaler.empty()) job.upscaler = tools / exe;
+    if (job.models.empty()) job.models = tools / "models";
+    if (!fs::exists(job.upscaler)) {
+        std::fprintf(stderr, "texpack: upscaler not found: %s (see --upscaler)\n", dw3::platform::path_to_utf8(job.upscaler).c_str());
         return 1;
     }
-    if (!fs::exists(c.models / (c.model + ".param"))) {
-        std::fprintf(stderr, "texpack: model %s not found in %s (see --models, --model)\n", c.model.c_str(),
-                     dw3::platform::path_to_utf8(c.models).c_str());
+    if (!fs::exists(job.models / (job.model + ".param"))) {
+        std::fprintf(stderr, "texpack: model %s not found in %s (see --models, --model)\n", job.model.c_str(),
+                     dw3::platform::path_to_utf8(job.models).c_str());
         return 1;
     }
-    std::error_code ec;
-    const bool own_work = c.work.empty();
-    if (own_work) c.work = fs::temp_directory_path(ec) / ("dw3texpack-" + std::to_string(std::rand()));
-    fs::create_directories(c.work / "in", ec);
-    if (!c.disc.empty()) {
-        std::string error;
-        if (!extract_disc(c.disc, c.work / "disc-dump", c.maps, error)) {
-            std::fprintf(stderr, "texpack: %s\n", error.c_str());
-            if (own_work) fs::remove_all(c.work, ec);
-            return 1;
-        }
-        c.dumps.insert(c.dumps.begin(), c.work / "disc-dump");
-    }
-
-    GenerateOptions options;
-    options.name = c.name.empty() ? dw3::platform::path_to_utf8(c.out.filename()) : c.name;
-    options.scale = c.scale;
-    options.model_scale = c.model_scale;
-    options.pad = c.pad;
-    options.progress = [](std::size_t done, std::size_t total) { std::fprintf(stderr, "texpack: %zu / %zu\n", done, total); };
-
-    BatchUpscaler upscale = [&](const std::vector<Image>& in, std::vector<Image>& out, std::string& error) {
-        fs::remove_all(c.work / "in", ec);
-        fs::remove_all(c.work / "out", ec);
-        fs::create_directories(c.work / "in", ec);
-        fs::create_directories(c.work / "out", ec);
-        char name[32];
-        for (std::size_t i = 0; i < in.size(); ++i) {
-            std::snprintf(name, sizeof name, "%05zu.png", i);
-            if (!write_png(c.work / "in" / name, in[i], error, false)) return false;  // the upscaler mishandles alpha
-        }
-        std::vector<std::string> cmd = {dw3::platform::path_to_utf8(c.upscaler), "-i", dw3::platform::path_to_utf8(c.work / "in"), "-o",
-                                        dw3::platform::path_to_utf8(c.work / "out"), "-n", c.model, "-s", std::to_string(c.model_scale), "-m",
-                                        dw3::platform::path_to_utf8(c.models), "-f", "png"};
-        if (!c.gpu.empty()) {
-            cmd.push_back("-g");
-            cmd.push_back(c.gpu);
-        }
-        const int rc = run(cmd);
-        if (rc != 0) {
-            error = "the upscaler failed (exit code " + std::to_string(rc) + ")";
-            return false;
-        }
-        out.clear();
-        for (std::size_t i = 0; i < in.size(); ++i) {
-            std::snprintf(name, sizeof name, "%05zu.png", i);
-            Image img;
-            if (!read_png(c.work / "out" / name, img, error)) return false;
-            out.push_back(std::move(img));
-        }
-        return true;
-    };
+    job.run = run;
+    job.log = log_line;
+    job.progress = [](std::size_t done, std::size_t total) { std::fprintf(stderr, "texpack: %zu / %zu\n", done, total); };
 
     GenerateReport report;
     std::string error;
-    const bool ok = generate_pack(c.dumps, c.out, options, upscale, report, error);
-    if (own_work) fs::remove_all(c.work, ec);
-    if (!ok) {
+    if (!run_pack_job(job, report, error)) {
         std::fprintf(stderr, "texpack: %s\n", error.c_str());
         return 1;
     }
-    std::fprintf(stderr, "texpack: %zu images generated, %zu already in the pack -> %s\n", report.generated,
-                 report.skipped_existing, dw3::platform::path_to_utf8(c.out).c_str());
+    std::fprintf(stderr, "texpack: %zu images generated, %zu already in the pack -> %s\n", report.generated, report.skipped_existing,
+                 dw3::platform::path_to_utf8(job.out).c_str());
     return 0;
 }
