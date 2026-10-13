@@ -22,6 +22,9 @@ constexpr std::string_view kTextureFilters[] = {"nearest", "bilinear", "xbr"};
 constexpr std::string_view kOutputFilters[] = {"nearest", "linear"};
 constexpr std::string_view kScaleModes[] = {"fit", "integer", "stretch"};
 constexpr std::string_view kSpeeds[] = {"2x", "4x", "unlimited"};
+constexpr std::string_view kEncounters[] = {"normal", "half", "off", "double"};
+constexpr std::string_view kGameSpeeds[] = {"1x", "2x", "3x", "4x"};
+constexpr std::string_view kTextSpeeds[] = {"normal", "fast", "instant"};
 
 #define DW3_FIELD(path) +[](Settings& s) -> void* { return &s.path; }
 
@@ -71,6 +74,15 @@ const SettingInfo kSettings[] = {
      Group::System, Type::String, Apply::Restart, 0, 0, {}, false, DW3_FIELD(system.memcard2)},
     {"system.fast_forward_speed", "Fast-forward speed", "Speed while fast-forwarding (hold Tab, or press F10 to latch it).",
      Group::System, Type::Choice, Apply::Live, 0, 0, kSpeeds, false, DW3_FIELD(system.fast_forward_speed)},
+
+    {"gameplay.encounters", "Random encounters", "How often random battles start while walking: normal, half as often, never, or twice as often.",
+     Group::Gameplay, Type::Choice, Apply::Live, 0, 0, kEncounters, false, DW3_FIELD(gameplay.encounters)},
+    {"gameplay.game_speed", "Game speed", "Runs the whole game faster, with sound kept at its normal pitch (a hotkey toggles it).",
+     Group::Gameplay, Type::Choice, Apply::Live, 0, 0, kGameSpeeds, false, DW3_FIELD(gameplay.game_speed)},
+    {"gameplay.text_speed", "Text speed", "How fast dialogue text is printed.",
+     Group::Gameplay, Type::Choice, Apply::Live, 0, 0, kTextSpeeds, false, DW3_FIELD(gameplay.text_speed)},
+    {"gameplay.god_mode", "God mode", "The party takes no damage and its attacks defeat enemies in one hit.",
+     Group::Gameplay, Type::Bool, Apply::Live, 0, 0, {}, false, DW3_FIELD(gameplay.god_mode)},
 };
 
 #undef DW3_FIELD
@@ -158,6 +170,7 @@ std::string_view group_name(Group g) {
         case Group::Graphics: return "graphics";
         case Group::Audio: return "audio";
         case Group::System: return "system";
+        case Group::Gameplay: return "gameplay";
     }
     return "";
 }

@@ -34,6 +34,7 @@
 #include "dw3/recomp.h"
 #include "dw3/state.h"
 #include "field_menu.h"
+#include "gameplay.h"
 #include "scenario.h"
 
 namespace {
@@ -397,8 +398,19 @@ int main(int argc, char** argv) {
         if (opt.no_xa) host->machine().cdrom().set_xa_sink(nullptr);
         host->machine().sio().set_pad_source(0, &pad);
         // The game's settings screen runs as in the app, on default settings that are never written anywhere.
-        dw3app::SettingsController settings_controller(dw3app::Settings{}, dw3app::Settings{}, nullptr, {});
+        dw3app::Settings scenario_settings;
+        for (const std::string& entry : scenario.settings) {
+            const std::size_t eq = entry.find('=');
+            const dw3app::SettingInfo* info = dw3app::find_setting(entry.substr(0, eq));
+            std::string error;
+            if (!info || !dw3app::set_text(scenario_settings, *info, entry.substr(eq + 1), error)) {
+                std::fprintf(stderr, "scenario setting %s: %s\n", entry.c_str(), info ? error.c_str() : "unknown id");
+                return 2;
+            }
+        }
+        dw3app::SettingsController settings_controller(scenario_settings, scenario_settings, nullptr, {});
         dw3app::ingame::FieldMenuSettings settings_screen(host->machine(), settings_controller);
+        dw3app::ingame::GameplayHooks gameplay(host->machine(), settings_controller);
         int64_t base = last_frame;  // real frames before this boot; shifted when a state is loaded
         if (boot == 0 && !scenario.start_state.empty()) {
             std::vector<uint8_t> file;

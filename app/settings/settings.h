@@ -46,10 +46,18 @@ struct Settings {
         bool operator==(const System&) const = default;
     } system;
 
+    struct Gameplay {
+        int encounters = 0;          // choice: normal, half, off, double
+        int game_speed = 0;          // choice: 1x, 2x, 3x, 4x
+        int text_speed = 0;          // choice: normal, fast, instant
+        bool god_mode = false;       // the party takes no damage and defeats enemies in one hit
+        bool operator==(const Gameplay&) const = default;
+    } gameplay;
+
     bool operator==(const Settings&) const = default;
 };
 
-enum class Group { Graphics, Audio, System };
+enum class Group { Graphics, Audio, System, Gameplay };
 enum class Type { Bool, Int, Choice, String };
 // Whether a changed value takes effect in the running program or only after a restart.
 enum class Apply { Live, Restart };

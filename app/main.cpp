@@ -73,6 +73,7 @@
 #include "dw3/host.h"
 #include "dw3/platform.h"
 #include "ingame/field_menu.h"
+#include "ingame/gameplay.h"
 #include "present/native_window.h"
 #include "settings/controller.h"
 #include "settings/fastforward.h"
@@ -237,6 +238,10 @@ Options parse(int argc, char** argv) {
         else if (a == "--texture-filter" && i + 1 < argc) set("graphics.texture_filter", argv[++i]);
         else if (a == "--no-vsync") set("graphics.vsync", "false");
         else if (a == "--fast-forward-speed" && i + 1 < argc) set("system.fast_forward_speed", argv[++i]);
+        else if (a == "--encounters" && i + 1 < argc) set("gameplay.encounters", argv[++i]);
+        else if (a == "--game-speed" && i + 1 < argc) set("gameplay.game_speed", argv[++i]);
+        else if (a == "--text-speed" && i + 1 < argc) set("gameplay.text_speed", argv[++i]);
+        else if (a == "--god-mode") set("gameplay.god_mode", "true");
         else if (a == "--screenshot-every" && i + 2 < argc) {
             o.shot_every = std::atoi(argv[++i]);
             o.shot_dir = argv[++i];
@@ -398,6 +403,7 @@ int main(int argc, char** argv) {
     } sink;
     dw3app::SettingsController settings(stored, active, &sink, config_file);
     dw3app::ingame::FieldMenuSettings settings_screen(machine, settings);
+    dw3app::ingame::GameplayHooks gameplay(machine, settings);
     sink.fn = [&](const dw3app::Settings& now, std::span<const dw3app::SettingInfo* const> changed) {
         bool ok = true, graphics = false, window_size = false;
         for (const dw3app::SettingInfo* info : changed) {

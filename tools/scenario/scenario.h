@@ -11,6 +11,9 @@
 //                              # checksum in the header frame, as DexDrive conversions leave, is repaired. A missing file
 //                              # skips the scenario.)
 //
+//   settings = ["gameplay.encounters=off"]   # application settings for this run, as id=value (ids as in settings.toml);
+//                              # everything else keeps its default
+//
 //   [[reboot]]                 # power-cycle the machine at frame `at`: RAM, GPU and game state are lost, the
 //   at = 4000                  # memory card image is kept. Frames in the file stay global; the intro skip
 //                              # (when enabled) is pressed kIntroSkipFrame frames after every boot.
@@ -188,6 +191,7 @@ struct Scenario {
     int64_t frames = 0;
     bool skip_intro = true;
     std::string memcard = "none";
+    std::vector<std::string> settings;  // "id=value"
     std::vector<Press> presses;
     std::vector<int64_t> reboots;  // sorted, within (0, frames)
     std::vector<StateOp> saves, loads;  // sorted by `at`

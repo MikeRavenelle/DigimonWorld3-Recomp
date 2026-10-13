@@ -190,6 +190,12 @@ Scenario parse(const std::string& text, const std::string& src) {
     s.frames = root["frames"].value_or(int64_t{0});
     s.skip_intro = root["skip_intro"].value_or(true);
     s.memcard = root["memcard"].value_or(std::string("none"));
+    if (const auto* list = root["settings"].as_array())
+        for (const auto& item : *list) {
+            const auto text = item.value<std::string>();
+            if (!text || text->find('=') == std::string::npos) fail(src, "`settings` entries must be strings like \"gameplay.god_mode=true\"");
+            s.settings.push_back(*text);
+        }
     if (s.name.empty()) fail(src, "missing `name`");
     if (s.frames <= 0) fail(src, "`frames` must be > 0");
     if (s.memcard != "none" && s.memcard != "blank" && !(s.memcard.rfind("game:", 0) == 0 && s.memcard.size() > 5))
