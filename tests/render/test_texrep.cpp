@@ -163,6 +163,15 @@ TEST(TexrepRegistry, StateLoadDropsEverything) {
     EXPECT_TRUE(reg.blocks().empty());
 }
 
+TEST(TexrepRegistry, ImplicitBlocksMayBeNarrowStrips) {
+    BlockRegistry reg;
+    EXPECT_NE(reg.add_implicit({700, 0, 704, 56}), nullptr);  // 8 texels wide
+    EXPECT_EQ(reg.add_implicit({710, 0, 711, 56}), nullptr);  // one word: too thin
+    EXPECT_EQ(reg.add_implicit({720, 0, 760, 1}), nullptr);   // one row
+    reg.add_upload({800, 0, 804, 56});
+    EXPECT_EQ(reg.find(801, 3), nullptr) << "an upload must still be at least 8 words wide";
+}
+
 TEST(TexrepRegistry, ImplicitBlocksNeverDropExistingOnes) {
     BlockRegistry reg;
     reg.add_upload({640, 0, 704, 128});
@@ -625,6 +634,35 @@ TEST(TexrepWindow, UpscalingAWindowAndCroppingGivesTheBlockUpscaled) {
     const Image up = replicate(context_window(comp, 7, 9, block, pad), scale);
     const Image cropped = crop_block(up, pad, scale, block.w, block.h);
     EXPECT_EQ(cropped.rgba, replicate(block, scale).rgba);
+}
+
+TEST(TexrepWindow, BleedFillsTransparentPixelsFromTheirOpaqueNeighbours) {
+    Image img = solid(8, 1, 0);
+    img.rgba[3] = 0xFF0000FF;  // one opaque red pixel
+    bleed_transparent(img, 2);
+    EXPECT_EQ(img.rgba[3], 0xFF0000FFu) << "opaque pixels do not change";
+    EXPECT_EQ(img.rgba[2], 0xFF0000FFu);
+    EXPECT_EQ(img.rgba[4], 0xFF0000FFu);
+    EXPECT_EQ(img.rgba[1], 0xFF0000FFu);
+    EXPECT_EQ(img.rgba[5], 0xFF0000FFu);
+    // Beyond the reach: the average of the opaque pixels, and everything ends up opaque.
+    EXPECT_EQ(img.rgba[0], 0xFF0000FFu);
+    EXPECT_EQ(img.rgba[7], 0xFF0000FFu);
+    for (uint32_t p : img.rgba) EXPECT_EQ(p >> 24, 0xFFu);
+}
+
+TEST(TexrepWindow, BleedWithoutAnyOpaquePixelGivesGrey) {
+    Image img = solid(3, 3, 0);
+    bleed_transparent(img, 4);
+    for (uint32_t p : img.rgba) EXPECT_EQ(p, 0xFF808080u);
+}
+
+TEST(TexrepWindow, BleedAveragesSeveralNeighbours) {
+    Image img = solid(3, 1, 0);
+    img.rgba[0] = 0xFF000000u | 100;
+    img.rgba[2] = 0xFF000000u | 200;
+    bleed_transparent(img, 1);
+    EXPECT_EQ(img.rgba[1] & 255, 150u);
 }
 
 TEST(TexrepWindow, BoxDownscaleAverages) {

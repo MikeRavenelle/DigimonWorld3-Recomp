@@ -140,6 +140,61 @@ pinned commit with `cmake/patches/plume-vulkan.patch`, `cmake/patches/plume-d3d1
 `cmake/patches/plume-metal.patch` applied (the last adds the texture-to-buffer copy and source-text shaders). The renderer tests run against
 the software rasterizer on every backend the build contains, so all backends are held to the same pixels.
 
+## Texture replacement
+
+Higher-resolution backgrounds, built from the player's own disc (nothing derived from the game is distributed). The
+code is in `render/src/texrep` (no GPU dependency, unit-tested), the draw path in `HwRenderer`, and the generator in
+`tools/texpack`.
+
+What the game does: a field background is cut into blocks of at most 128x128 texels, 8-bit indexed, each uploaded with
+its own 256-entry palette by a CPU-to-VRAM transfer and drawn every frame as opaque textured rectangles that map texels
+to pixels one to one (partial rectangles at the screen edge). The images never change after the upload; palettes of
+animated parts are re-uploaded.
+
+Identification. Every completed CPU upload becomes a block in `BlockRegistry` (rectangles smaller than 8x8 words or wider
+than 128 words, such as palettes and state loads, are ignored; any overlapping upload, draw, fill or copy removes the
+blocks it touches, so a block always describes unchanged CPU-side VRAM). A block's content hash (64 bit, shape included,
+position independent) is computed the first time a sprite samples it. A pack entry is keyed by (block hash, palette
+hash), the palette hash being taken over the 256 entries the sprite uses at draw time. A sprite that samples inside no
+block (what a save state restores) makes an implicit block of its own rectangle if that overlaps no other block.
+
+Drawing. Only opaque, unflipped 8-bit rectangles without a texture window are candidates. `split_by_blocks` cuts the
+rectangle along block edges; each piece that has a pack entry is queued as its own rectangle with `state_bits::kHd`, the
+pack scale in the state word and, in the vertex, the offset that maps texel coordinates of the texture page onto the
+block's image in the replacement atlas. Pieces without an entry are drawn as before. Nothing is replaced if the GPU
+has drawn into the palette row (the CPU copy might be stale). The replacement is only used by the display layer, so the
+renderer is forced into layer mode when a pack is active: the exact target (what the game can read back) still receives
+the original texels, the layer's colour comes from the atlas, bilinear-filtered when the internal resolution differs from
+the pack scale (taps stay inside the piece, so neighbouring pieces never bleed), then modulated by the sprite colour
+exactly like any texel (so the tinted second background layer and fades keep working), without 5-bit quantisation or
+dithering. Transparent original texels still discard, so cut-outs keep their shape. The layer, being 16 bit per
+channel, passes the colour through to the presenter, which already shows it where the recorded VRAM word still matches.
+Without a pack nothing is tracked, no extra draw state is set and output is byte-identical to before (the draw pass
+of the layer variant gains a third texture binding, a 1x1 dummy without a pack; the non-layer pipeline is unchanged).
+
+Atlas. A 4096x4096 RGBA8 texture filled by a shelf packer on demand: the PNG of an entry is decoded and uploaded the first
+time a sprite needs it. When the atlas is full it is cleared (after the draws that read it are recorded) and refilled as
+needed. Images that fail to load are reported once and skipped.
+
+Dumping. With `--dump-textures` the renderer records, per frame, which blocks were drawn with which palette and where
+each block's corner lies on screen (the game's own screen coordinates, so the draw offset of the frame buffer cancels).
+Blocks of one picture keep the same relative position in every frame, whatever the scroll; pairs that are always at the
+same offset are merged into components (strongest evidence first; pairs that would make two blocks overlap, or that
+change offset between frames as parallax layers do, are not merged). The dump holds every block/palette image decoded
+to RGBA, and one image per component with the blocks pasted together.
+
+Pack generation. For every dumped image `texpack` takes the component image, cuts out the block's rectangle plus 16
+pixels around it (edge pixels repeated beyond the component), pastes the block with that palette over its place,
+upscales that window with the external program (RGB only: the program mishandles alpha), crops the block's area from the
+result and writes it. Context from the neighbouring blocks makes the block edges of a component continuous; where no
+neighbour was seen the edge pixels repeat. A model whose factor is a multiple of the pack scale is reduced with a box
+filter.
+
+Limits: only the display layer path (GPU renderer) is supported; the software presenter ignores packs and dumps.
+Polygons (quads used for objects) and semi-transparent or flipped sprites are not replaced. Palette animation is handled
+by one image per observed palette state, and unseen states fall back to the original. Block and palette hashes cover
+what the game holds in VRAM, so a pack is valid for any copy of the same game version.
+
 ## Post-processing
 
 `render/src/post_chain.cpp` and `render/shaders/post/` hold the post-processing passes. They are enabled by `PostFx`
@@ -188,3 +243,7 @@ data, extracted assets or generated C may be committed.
 Third-party shader code (MIT, each file keeps its notice): SMAA by Jimenez et al. (`render/shaders/post/smaa_*`; the area
 and search textures in `render/data` are generated data from the same reference implementation), AMD FidelityFX CAS
 (`cas.frag`) and FSR 1 (`fsr_easu.frag`, `fsr_rcas.frag`). The CRT shader is original.
+
+stb_image and stb_image_write (`third_party/stb`, public domain or MIT, by Sean Barrett) read and write the PNG files of
+texture dumps and packs. The pack generator calls the external Real-ESRGAN ncnn Vulkan program (MIT; its model weights
+come from the Real-ESRGAN project, BSD 3-Clause); neither is part of this repository or of the releases.

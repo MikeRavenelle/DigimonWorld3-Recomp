@@ -114,6 +114,7 @@ bool generate_pack(const std::vector<std::filesystem::path>& dump_dirs, const st
             Image block;
             if (!read_png(it.dir / it.texture.file, block, error)) return false;
             windows.push_back(context_window(components[it.component], it.texture.x, it.texture.y, block, options.pad));
+            bleed_transparent(windows.back(), options.pad);
         }
         std::vector<Image> up;
         if (!upscale(windows, up, error)) return false;

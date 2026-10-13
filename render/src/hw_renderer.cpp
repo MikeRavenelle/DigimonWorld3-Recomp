@@ -1013,7 +1013,7 @@ bool HwRenderer::Impl::draw_background_rect(std::span<uint16_t> vram, const Draw
         for (const texrep::Piece& p : pieces) {
             if (!p.block) continue;
             const uint64_t bh = blocks.hash_of(*p.block, vram);
-            if (dump && p.w * p.h >= 64) {
+            if (dump && p.w * p.h >= 16) {
                 if (!dump->has_variant(bh, clut_hash)) {
                     std::vector<uint32_t> rgba;
                     texrep::decode_block_8bit(vram, p.block->rect, clut_x, clut_y, rgba);

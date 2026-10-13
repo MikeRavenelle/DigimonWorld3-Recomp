@@ -53,6 +53,8 @@ public:
     static constexpr std::size_t kMaxBlocks = 512;
     // Uploads outside these bounds are not images worth tracking (palettes, full-screen copies, state loads).
     static constexpr int kMinWords = 8, kMaxWords = 128, kMinRows = 8, kMaxRows = 256;
+    // Blocks made from a sprite rectangle (add_implicit) may be much smaller: the game cuts pictures into narrow strips.
+    static constexpr int kMinImplicitWords = 2, kMinImplicitRows = 2;
 
     // A CPU-to-VRAM transfer completed. Blocks it overlaps are dropped; the region becomes a block if its size
     // qualifies.

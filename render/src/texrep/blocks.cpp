@@ -99,7 +99,8 @@ void BlockRegistry::add_upload(const Region& r) {
 }
 
 Block* BlockRegistry::add_implicit(const Region& r) {
-    if (r.width() < kMinWords || r.width() > kMaxWords || r.height() < kMinRows || r.height() > kMaxRows) return nullptr;
+    if (r.width() < kMinImplicitWords || r.width() > kMaxWords || r.height() < kMinImplicitRows || r.height() > kMaxRows)
+        return nullptr;
     for (const Block& b : blocks_)
         if (b.rect.intersects(r)) return nullptr;
     if (blocks_.size() >= kMaxBlocks) return nullptr;  // never drop blocks that pieces of this draw still point to

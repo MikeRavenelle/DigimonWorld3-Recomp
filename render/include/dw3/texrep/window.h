@@ -15,6 +15,12 @@ void paste(Image& dst, const Image& src, int x, int y);
 // `block` pasted over its own place (so the window shows that palette variant), edge pixels repeated beyond the
 // component. The result is (w + 2 pad) x (h + 2 pad).
 Image context_window(const Image& component, int bx, int by, const Image& block, int pad);
+// Fills the transparent pixels (alpha 0) with the colour of the opaque pixels around them, spreading `iterations` pixels
+// outwards, and makes the image opaque. Upscalers treat transparent black as picture, which would darken the edges of
+// cut-out images and of the borders towards missing neighbours; the game draws transparent texels as nothing, so the
+// invented colours are never shown. Pixels farther away than `iterations` get the average opaque colour (grey if
+// there is none).
+void bleed_transparent(Image& img, int iterations);
 // The block's part of an upscaled context window: the window was upscaled by `scale`, so the block starts at
 // (pad * scale, pad * scale) and measures block_w * scale by block_h * scale.
 Image crop_block(const Image& upscaled, int pad, int scale, int block_w, int block_h);
