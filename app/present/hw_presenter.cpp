@@ -68,6 +68,7 @@ bool HwPresenter::update_options(const PresentOptions& options, dw3::Gpu& gpu) {
     }
     options_.scale = options.scale;
     options_.linear = options.linear;
+    options_.post = options.post;
     if (options.vsync != options_.vsync) set_vsync(options.vsync);
     return ok;
 }
@@ -88,7 +89,7 @@ bool HwPresenter::present(dw3::Gpu& gpu, Capture* capture) {
         overlay.serial = osd_.serial();
     }
     const bool ok = renderer_->present(gpu.display(), options_.scale, options_.linear, capture ? &capture->rgba : nullptr, &w, &h,
-                                       img ? &overlay : nullptr);
+                                       img ? &overlay : nullptr, &options_.post);
     if (capture) {
         capture->w = w;
         capture->h = h;

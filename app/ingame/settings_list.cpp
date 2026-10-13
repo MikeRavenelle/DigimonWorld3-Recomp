@@ -23,6 +23,10 @@ constexpr Labels kLabels[] = {
     {"graphics.texture_filter", "Texture", 1},
     {"graphics.precise_geometry", "Precise 3D", 1},
     {"graphics.output_filter", "Output", 1},
+    {"graphics.antialiasing", "AA", 1},
+    {"graphics.sharpening", "Sharpen", 1},
+    {"graphics.color_grade", "Color", 1},
+    {"graphics.crt", "CRT", 1},
     {"graphics.scale_mode", "Scaling", 1},
     {"graphics.window_width", "Win Width", 160},
     {"graphics.window_height", "Win Height", 120},
@@ -41,6 +45,9 @@ std::string capitalised(std::string_view name) {
 
 std::string choice_label(std::string_view name) {
     if (name == "xbr") return "xBR";
+    if (name == "smaa") return "SMAA";
+    if (name == "fsr") return "FSR";
+    if (name == "crt") return "Full";
     if (name == "2x" || name == "4x") return std::string(1, name[0]) + "X";
     if (name == "unlimited") return "Max";
     return capitalised(name);

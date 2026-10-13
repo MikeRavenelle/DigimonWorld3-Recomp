@@ -140,6 +140,29 @@ pinned commit with `cmake/patches/plume-vulkan.patch`, `cmake/patches/plume-d3d1
 `cmake/patches/plume-metal.patch` applied (the last adds the texture-to-buffer copy and source-text shaders). The renderer tests run against
 the software rasterizer on every backend the build contains, so all backends are held to the same pixels.
 
+## Post-processing
+
+`render/src/post_chain.cpp` and `render/shaders/post/` hold the post-processing passes. They are enabled by `PostFx`
+(`render/include/dw3/postfx.h`), which the presenter builds from the settings. With nothing enabled `present()` takes
+the original path (the display area is scaled straight from VRAM) and its output is unchanged. Otherwise:
+
+1. Extract: the display area is drawn 1:1 with nearest sampling into an image at the internal resolution (the
+   display layer is honoured, so true colour and filtering show through).
+2. SMAA 1x, three passes: colour edge detection, blending weights (with the precomputed area and search textures in
+   `render/data`), neighbourhood blending.
+3. CAS sharpening (skipped when the output scaler is FSR, whose RCAS step sharpens instead).
+4. Colour grading.
+5. Scaling into the picture rectangle of the window: nearest or bilinear; or FSR 1 EASU into a window-sized image
+   followed by RCAS (only when the picture is enlarged on at least one axis, else bilinear).
+6. CRT, last, at window resolution, reading the result of the step before (scanlines are tied to the console's own
+   lines through the picture's height, not to the image's rows).
+
+Steps 1 to 4 and the first part of 5 are rendered once per frame; the final pass is repeated for the window and for a
+capture. All intermediate images use the swap chain's colour format, so a single pipeline per shader serves every
+target; pipelines are created the first time a pass is used. Every shader goes through the same SPIR-V, DXIL and MSL
+conversion as the rest. The SMAA search and area lookups and the FSR gather are done with explicit texel fetches,
+because the passes read plain textures without samplers.
+
 ## Platforms
 
 | Target | Status | Backend |
@@ -161,3 +184,7 @@ throw, and a `catch` around a call into the runtime's C interface is then skippe
 GPL-3.0. Code may be adapted from GPL-compatible projects (PCSX-Redux, Beetle PSX/mednafen,
 OpenBIOS). **DuckStation (CC-BY-NC-ND) and PSXRecomp (PolyForm-NC) must not be copied.** No game
 data, extracted assets or generated C may be committed.
+
+Third-party shader code (MIT, each file keeps its notice): SMAA by Jimenez et al. (`render/shaders/post/smaa_*`; the area
+and search textures in `render/data` are generated data from the same reference implementation), AMD FidelityFX CAS
+(`cas.frag`) and FSR 1 (`fsr_easu.frag`, `fsr_rcas.frag`). The CRT shader is original.

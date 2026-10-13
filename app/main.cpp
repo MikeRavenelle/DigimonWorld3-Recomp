@@ -34,7 +34,7 @@
 //   --fullscreen-at F  toggle fullscreen at frame F (repeatable)
 //   --compare-at F     press the Original/enhanced comparison hotkey at frame F (repeatable; for audit runs)
 //   --scale M          fit (default, 4:3 letterbox), integer or stretch
-//   --filter F         nearest (default) or linear
+//   --filter F         nearest (default), linear or fsr
 //   --no-vsync         present without waiting for the display refresh (always on with --uncapped/--frames)
 //   --mute             no audio output (the SPU still runs; audio is also off for --frames audit runs)
 //   --audio            with --frames: play audio and pace to real time (logs buffer underruns and drops at exit)
@@ -76,6 +76,7 @@
 #include "present/native_window.h"
 #include "settings/controller.h"
 #include "settings/fastforward.h"
+#include "present/post_options.h"
 #include "present/presenter.h"
 
 namespace {
@@ -351,7 +352,8 @@ int main(int argc, char** argv) {
         dw3app::PresentOptions po;
         const auto& g = st.graphics;
         po.vsync = g.vsync && !unpaced && !fast_forward.active();
-        po.linear = g.output_filter == 1;
+        po.linear = g.output_filter >= 1;
+        po.post = dw3app::post_fx_from(g);
         po.internal_res = g.internal_res;
         po.true_color = g.true_color;
         po.texture_filter = g.texture_filter;
