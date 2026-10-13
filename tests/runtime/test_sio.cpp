@@ -1212,3 +1212,58 @@ TEST(SioDualShock, PortsHaveIndependentState) {
     EXPECT_TRUE(r.sio.pad_config_mode(0));
     EXPECT_FALSE(r.sio.pad_config_mode(1));
 }
+
+// ---- Vibration commands ----
+
+TEST(PadRumble, DecodesMappedMotorBytes) {
+    const std::array<uint8_t, 6> map{0x00, 0x01, 0xFF, 0xFF, 0xFF, 0xFF};
+    EXPECT_EQ(dw3::decode_rumble(map, {0x01, 0x80, 0xFF, 0xFF, 0xFF, 0xFF}), (dw3::PadRumble{true, 0x80}));
+    EXPECT_EQ(dw3::decode_rumble(map, {0x00, 0xFF, 0, 0, 0, 0}), (dw3::PadRumble{false, 0xFF}));
+    EXPECT_FALSE(dw3::decode_rumble(map, {0, 0, 0, 0, 0, 0}).any());
+}
+
+TEST(PadRumble, SmallMotorUsesBitZeroOnly) {
+    const std::array<uint8_t, 6> map{0x00, 0x01, 0xFF, 0xFF, 0xFF, 0xFF};
+    EXPECT_FALSE(dw3::decode_rumble(map, {0xFE, 0, 0, 0, 0, 0}).small_on);
+    EXPECT_TRUE(dw3::decode_rumble(map, {0x41, 0, 0, 0, 0, 0}).small_on);
+}
+
+TEST(PadRumble, UnmappedBytesDriveNothing) {
+    const std::array<uint8_t, 6> map{0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
+    EXPECT_FALSE(dw3::decode_rumble(map, {0x01, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF}).any());
+}
+
+TEST(PadRumble, MapMayPutMotorsOnOtherBytes) {
+    const std::array<uint8_t, 6> map{0xFF, 0x01, 0x00, 0xFF, 0xFF, 0xFF};
+    EXPECT_EQ(dw3::decode_rumble(map, {0, 0x40, 0x01, 0, 0, 0}), (dw3::PadRumble{true, 0x40}));
+}
+
+TEST(SioDualShock, PollAfterMotorMapSetsRumble) {
+    Rig r;
+    r.pad.plugged[0] = true;
+    enter_config(r);
+    pad_cmd(r, {0x01, 0x4D, 0x00, 0x00, 0x01, 0xFF, 0xFF, 0xFF, 0xFF});
+    exit_config(r);
+    EXPECT_FALSE(r.sio.pad_rumble(0).any());
+    pad_cmd(r, {0x01, 0x42, 0x00, 0x01, 0xC0});
+    EXPECT_EQ(r.sio.pad_rumble(0), (dw3::PadRumble{true, 0xC0}));
+    pad_cmd(r, {0x01, 0x42, 0x00, 0x00, 0x00});
+    EXPECT_FALSE(r.sio.pad_rumble(0).any());
+}
+
+TEST(SioDualShock, NoRumbleBeforeMotorsAreMapped) {
+    Rig r;
+    r.pad.plugged[0] = true;
+    pad_cmd(r, {0x01, 0x42, 0x00, 0x01, 0xFF});
+    EXPECT_FALSE(r.sio.pad_rumble(0).any());
+}
+
+TEST(SioDualShock, EnteringConfigModeDoesNotRumble) {
+    Rig r;
+    r.pad.plugged[0] = true;
+    enter_config(r);
+    pad_cmd(r, {0x01, 0x4D, 0x00, 0x00, 0x01, 0xFF, 0xFF, 0xFF, 0xFF});
+    exit_config(r);
+    enter_config(r);  // its parameter byte (1) sits where a motor byte would
+    EXPECT_FALSE(r.sio.pad_rumble(0).any());
+}
