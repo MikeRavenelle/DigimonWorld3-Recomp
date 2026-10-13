@@ -11,6 +11,7 @@
 #include "dw3/vertex_builder.h"
 #include "dw3/vram_regions.h"
 #include "plume_render_interface.h"
+#include "post_chain.h"
 #ifdef _WIN32
 // <windows.h> (pulled in by the Direct3D 12 headers) renames DrawState to DrawStateA.
 #undef DrawState
@@ -200,6 +201,9 @@ struct HwRenderer::Impl {
     RenderTextureLayout capture_layout = RenderTextureLayout::UNKNOWN;
     uint32_t capture_w = 0, capture_h = 0;
 
+    // Post-processing passes, created the first time they are used.
+    std::unique_ptr<PostChain> post_chain;
+
     // Notification image: `osd_tex` holds the last uploaded overlay.
     std::unique_ptr<RenderTexture> osd_tex;
     RenderTextureLayout osd_tex_layout = RenderTextureLayout::UNKNOWN;
@@ -268,8 +272,12 @@ struct HwRenderer::Impl {
 
     // ---- presentation -------------------------------------------------------------------------------
 
-    void draw_display(RenderFramebuffer* fb, uint32_t w, uint32_t h, const DisplayState& d, ScaleMode mode, bool linear);
+    void draw_display(RenderFramebuffer* fb, uint32_t w, uint32_t h, const DisplayState& d, ScaleMode mode, bool linear,
+                      const PostChain::Plan* plan = nullptr);
+    bool run_post(const PostFx& fx, const DisplayState& d, const PresentRect& pr, PostChain::Plan& plan);
+    void push_present(const PresentParams& p);
     bool ensure_capture(uint32_t w, uint32_t h);
+    void read_capture(uint32_t w, uint32_t h, std::vector<uint32_t>& out);
     bool upload_overlay(const HwOverlay& o);
     void draw_overlay(uint32_t w, uint32_t h, const HwOverlay& o);
 };
@@ -888,7 +896,8 @@ void HwRenderer::Impl::readback(const std::vector<Region>& in, std::span<uint16_
 // -------------------------------------------------------------------------------------------------------
 // Presentation
 
-void HwRenderer::Impl::draw_display(RenderFramebuffer* fb, uint32_t w, uint32_t h, const DisplayState& d, ScaleMode mode, bool linear) {
+void HwRenderer::Impl::draw_display(RenderFramebuffer* fb, uint32_t w, uint32_t h, const DisplayState& d, ScaleMode mode, bool linear,
+                                    const PostChain::Plan* plan) {
     cmd->setFramebuffer(fb);
     cmd->setViewports(RenderViewport(0.0f, 0.0f, static_cast<float>(w), static_cast<float>(h)));
     cmd->setScissors(RenderRect(0, 0, static_cast<int32_t>(w), static_cast<int32_t>(h)));
@@ -896,6 +905,11 @@ void HwRenderer::Impl::draw_display(RenderFramebuffer* fb, uint32_t w, uint32_t 
     if (!d.enabled) return;
     const PresentRect pr = compute_present_rect(d.width, d.height, static_cast<int>(w), static_cast<int>(h), mode);
     if (pr.w <= 0 || pr.h <= 0) return;
+    if (plan) {
+        post_chain->draw(cmd, *plan, nullptr, w, h, pr.x, pr.y, pr.w, pr.h);
+        ++stats.draw_calls;
+        return;
+    }
     PresentParams p{};
     p.dest[0] = static_cast<float>(pr.x);
     p.dest[1] = static_cast<float>(pr.y);
@@ -911,12 +925,44 @@ void HwRenderer::Impl::draw_display(RenderFramebuffer* fb, uint32_t w, uint32_t 
     p.linear = linear ? 1 : 0;
     p.scale = scale;
     p.layer = layer ? 1 : 0;
+    push_present(p);
+}
+
+void HwRenderer::Impl::push_present(const PresentParams& p) {
     cmd->setGraphicsPipelineLayout(present_layout.get());
     cmd->setPipeline(present_pipeline.get());
     cmd->setGraphicsDescriptorSet(display_set.get(), 0);
     cmd->setGraphicsPushConstants(0, &p);
     cmd->drawInstanced(6, 1, 0, 0);
     ++stats.draw_calls;
+}
+
+// Post-processing: draws the display area 1:1 (nearest) into the chain's source image, then runs the passes up to the
+// last one, which draw_display repeats for each window-sized target.
+bool HwRenderer::Impl::run_post(const PostFx& fx, const DisplayState& d, const PresentRect& pr, PostChain::Plan& plan) {
+    if (!post_chain) post_chain = std::make_unique<PostChain>(device.get(), iface->getCapabilities().shaderFormat);
+    const uint32_t k = d.color24 ? 1u : static_cast<uint32_t>(scale);
+    const uint32_t sw = static_cast<uint32_t>(d.width) * k, sh = static_cast<uint32_t>(d.height) * k;
+    if (!post_chain->prepare(cmd, fx, sw, sh, static_cast<uint32_t>(pr.w), static_cast<uint32_t>(pr.h), [this] { wait_all(); }))
+        return false;
+    PostChain::Target& source = post_chain->source(cmd);
+    cmd->setFramebuffer(source.fb.get());
+    cmd->setViewports(RenderViewport(0.0f, 0.0f, static_cast<float>(sw), static_cast<float>(sh)));
+    cmd->setScissors(RenderRect(0, 0, static_cast<int32_t>(sw), static_cast<int32_t>(sh)));
+    PresentParams p{};
+    p.dest[2] = static_cast<float>(sw);
+    p.dest[3] = static_cast<float>(sh);
+    p.window[0] = static_cast<float>(sw);
+    p.window[1] = static_cast<float>(sh);
+    p.src[0] = d.vram_x;
+    p.src[1] = d.vram_y;
+    p.src[2] = d.width;
+    p.src[3] = d.height;
+    p.color24 = d.color24 ? 1 : 0;
+    p.scale = scale;
+    p.layer = layer ? 1 : 0;
+    push_present(p);
+    return post_chain->run(cmd, fx, static_cast<uint32_t>(pr.w), static_cast<uint32_t>(pr.h), static_cast<float>(d.height), plan);
 }
 
 // Copies the overlay image into `osd_tex` (recreated when its size changes). Must run before the frame's render
@@ -966,6 +1012,20 @@ void HwRenderer::Impl::draw_overlay(uint32_t w, uint32_t h, const HwOverlay& o) 
     cmd->setGraphicsPushConstants(0, &p);
     cmd->drawInstanced(6, 1, 0, 0);
     ++stats.draw_calls;
+}
+
+// Converts the capture buffer (BGRA) of the last frame into RGBA8.
+void HwRenderer::Impl::read_capture(uint32_t w, uint32_t h, std::vector<uint32_t>& out) {
+    const uint32_t pitch = upload_row_pixels(w);
+    const auto* data = static_cast<const uint32_t*>(capture_buf->map());
+    out.resize(static_cast<std::size_t>(w) * h);
+    for (uint32_t y = 0; y < h; ++y) {
+        for (uint32_t x = 0; x < w; ++x) {
+            const uint32_t bgra = data[static_cast<std::size_t>(y) * pitch + x];
+            out[static_cast<std::size_t>(y) * w + x] = (bgra & 0xFF00FF00u) | ((bgra & 0xFF) << 16) | ((bgra >> 16) & 0xFF) | 0xFF000000u;
+        }
+    }
+    capture_buf->unmap();
 }
 
 bool HwRenderer::Impl::ensure_capture(uint32_t w, uint32_t h) {
@@ -1185,7 +1245,7 @@ bool HwRenderer::read_display(const VramRect& r, std::vector<uint32_t>& rgba) {
 }
 
 bool HwRenderer::present(const DisplayState& display, ScaleMode mode, bool linear, std::vector<uint32_t>* capture,
-                         int* capture_w, int* capture_h, const HwOverlay* overlay) {
+                         int* capture_w, int* capture_h, const HwOverlay* overlay, const PostFx* post) {
     Impl& m = *impl_;
     if (!m.swap) return false;
     m.record_draws();
@@ -1214,15 +1274,21 @@ bool HwRenderer::present(const DisplayState& display, ScaleMode mode, bool linea
     const uint32_t w = m.swap->getWidth(), h = m.swap->getHeight();
     m.transition(m.rt.get(), m.rt_layout, RenderTextureLayout::SHADER_READ);
     if (m.layer) m.transition(m.hi.get(), m.hi_layout, RenderTextureLayout::SHADER_READ);
+    PostChain::Plan plan;
+    const PostChain::Plan* plan_ptr = nullptr;
+    if (post && post->active() && display.enabled) {
+        const PresentRect pr = compute_present_rect(display.width, display.height, static_cast<int>(w), static_cast<int>(h), mode);
+        if (pr.w > 0 && pr.h > 0 && m.run_post(*post, display, pr, plan)) plan_ptr = &plan;
+    }
     RenderTexture* target = m.swap->getTexture(index);
     m.cmd->barriers(RenderBarrierStage::ALL, RenderTextureBarrier(target, RenderTextureLayout::COLOR_WRITE));
-    m.draw_display(m.swap_fbs[index].get(), w, h, display, mode, linear);
+    m.draw_display(m.swap_fbs[index].get(), w, h, display, mode, linear, plan_ptr);
     if (overlay) m.draw_overlay(w, h, *overlay);
 
     const bool grab = capture != nullptr && m.ensure_capture(w, h);
     if (grab) {
         m.transition(m.capture_tex.get(), m.capture_layout, RenderTextureLayout::COLOR_WRITE);
-        m.draw_display(m.capture_fb.get(), w, h, display, mode, linear);
+        m.draw_display(m.capture_fb.get(), w, h, display, mode, linear, plan_ptr);
         m.transition(m.capture_tex.get(), m.capture_layout, RenderTextureLayout::COPY_SOURCE);
         const uint32_t pitch = upload_row_pixels(w);
         m.cmd->copyTextureRegion(
@@ -1237,20 +1303,38 @@ bool HwRenderer::present(const DisplayState& display, ScaleMode mode, bool linea
 
     if (grab) {
         m.wait_slot(m.slots[m.last_submitted]);
-        const uint32_t pitch = upload_row_pixels(w);
-        const auto* data = static_cast<const uint32_t*>(m.capture_buf->map());
-        capture->resize(static_cast<std::size_t>(w) * h);
-        for (uint32_t y = 0; y < h; ++y) {
-            for (uint32_t x = 0; x < w; ++x) {
-                const uint32_t bgra = data[static_cast<std::size_t>(y) * pitch + x];
-                (*capture)[static_cast<std::size_t>(y) * w + x] =
-                    (bgra & 0xFF00FF00u) | ((bgra & 0xFF) << 16) | ((bgra >> 16) & 0xFF) | 0xFF000000u;
-            }
-        }
-        m.capture_buf->unmap();
+        m.read_capture(w, h, *capture);
         if (capture_w) *capture_w = static_cast<int>(w);
         if (capture_h) *capture_h = static_cast<int>(h);
     }
+    return true;
+}
+
+bool HwRenderer::render_to_image(const DisplayState& display, ScaleMode mode, bool linear, const PostFx* post, int width,
+                                 int height, std::vector<uint32_t>& rgba) {
+    Impl& m = *impl_;
+    if (width <= 0 || height <= 0) return false;
+    const uint32_t w = static_cast<uint32_t>(width), h = static_cast<uint32_t>(height);
+    m.record_draws();
+    m.ensure_recording();
+    if (!m.ensure_capture(w, h)) return false;
+    m.transition(m.rt.get(), m.rt_layout, RenderTextureLayout::SHADER_READ);
+    if (m.layer) m.transition(m.hi.get(), m.hi_layout, RenderTextureLayout::SHADER_READ);
+    PostChain::Plan plan;
+    const PostChain::Plan* plan_ptr = nullptr;
+    if (post && post->active() && display.enabled) {
+        const PresentRect pr = compute_present_rect(display.width, display.height, width, height, mode);
+        if (pr.w > 0 && pr.h > 0 && m.run_post(*post, display, pr, plan)) plan_ptr = &plan;
+    }
+    m.transition(m.capture_tex.get(), m.capture_layout, RenderTextureLayout::COLOR_WRITE);
+    m.draw_display(m.capture_fb.get(), w, h, display, mode, linear, plan_ptr);
+    m.transition(m.capture_tex.get(), m.capture_layout, RenderTextureLayout::COPY_SOURCE);
+    m.cmd->copyTextureRegion(
+        RenderTextureCopyLocation::PlacedFootprint(m.capture_buf.get(), kSwapFormat, w, h, 1, upload_row_pixels(w), 0),
+        RenderTextureCopyLocation::Subresource(m.capture_tex.get()), 0, 0, 0);
+    m.submit();
+    m.wait_slot(m.slots[m.last_submitted]);
+    m.read_capture(w, h, rgba);
     return true;
 }
 

@@ -25,7 +25,27 @@
 #include "shaders/psx_draw.frag.h"
 #include "shaders/psx_draw_layer.frag.h"
 #include "shaders/psx_draw.vert.h"
+#include "shaders/post.vert.h"
+#include "shaders/post_scale.frag.h"
+#include "shaders/post_cas.frag.h"
+#include "shaders/post_grade.frag.h"
+#include "shaders/post_crt.frag.h"
+#include "shaders/post_easu.frag.h"
+#include "shaders/post_rcas.frag.h"
+#include "shaders/post_smaa_edges.frag.h"
+#include "shaders/post_smaa_weights.frag.h"
+#include "shaders/post_smaa_blend.frag.h"
 #ifdef DW3_HAVE_METAL
+#include "shaders/post.vert.msl.h"
+#include "shaders/post_scale.frag.msl.h"
+#include "shaders/post_cas.frag.msl.h"
+#include "shaders/post_grade.frag.msl.h"
+#include "shaders/post_crt.frag.msl.h"
+#include "shaders/post_easu.frag.msl.h"
+#include "shaders/post_rcas.frag.msl.h"
+#include "shaders/post_smaa_edges.frag.msl.h"
+#include "shaders/post_smaa_weights.frag.msl.h"
+#include "shaders/post_smaa_blend.frag.msl.h"
 #include "shaders/osd.frag.msl.h"
 #include "shaders/osd.vert.msl.h"
 #include "shaders/present.frag.msl.h"
@@ -46,6 +66,16 @@
 #include "shaders/psx_draw.vert.dxil.h"
 #include "shaders/vram_copy.frag.dxil.h"
 #include "shaders/vram_copy.vert.dxil.h"
+#include "shaders/post.vert.dxil.h"
+#include "shaders/post_scale.frag.dxil.h"
+#include "shaders/post_cas.frag.dxil.h"
+#include "shaders/post_grade.frag.dxil.h"
+#include "shaders/post_crt.frag.dxil.h"
+#include "shaders/post_easu.frag.dxil.h"
+#include "shaders/post_rcas.frag.dxil.h"
+#include "shaders/post_smaa_edges.frag.dxil.h"
+#include "shaders/post_smaa_weights.frag.dxil.h"
+#include "shaders/post_smaa_blend.frag.dxil.h"
 #endif
 
 namespace {
@@ -68,6 +98,16 @@ TEST(Shaders, CompiledToSpirv) {
     EXPECT_TRUE(is_spirv(present_frag_spv, present_frag_spv_size));
     EXPECT_TRUE(is_spirv(osd_vert_spv, osd_vert_spv_size));
     EXPECT_TRUE(is_spirv(osd_frag_spv, osd_frag_spv_size));
+    EXPECT_TRUE(is_spirv(post_vert_spv, post_vert_spv_size));
+    EXPECT_TRUE(is_spirv(post_scale_frag_spv, post_scale_frag_spv_size));
+    EXPECT_TRUE(is_spirv(post_cas_frag_spv, post_cas_frag_spv_size));
+    EXPECT_TRUE(is_spirv(post_grade_frag_spv, post_grade_frag_spv_size));
+    EXPECT_TRUE(is_spirv(post_crt_frag_spv, post_crt_frag_spv_size));
+    EXPECT_TRUE(is_spirv(post_easu_frag_spv, post_easu_frag_spv_size));
+    EXPECT_TRUE(is_spirv(post_rcas_frag_spv, post_rcas_frag_spv_size));
+    EXPECT_TRUE(is_spirv(post_smaa_edges_frag_spv, post_smaa_edges_frag_spv_size));
+    EXPECT_TRUE(is_spirv(post_smaa_weights_frag_spv, post_smaa_weights_frag_spv_size));
+    EXPECT_TRUE(is_spirv(post_smaa_blend_frag_spv, post_smaa_blend_frag_spv_size));
 }
 
 #ifdef DW3_HAVE_D3D12
@@ -86,6 +126,16 @@ TEST(Shaders, CompiledToDxil) {
     EXPECT_TRUE(is_dxil(osd_frag_dxil, osd_frag_dxil_size));
     EXPECT_TRUE(is_dxil(vram_copy_vert_dxil, vram_copy_vert_dxil_size));
     EXPECT_TRUE(is_dxil(vram_copy_frag_dxil, vram_copy_frag_dxil_size));
+    EXPECT_TRUE(is_dxil(post_vert_dxil, post_vert_dxil_size));
+    EXPECT_TRUE(is_dxil(post_scale_frag_dxil, post_scale_frag_dxil_size));
+    EXPECT_TRUE(is_dxil(post_cas_frag_dxil, post_cas_frag_dxil_size));
+    EXPECT_TRUE(is_dxil(post_grade_frag_dxil, post_grade_frag_dxil_size));
+    EXPECT_TRUE(is_dxil(post_crt_frag_dxil, post_crt_frag_dxil_size));
+    EXPECT_TRUE(is_dxil(post_easu_frag_dxil, post_easu_frag_dxil_size));
+    EXPECT_TRUE(is_dxil(post_rcas_frag_dxil, post_rcas_frag_dxil_size));
+    EXPECT_TRUE(is_dxil(post_smaa_edges_frag_dxil, post_smaa_edges_frag_dxil_size));
+    EXPECT_TRUE(is_dxil(post_smaa_weights_frag_dxil, post_smaa_weights_frag_dxil_size));
+    EXPECT_TRUE(is_dxil(post_smaa_blend_frag_dxil, post_smaa_blend_frag_dxil_size));
 }
 #endif
 
@@ -110,6 +160,16 @@ TEST(Shaders, ConvertedToMsl) {
     EXPECT_TRUE(is_msl(psx_draw_vert_msl, psx_draw_vert_msl_size));
     EXPECT_TRUE(is_msl(vram_copy_frag_msl, vram_copy_frag_msl_size));
     EXPECT_TRUE(is_msl(vram_copy_vert_msl, vram_copy_vert_msl_size));
+    EXPECT_TRUE(is_msl(post_vert_msl, post_vert_msl_size));
+    EXPECT_TRUE(is_msl(post_scale_frag_msl, post_scale_frag_msl_size));
+    EXPECT_TRUE(is_msl(post_cas_frag_msl, post_cas_frag_msl_size));
+    EXPECT_TRUE(is_msl(post_grade_frag_msl, post_grade_frag_msl_size));
+    EXPECT_TRUE(is_msl(post_crt_frag_msl, post_crt_frag_msl_size));
+    EXPECT_TRUE(is_msl(post_easu_frag_msl, post_easu_frag_msl_size));
+    EXPECT_TRUE(is_msl(post_rcas_frag_msl, post_rcas_frag_msl_size));
+    EXPECT_TRUE(is_msl(post_smaa_edges_frag_msl, post_smaa_edges_frag_msl_size));
+    EXPECT_TRUE(is_msl(post_smaa_weights_frag_msl, post_smaa_weights_frag_msl_size));
+    EXPECT_TRUE(is_msl(post_smaa_blend_frag_msl, post_smaa_blend_frag_msl_size));
 }
 #endif
 
