@@ -106,6 +106,16 @@ public:
     // recompiled segments. `addr` must be below 0x10000 (KUSEG/KSEG0/KSEG1 aliases all match).
     void register_native(uint32_t addr, RecompFunc fn) { natives_[phys(addr)] = fn; }
 
+    // Replaces the recompiled function at `addr` (a resident-segment address, any KSEG alias) with a host routine.
+    // Everything that resolves through lookup() (indirect calls, jr targets, vtable entries) then runs `fn` instead;
+    // calls that the recompiler resolved statically bypass it, so hook only functions reached indirectly. `fn` runs
+    // with the guest's register state at the function entry and finishes like a guest function would (return to the
+    // caller by returning). It may call the original through lookup_original(). One override per address; a second
+    // registration replaces the first, and a null `fn` removes it.
+    void override_function(uint32_t addr, RecompFunc fn);
+    // The recompiled function at `addr`, ignoring overrides.
+    RecompFunc lookup_original(uint32_t addr);
+
     // Index of the resident segment covering `addr` (identifying overlays via probes if needed), or -1.
     int resident_segment(uint32_t addr);
     const RecompSegment& segment(std::size_t i) const { return segments_[i]; }
@@ -171,6 +181,7 @@ private:
     std::vector<bool> verified_;  // resident and confirmed since last invalidate
     uint64_t lookups_ = 0, identifications_ = 0;
     std::unordered_map<uint32_t, RecompFunc> natives_;
+    std::unordered_map<uint32_t, RecompFunc> overrides_;
     void run_safe_actions();
     std::vector<std::function<void()>> safe_actions_;
     bool resume_pending_ = false;
