@@ -13,11 +13,13 @@ add_library(dw3texrep STATIC
     src/texrep/pack.cpp
     src/texrep/dump.cpp
     src/texrep/generate.cpp
+    src/texrep/stage_pack.cpp
+    src/texrep/stage_dump.cpp
     src/texrep/window.cpp
     src/texrep/stb_impl.cpp)
 target_include_directories(dw3texrep PUBLIC include)
 target_include_directories(dw3texrep SYSTEM PRIVATE ${PROJECT_SOURCE_DIR}/third_party/stb)
-target_link_libraries(dw3texrep PUBLIC dw3runtime tomlplusplus::tomlplusplus)
+target_link_libraries(dw3texrep PUBLIC dw3runtime psxdisc tomlplusplus::tomlplusplus)
 dw3_target_defaults(dw3texrep)
 set_source_files_properties(src/texrep/stb_impl.cpp PROPERTIES COMPILE_OPTIONS "-w")
 
