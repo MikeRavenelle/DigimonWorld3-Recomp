@@ -89,6 +89,12 @@ const SettingInfo kSettings[] = {
     {"graphics.brightness", "Brightness", "Brightness of the finished picture in percent: 0 changes nothing (GPU renderer only). Not part of any preset.",
      Group::Graphics, Type::Int, Apply::Live, -50, 50, {}, false, DW3_FIELD(graphics.brightness)},
 
+    {"graphics.hdr", "HDR output", "Output the picture in HDR when the display is in HDR mode: SDR white sits at the paper white level and only the brightest parts are lifted towards the peak brightness. Needs the GPU renderer on Windows or on Linux with a compositor that supports HDR. Not part of any preset.",
+     Group::Graphics, Type::Bool, Apply::Live, 0, 0, {}, false, DW3_FIELD(graphics.hdr)},
+    {"graphics.hdr_peak_nits", "HDR peak brightness", "Brightness in nits that white is lifted towards in HDR output, 400 to 1500; match it to the display's peak.",
+     Group::Graphics, Type::Int, Apply::Live, 400, 1500, {}, false, DW3_FIELD(graphics.hdr_peak_nits)},
+    {"graphics.hdr_paper_white", "HDR paper white", "Brightness in nits of SDR white in HDR output, 100 to 300; the usual choice is 200.",
+     Group::Graphics, Type::Int, Apply::Live, 100, 300, {}, false, DW3_FIELD(graphics.hdr_paper_white)},
     {"graphics.antialiasing", "Anti-aliasing", "SMAA edge smoothing of the finished picture (GPU renderer only). Mostly useful at internal resolution 1x to 2x.",
      Group::Graphics, Type::Choice, Apply::Live, 0, 0, kAntialiasing, false, DW3_FIELD(graphics.antialiasing)},
     {"graphics.sharpening", "Sharpening", "Contrast adaptive sharpening (AMD FidelityFX CAS) of the finished picture; with the fsr output filter it sets the strength of FSR's own sharpening (GPU renderer only).",

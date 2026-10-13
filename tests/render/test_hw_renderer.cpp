@@ -18,6 +18,7 @@
 #include "dw3/soft_rasterizer.h"
 #include "dw3/texrep/blocks.h"
 #include "dw3/texrep/pack.h"
+#include "dw3/hdr.h"
 #include "dw3/vertex_builder.h"
 #include "dw3/widescreen.h"
 
@@ -1685,6 +1686,58 @@ TEST_P(HwWideFrame, MarginsShowTheWorldAndTheHudStaysCentred) {
 }
 
 INSTANTIATE_TEST_SUITE_P(Wide, HwWideFrame, ::testing::ValuesIn(gpu_params({1, 2})), gpu_param_name);
+
+
+// The HDR output transform of the final post-processing pass against the CPU formulas of hdr.h. A headless renderer
+// has an 8-bit capture target, so the encoded values that fit it are compared: HDR10 PQ, and EDR (relative to paper
+// white) without expansion.
+class HwHdrOutput : public ::testing::TestWithParam<GpuParam> {};
+
+TEST_P(HwHdrOutput, ShaderMatchesTheCpuMaths) {
+    std::string error;
+    auto hw = create_renderer(GetParam(), error);
+    if (!hw) GTEST_SKIP() << "no GPU device: " << error;
+    constexpr int kSteps = 32;
+    std::vector<uint16_t> vram(kPixels, 0);
+    for (int i = 0; i < kSteps; ++i)
+        for (int y = 0; y < 2; ++y) vram[y * kVramWidth + i] = static_cast<uint16_t>(i | (i << 5) | (i << 10));
+    hw->vram_written(vram, {0, 0, kSteps, 2});
+    DisplayState display;
+    display.enabled = true;
+    display.width = kSteps;
+    display.height = 2;
+
+    struct Case {
+        HdrParams params;
+        float tolerance;  // in 8-bit steps
+    };
+    const Case cases[] = {{{HdrMode::Pq, 1000.0f, 203.0f}, 2.0f}, {{HdrMode::Pq, 600.0f, 300.0f}, 2.0f}, {{HdrMode::Edr, 203.0f, 203.0f}, 1.5f}};
+    for (const Case& c : cases) {
+        PostFx post;
+        post.hdr = c.params;
+        std::vector<uint32_t> img;
+        ASSERT_TRUE(hw->render_to_image(display, ScaleMode::Stretch, false, &post, kSteps, 2, img));
+        for (int i = 0; i < kSteps; ++i) {
+            const float v = static_cast<float>((i << 3) | (i >> 2)) / 255.0f;
+            const auto want = hdr_encode_pixel(v, v, v, c.params);
+            for (int ch = 0; ch < 3; ++ch) {
+                const float got = static_cast<float>((img[i] >> (8 * ch)) & 0xFF);
+                EXPECT_NEAR(got, std::clamp(want[ch], 0.0f, 1.0f) * 255.0f, c.tolerance)
+                    << "mode " << static_cast<int>(c.params.mode) << " step " << i << " channel " << ch;
+            }
+        }
+    }
+
+    // Off leaves the picture alone.
+    PostFx plain;
+    plain.sharpness = 0.0f;
+    plain.scaler = OutputScaler::Linear;  // any active option sends the picture through the post-processing chain
+    std::vector<uint32_t> img;
+    ASSERT_TRUE(hw->render_to_image(display, ScaleMode::Stretch, false, &plain, kSteps, 2, img));
+    for (int i = 0; i < kSteps; ++i) EXPECT_EQ(img[i] & 0xFF, static_cast<uint32_t>((i << 3) | (i >> 2))) << i;
+}
+
+INSTANTIATE_TEST_SUITE_P(Hdr, HwHdrOutput, ::testing::ValuesIn(gpu_params({1})), gpu_param_name);
 
 
 }  // namespace

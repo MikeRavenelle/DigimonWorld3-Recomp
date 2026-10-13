@@ -50,6 +50,9 @@ everything else applies immediately.
 | `graphics.show_fps` | bool | `--show-fps` |
 | `graphics.gamma` | 80 to 140 (percent) | `--gamma` |
 | `graphics.brightness` | -50 to 50 (percent) | `--brightness` |
+| `graphics.hdr` | bool | |
+| `graphics.hdr_peak_nits` | 400 to 1500 (steps of 50 in the in-game screen) | |
+| `graphics.hdr_paper_white` | 100 to 300 (steps of 10 in the in-game screen) | |
 | `audio.mute` | bool | `--mute` |
 | `audio.volume` | 0 to 100 | |
 | `audio.music_volume` | 0 to 100 (percent; steps of 10 in the in-game screen) | |
@@ -247,6 +250,19 @@ rows show at a time (six when the menu has CARD FOLDERS); the list scrolls.
 The same screen opens from the title menu: while Start / Continue waits for input, SELECT (the hint is shown at the top)
 opens the list over the dimmed title. The menu stands still until circle or triangle closes it, and then waits as
 before. Options that only matter in the field, such as the encounter rate, can be set there and apply once playing.
+
+## HDR output
+
+- Needs the GPU renderer on Direct3D 12 or Vulkan, with the display in HDR mode (Windows: Settings > Display > HDR;
+  Linux: a compositor with HDR support, for example KDE Plasma 6.x on Wayland). The in-game rows read `N/A` until the
+  display reports HDR; they also stay `N/A` on macOS, where HDR output is not implemented yet.
+- The picture is converted to scRGB (linear Rec. 709 half floats): SDR white is placed at the paper white level
+  (`graphics.hdr_paper_white`, default 203 nits) and only the brightest part is lifted, smoothly, towards the peak
+  (`graphics.hdr_peak_nits`, default 1000). Colours keep their hue and saturation; there is no gamut expansion.
+- If the driver or compositor does not offer an HDR swap chain the picture stays SDR (the log says so). Screenshots
+  of the window (`--screenshot`) are not taken while HDR output is on.
+- Not verified on real HDR hardware by the author: the maths and the shader are covered by tests against the CPU
+  formulas, the swap chain selection is not.
 
 ## Widescreen battles
 

@@ -30,6 +30,7 @@ struct ScreenModel {
     std::vector<ScreenChange> pending;
     const MonitorList* monitors = nullptr;
     bool adaptive_vsync = false;
+    bool hdr_available = false;
 };
 
 // The game's own button numbering: 12 is the cancel button (the pad's circle), 13 confirm (cross) and 14 the menu's

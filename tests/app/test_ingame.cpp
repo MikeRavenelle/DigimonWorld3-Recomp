@@ -344,6 +344,32 @@ TEST(IngameDisplay, EveryDisplayRowFitsWhateverTheChoice) {
     }
 }
 
+TEST(IngameList, HdrRowsReadNotAvailableWithoutAnHdrDisplay) {
+    Settings s = defaults();
+    RowContext none;
+    for (const char* id : {"graphics.hdr", "graphics.hdr_peak_nits", "graphics.hdr_paper_white"}) {
+        EXPECT_EQ(value_label(s, entry(id), none), "N/A") << id;
+        EXPECT_EQ(stepped_value(s, entry(id), 1, none), "") << id;
+        EXPECT_EQ(stepped_value(s, entry(id), -1, none), "") << id;
+    }
+    EXPECT_EQ(row_text(s, entry("graphics.hdr"), none), "HDR: N/A");
+}
+
+TEST(IngameList, HdrRowsWorkOnAnHdrDisplay) {
+    Settings s = defaults();
+    RowContext hdr;
+    hdr.hdr_available = true;
+    EXPECT_EQ(row_text(s, entry("graphics.hdr"), hdr), "HDR: Off");
+    EXPECT_EQ(stepped_value(s, entry("graphics.hdr"), 1, hdr), "true");
+    EXPECT_EQ(row_text(s, entry("graphics.hdr_peak_nits"), hdr), "HDR Peak: 1000");
+    EXPECT_EQ(stepped_value(s, entry("graphics.hdr_peak_nits"), 1, hdr), "1050");
+    EXPECT_EQ(stepped_value(s, entry("graphics.hdr_paper_white"), -1, hdr), "193");
+    apply(s, entry("graphics.hdr_peak_nits"), "1500");
+    EXPECT_EQ(stepped_value(s, entry("graphics.hdr_peak_nits"), 1, hdr), "");  // at the limit
+    apply(s, entry("graphics.hdr_paper_white"), "300");
+    EXPECT_EQ(stepped_value(s, entry("graphics.hdr_paper_white"), 1, hdr), "");
+}
+
 TEST(IngameList, WidescreenRowCyclesTheAspects) {
     Settings s = defaults();
     const Entry& e = entry("graphics.widescreen");

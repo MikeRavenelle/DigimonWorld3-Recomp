@@ -5,6 +5,7 @@
 
 layout(set = 0, binding = 0) uniform texture2D uTex;
 #include "common.glsl"
+#include "hdr.glsl"
 
 void main() {
     vec2 pos = vFrac * params.srcSize;
@@ -14,5 +15,5 @@ void main() {
     } else {
         rgb = fetchClamped(uTex, ivec2(pos)).rgb;
     }
-    outColor = vec4(rgb, 1.0);
+    outColor = vec4(hdrOutput(rgb), 1.0);
 }

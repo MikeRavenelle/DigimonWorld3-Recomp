@@ -7,6 +7,7 @@ layout(push_constant) uniform Params {
     vec2 srcSize;
     vec4 a;
     vec4 b;
+    vec4 c;
 } params;
 
 layout(location = 0) out vec2 vFrac;

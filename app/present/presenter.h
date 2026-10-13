@@ -44,6 +44,8 @@ public:
     virtual ~Presenter() = default;
     virtual const char* name() const = 0;
     virtual void set_vsync(VsyncMode mode) = 0;
+    // Whether this path can output HDR (the display must be in HDR mode as well, see window_hdr_enabled).
+    virtual bool supports_hdr() const { return false; }
     // Whether VsyncMode::Adaptive does anything beyond On on this path.
     virtual bool supports_adaptive_vsync() const { return false; }
     // Applies changed display options to the running presenter: scaling, filtering, vsync and, on the GPU renderer,

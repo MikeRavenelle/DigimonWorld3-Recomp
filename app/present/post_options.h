@@ -42,6 +42,7 @@ inline dw3::PostFx post_fx_from(const Settings::Graphics& g) {
         fx.crt.curvature = 0.35f;
         fx.crt.vignette = 0.5f;
     }
+    if (g.hdr) fx.hdr = {dw3::HdrMode::ScRgb, static_cast<float>(g.hdr_peak_nits), static_cast<float>(g.hdr_paper_white)};
     return fx;
 }
 

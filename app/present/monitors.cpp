@@ -104,6 +104,10 @@ void apply_display_settings(SDL_Window* window, const Settings::Graphics& g) {
     SDL_SyncWindow(window);
 }
 
+bool window_hdr_enabled(SDL_Window* window) {
+    return SDL_GetBooleanProperty(SDL_GetWindowProperties(window), SDL_PROP_WINDOW_HDR_ENABLED_BOOLEAN, false);
+}
+
 double window_refresh_hz(SDL_Window* window) {
     const SDL_DisplayMode* mode = SDL_GetCurrentDisplayMode(SDL_GetDisplayForWindow(window));
     return mode ? mode->refresh_rate : 0.0;

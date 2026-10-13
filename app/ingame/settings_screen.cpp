@@ -78,6 +78,7 @@ RowContext context_of(const ScreenModel& model) {
     if (model.controls) context.capturing = model.controls->capturing();
     context.monitors = model.monitors;
     context.adaptive_vsync = model.adaptive_vsync;
+    context.hdr_available = model.hdr_available;
     return context;
 }
 

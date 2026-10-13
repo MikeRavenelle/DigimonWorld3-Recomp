@@ -14,6 +14,7 @@ public:
 
     const char* name() const override { return name_.c_str(); }
     void set_vsync(VsyncMode mode) override;
+    bool supports_hdr() const override;
     bool update_options(const PresentOptions& options, dw3::Gpu& gpu) override;
     void set_wide_active(bool active) override;
     bool present(dw3::Gpu& gpu, Capture* capture) override;
@@ -25,6 +26,7 @@ private:
     HwPresenter();
 
     SDL_Window* window_ = nullptr;
+    dw3::GraphicsApi api_ = dw3::GraphicsApi::Vulkan;
     dw3::NativeWindow native_;
     std::string name_;
     PresentOptions options_;

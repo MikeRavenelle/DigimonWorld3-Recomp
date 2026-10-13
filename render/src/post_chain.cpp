@@ -49,7 +49,6 @@ using namespace plume;
 
 namespace {
 
-constexpr RenderFormat kTargetFormat = RenderFormat::B8G8R8A8_UNORM;  // the swap chain's, so one pipeline serves all
 constexpr RenderFormat kLookupFormat = RenderFormat::R8G8B8A8_UNORM;
 
 constexpr uint32_t kAreaW = 160, kAreaH = 560, kSearchW = 64, kSearchH = 16;
@@ -61,8 +60,9 @@ struct PassConstants {
     float src[2];
     float a[4];
     float b[4];
+    float c[4];  // HDR output of the last pass, zero otherwise
 };
-static_assert(sizeof(PassConstants) == 64);
+static_assert(sizeof(PassConstants) == 80);
 
 struct Blob {
     const uint8_t* data;
@@ -99,7 +99,8 @@ std::unique_ptr<RenderBuffer> make_upload_buffer(RenderDevice* device, uint64_t 
 
 }  // namespace
 
-PostChain::PostChain(RenderDevice* device, RenderShaderFormat format) : device_(device), format_(format) {}
+PostChain::PostChain(RenderDevice* device, RenderShaderFormat format, RenderFormat target_format)
+    : device_(device), format_(format), target_format_(target_format) {}
 PostChain::~PostChain() = default;
 
 bool PostChain::ensure_target(Target& t, uint32_t w, uint32_t h, const std::function<void()>& wait_idle, bool& ok) {
@@ -107,7 +108,7 @@ bool PostChain::ensure_target(Target& t, uint32_t w, uint32_t h, const std::func
     if (t.tex) wait_idle();  // earlier frames may still read it
     t.fb.reset();
     t.set.reset();
-    t.tex = device_->createTexture(RenderTextureDesc::ColorTarget(w, h, kTargetFormat));
+    t.tex = device_->createTexture(RenderTextureDesc::ColorTarget(w, h, target_format_));
     t.layout = RenderTextureLayout::UNKNOWN;
     t.w = w;
     t.h = h;
@@ -259,7 +260,7 @@ bool PostChain::pipeline_for(PassId id) {
     pd.pipelineLayout = layouts_[textures].get();
     pd.vertexShader = vs_.get();
     pd.pixelShader = p.fs.get();
-    pd.renderTargetFormat[0] = kTargetFormat;
+    pd.renderTargetFormat[0] = target_format_;
     pd.renderTargetBlend[0] = RenderBlendDesc::Copy();
     pd.renderTargetCount = 1;
     pd.primitiveTopology = RenderPrimitiveTopology::TRIANGLE_LIST;
@@ -269,7 +270,7 @@ bool PostChain::pipeline_for(PassId id) {
 
 bool PostChain::draw_pass(RenderCommandList* cmd, PassId id, RenderFramebuffer* fb, uint32_t win_w, uint32_t win_h, float dx,
                           float dy, float dw, float dh, RenderDescriptorSet* set, uint32_t src_w, uint32_t src_h, const float a[4],
-                          const float b[4]) {
+                          const float b[4], const float hdr[4]) {
     if (!pipeline_for(id)) return false;
     PassConstants c{};
     c.dest[0] = dx;
@@ -282,6 +283,7 @@ bool PostChain::draw_pass(RenderCommandList* cmd, PassId id, RenderFramebuffer* 
     c.src[1] = static_cast<float>(src_h);
     std::memcpy(c.a, a, sizeof(c.a));
     std::memcpy(c.b, b, sizeof(c.b));
+    if (hdr) std::memcpy(c.c, hdr, sizeof(c.c));
     if (fb) {
         cmd->setFramebuffer(fb);
         cmd->setViewports(RenderViewport(0.0f, 0.0f, static_cast<float>(win_w), static_cast<float>(win_h)));
@@ -335,6 +337,7 @@ bool PostChain::run(RenderCommandList* cmd, const PostFx& fx, uint32_t pic_w, ui
     plan.crt = fx.crt;
     plan.lines = lines;
     plan.linear = fx.scaler != OutputScaler::Nearest;
+    plan.hdr = fx.hdr;
     if (fsr) {
         const float stops = 2.0f * (1.0f - std::clamp(fx.sharpness, 0.0f, 1.0f));
         ok = ok && pass_to_target(cmd, Easu, win_a_, cur->set.get(), {cur}, cur->w, cur->h, kNone, kNone);
@@ -373,8 +376,10 @@ bool PostChain::draw(RenderCommandList* cmd, const Plan& plan, RenderFramebuffer
             b[1] = plan.lines;
             break;
     }
+    // The output code of hdr.glsl: 0 SDR, 1 scRGB, 2 PQ, 3 EDR.
+    const float hdr[4] = {static_cast<float>(plan.hdr.mode), plan.hdr.peak_nits, plan.hdr.paper_white_nits, 0.0f};
     return draw_pass(cmd, id, fb, win_w, win_h, static_cast<float>(x), static_cast<float>(y), static_cast<float>(w),
-                     static_cast<float>(h), plan.input->set.get(), plan.input->w, plan.input->h, a, b);
+                     static_cast<float>(h), plan.input->set.get(), plan.input->w, plan.input->h, a, b, hdr);
 }
 
 }  // namespace dw3

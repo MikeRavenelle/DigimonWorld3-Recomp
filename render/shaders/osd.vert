@@ -5,6 +5,7 @@ layout(push_constant) uniform Params {
     vec4 dest;    // x, y, w, h in window pixels
     vec2 window;  // window size in pixels
     float opacity;
+    float hdrScale;
 } params;
 
 layout(location = 0) out vec2 vFrac;

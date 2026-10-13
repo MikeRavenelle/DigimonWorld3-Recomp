@@ -10,6 +10,7 @@
 #include <map>
 #include <set>
 
+#include "dw3/hdr.h"
 #include "dw3/texrep/blocks.h"
 #include "dw3/texrep/dump.h"
 #include "dw3/texrep/pack.h"
@@ -99,7 +100,7 @@ struct OsdParams {
     float dest[4];
     float window[2];
     float opacity;
-    float pad;
+    float hdr_scale;  // paper white / 80 nits on a scRGB swap chain, otherwise 0
 };
 static_assert(sizeof(OsdParams) == 32);
 
@@ -197,6 +198,9 @@ struct HwRenderer::Impl {
         return mirror && wide.in_frame(s.area_x1, s.area_y1, s.area_x2, s.area_y2);
     }
     DisplayState wide_display(const DisplayState& d) const;
+    // The post-processing request the swap chain can honour: the HDR output transform is on exactly when the swap chain
+    // is HDR (a headless renderer keeps what it is given, for tests).
+    const PostFx* effective_post(const PostFx* in, PostFx& storage);
     uint32_t draw_mode = 0;  // push constant of the draw shader: bit0 layer, bit1 true colour, bits 2-3 filter
 
     // VRAM: `rt` is drawn into; `tex` is the sampled copy. With scale > 1, `nat` is a native-resolution texture
@@ -239,6 +243,14 @@ struct HwRenderer::Impl {
     // Post-processing passes, created the first time they are used.
     std::unique_ptr<PostChain> post_chain;
 
+    // The swap chain's format: B8G8R8A8 normally, half floats when HDR output is active.
+    RenderFormat swap_format = kSwapFormat;
+    bool hdr_wanted = false;
+    bool hdr_active = false;
+    HdrParams hdr_params;  // the nits of the most recent post-processing request (for the overlay)
+    NativeWindow native_window;
+    bool has_window = false;
+
     // Notification image: `osd_tex` holds the last uploaded overlay.
     std::unique_ptr<RenderTexture> osd_tex;
     RenderTextureLayout osd_tex_layout = RenderTextureLayout::UNKNOWN;
@@ -251,6 +263,7 @@ struct HwRenderer::Impl {
     bool create_targets(std::string& error);
     bool create_pipelines();
     bool create_swapchain(const NativeWindow& window);
+    bool recreate_swapchain();
     void create_swap_framebuffers();
     void clear_vram();
 
@@ -390,12 +403,17 @@ bool HwRenderer::Impl::init(const NativeWindow* window, int internal_scale, cons
         return false;
     }
 
+    hdr_wanted = options.hdr;
+    if (window) {
+        native_window = *window;
+        has_window = true;
+        if (!create_swapchain(*window)) {
+            error = "swap chain creation failed";
+            return false;
+        }
+    }
     if (!create_pipelines()) {
         error = "pipeline creation failed";
-        return false;
-    }
-    if (window && !create_swapchain(*window)) {
-        error = "swap chain creation failed";
         return false;
     }
     clear_vram();
@@ -588,7 +606,7 @@ bool HwRenderer::Impl::create_pipelines() {
         pd.pipelineLayout = present_layout.get();
         pd.vertexShader = present_vs.get();
         pd.pixelShader = present_fs.get();
-        pd.renderTargetFormat[0] = kSwapFormat;
+        pd.renderTargetFormat[0] = swap_format;
         pd.renderTargetBlend[0] = RenderBlendDesc::Copy();
         pd.renderTargetCount = 1;
         pd.primitiveTopology = RenderPrimitiveTopology::TRIANGLE_LIST;
@@ -627,7 +645,7 @@ bool HwRenderer::Impl::create_pipelines() {
         pd.pipelineLayout = osd_layout.get();
         pd.vertexShader = osd_vs.get();
         pd.pixelShader = osd_fs.get();
-        pd.renderTargetFormat[0] = kSwapFormat;
+        pd.renderTargetFormat[0] = swap_format;
         pd.renderTargetBlend[0] = RenderBlendDesc::AlphaBlend();
         pd.renderTargetCount = 1;
         pd.primitiveTopology = RenderPrimitiveTopology::TRIANGLE_LIST;
@@ -650,11 +668,36 @@ bool HwRenderer::Impl::create_swapchain(const NativeWindow& window) {
     w.createSurface = window.create_surface;
     w.getSize = window.get_size;
 #endif
-    swap = queue->createSwapChain(RenderSwapChainDesc(w, kSwapFormat, 2));
+    swap_format = kSwapFormat;
+    hdr_active = false;
+    if (hdr_wanted) {
+        RenderSwapChainDesc hdr_desc(w, RenderFormat::R16G16B16A16_FLOAT, 2);
+        hdr_desc.hdr = true;
+        swap = queue->createSwapChain(hdr_desc);
+        if (swap && swap->resize() && swap->hdrActive) {
+            swap_format = RenderFormat::R16G16B16A16_FLOAT;
+            hdr_active = true;
+        } else {
+            swap.reset();  // not offered: the plain swap chain below takes over
+        }
+    }
+    if (!swap) swap = queue->createSwapChain(RenderSwapChainDesc(w, kSwapFormat, 2));
     if (!swap || !swap->resize()) return false;
     for (Slot& sl : slots) sl.acquire_sem = device->createCommandSemaphore();
     create_swap_framebuffers();
     return !swap_fbs.empty();
+}
+
+// Builds the swap chain again, after hdr_wanted changed: the pipelines that draw into it depend on its format.
+bool HwRenderer::Impl::recreate_swapchain() {
+    if (!has_window) return true;
+    wait_all();
+    swap_fbs.clear();
+    release_sems.clear();
+    post_chain.reset();
+    swap.reset();
+    if (!create_swapchain(native_window)) return false;
+    return create_pipelines();
 }
 
 void HwRenderer::Impl::create_swap_framebuffers() {
@@ -1082,6 +1125,22 @@ bool HwRenderer::Impl::draw_background_rect(std::span<uint16_t> vram, const Draw
 // -------------------------------------------------------------------------------------------------------
 // Presentation
 
+const PostFx* HwRenderer::Impl::effective_post(const PostFx* in, PostFx& storage) {
+    if (hdr_active) {
+        storage = in ? *in : PostFx{};
+        if (storage.hdr.mode == HdrMode::Off) storage.hdr = hdr_params;
+        storage.hdr.mode = HdrMode::ScRgb;
+        hdr_params = storage.hdr;
+        return &storage;
+    }
+    if (has_window && in && in->hdr.mode != HdrMode::Off) {
+        storage = *in;
+        storage.hdr.mode = HdrMode::Off;
+        return &storage;
+    }
+    return in;
+}
+
 // The picture to show: the wide frame copy while it is being drawn and the display is one of the frame buffers.
 DisplayState HwRenderer::Impl::wide_display(const DisplayState& d) const {
     if (!mirror || !wide.enabled() || !d.enabled || d.color24 || d.width != wide.frame_w || d.height != wide.frame_h ||
@@ -1139,7 +1198,7 @@ void HwRenderer::Impl::push_present(const PresentParams& p) {
 // Post-processing: draws the display area 1:1 (nearest) into the chain's source image, then runs the passes up to the
 // last one, which draw_display repeats for each window-sized target.
 bool HwRenderer::Impl::run_post(const PostFx& fx, const DisplayState& d, const PresentRect& pr, PostChain::Plan& plan) {
-    if (!post_chain) post_chain = std::make_unique<PostChain>(device.get(), iface->getCapabilities().shaderFormat);
+    if (!post_chain) post_chain = std::make_unique<PostChain>(device.get(), iface->getCapabilities().shaderFormat, swap_format);
     const uint32_t k = d.color24 ? 1u : static_cast<uint32_t>(scale);
     const uint32_t sw = static_cast<uint32_t>(d.width) * k, sh = static_cast<uint32_t>(d.height) * k;
     if (!post_chain->prepare(cmd, fx, sw, sh, static_cast<uint32_t>(pr.w), static_cast<uint32_t>(pr.h), [this] { wait_all(); }))
@@ -1205,6 +1264,7 @@ void HwRenderer::Impl::draw_overlay(uint32_t w, uint32_t h, const HwOverlay& o) 
     p.window[0] = static_cast<float>(w);
     p.window[1] = static_cast<float>(h);
     p.opacity = o.opacity;
+    p.hdr_scale = hdr_active ? hdr_params.paper_white_nits / kScRgbWhiteNits : 0.0f;
     cmd->setGraphicsPipelineLayout(osd_layout.get());
     cmd->setPipeline(osd_pipeline.get());
     cmd->setGraphicsDescriptorSet(osd_set.get(), 0);
@@ -1530,6 +1590,8 @@ bool HwRenderer::present(const DisplayState& shown, ScaleMode mode, bool linear,
                          int* capture_w, int* capture_h, const HwOverlay* overlay, const PostFx* post) {
     Impl& m = *impl_;
     const DisplayState display = m.wide_display(shown);
+    PostFx post_storage;
+    post = m.effective_post(post, post_storage);
     if (m.dump) m.dump->end_frame();
     if (!m.swap) return false;
     m.record_draws();
@@ -1570,7 +1632,7 @@ bool HwRenderer::present(const DisplayState& shown, ScaleMode mode, bool linear,
     m.draw_display(m.swap_fbs[index].get(), w, h, display, mode, linear, plan_ptr);
     if (overlay) m.draw_overlay(w, h, *overlay);
 
-    const bool grab = capture != nullptr && m.ensure_capture(w, h);
+    const bool grab = capture != nullptr && !m.hdr_active && m.ensure_capture(w, h);  // the capture target is 8-bit
     if (grab) {
         m.transition(m.capture_tex.get(), m.capture_layout, RenderTextureLayout::COLOR_WRITE);
         m.draw_display(m.capture_fb.get(), w, h, display, mode, linear, plan_ptr);
@@ -1599,6 +1661,8 @@ bool HwRenderer::render_to_image(const DisplayState& shown, ScaleMode mode, bool
                                  int height, std::vector<uint32_t>& rgba) {
     Impl& m = *impl_;
     const DisplayState display = m.wide_display(shown);
+    PostFx post_storage;
+    post = m.effective_post(post, post_storage);
     if (width <= 0 || height <= 0) return false;
     const uint32_t w = static_cast<uint32_t>(width), h = static_cast<uint32_t>(height);
     m.record_draws();
@@ -1632,6 +1696,15 @@ bool HwRenderer::reconfigure(int internal_scale, const HwOptions& options, std::
     const uint32_t new_mode = (new_layer ? 1u : 0u) | (options.true_color ? 2u : 0u) | (static_cast<uint32_t>(options.filter) << 2);
     m.record_draws();
     const bool pack_present_changed = static_cast<bool>(options.texture_pack) != static_cast<bool>(m.pack);
+    if (options.hdr != m.hdr_wanted) {
+        m.hdr_wanted = options.hdr;
+        if (!m.recreate_swapchain()) {
+            error = "swap chain creation failed";
+            m.hdr_wanted = !options.hdr;
+            m.recreate_swapchain();
+            return false;
+        }
+    }
     const bool wide_changed = options.wide_frame.margin != m.wide.margin;
     if (new_scale == m.scale && new_layer == m.layer && !pack_present_changed && !wide_changed) {
         // Only the draw shader's mode word and the vertex path change: nothing to rebuild. A different pack empties
@@ -1686,6 +1759,8 @@ bool HwRenderer::reconfigure(int internal_scale, const HwOptions& options, std::
     m.draw_mode = new_mode;
     return true;
 }
+
+bool HwRenderer::hdr_active() const { return impl_->hdr_active; }
 
 void HwRenderer::set_wide_mirror(bool active) {
     Impl& m = *impl_;

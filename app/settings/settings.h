@@ -42,6 +42,9 @@ struct Settings {
         bool show_fps = false;
         int gamma = 100;             // percent, 80..140
         int brightness = 0;          // percent, -50..50
+        bool hdr = false;            // HDR output on a display that is in HDR mode (GPU renderer)
+        int hdr_peak_nits = 1000;    // 400..1500: the brightness white is lifted towards
+        int hdr_paper_white = 203;   // 100..300 nits: where SDR white is placed
         // Post-processing (GPU renderer only; see docs/SETTINGS.md).
         int antialiasing = 0;        // off, smaa
         int sharpening = 0;          // off, low, medium, high

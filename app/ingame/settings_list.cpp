@@ -37,6 +37,9 @@ constexpr Labels kLabels[] = {
     {"graphics.show_fps", "Show FPS", 1},
     {"graphics.gamma", "Gamma", 5},
     {"graphics.brightness", "Bright", 5},
+    {"graphics.hdr", "HDR", 1},
+    {"graphics.hdr_peak_nits", "HDR Peak", 50},
+    {"graphics.hdr_paper_white", "HDR White", 10},
     {"audio.mute", "Mute", 1},
     {"audio.volume", "Volume", 10},
     {"audio.music_volume", "Music", 10},
@@ -202,8 +205,11 @@ std::vector<std::pair<std::string, std::string>> controls_reset_changes() {
     return out;
 }
 
+bool is_hdr_row(const SettingInfo& info) { return info.id.starts_with("graphics.hdr"); }
+
 std::string value_label(const Settings& settings, const Entry& entry, const RowContext& context) {
     if (entry.kind == Kind::Reset) return "";
+    if (entry.kind == Kind::Setting && is_hdr_row(*entry.info) && !context.hdr_available) return "N/A";
     if (entry.kind == Kind::Resolution) return resolution_label(settings, context);
     if (entry.kind == Kind::Binding) {
         if (context.capturing == entry.action) return "Press key";
@@ -268,6 +274,7 @@ std::vector<std::pair<std::string, std::string>> resolution_changes(const Settin
 std::string stepped_value(const Settings& settings, const Entry& entry, int direction, const RowContext& context) {
     if (entry.kind != Kind::Setting) return "";
     const SettingInfo& info = *entry.info;
+    if (is_hdr_row(info) && !context.hdr_available) return "";
     switch (info.type) {
         case Type::Bool: return get_text(settings, info) == "true" ? "false" : "true";
         case Type::Int: {

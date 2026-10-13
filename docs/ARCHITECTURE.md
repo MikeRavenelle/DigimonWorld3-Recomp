@@ -137,7 +137,8 @@ buffer(8)) and embedded as source that the device compiles with fast math off. A
 backend at run time. Vertex inputs use `TEXCOORD<location>` semantics, which is what
 SPIRV-Cross emits, and vertex shaders are flipped in y for Direct3D's and Metal's clip space. plume is fetched at a
 pinned commit with `cmake/patches/plume-vulkan.patch`, `cmake/patches/plume-d3d12.patch` and
-`cmake/patches/plume-metal.patch` applied (the last adds the texture-to-buffer copy and source-text shaders). The renderer tests run against
+`cmake/patches/plume-metal.patch` applied (the last adds the texture-to-buffer copy and source-text shaders) and
+`cmake/patches/plume-hdr.patch` (HDR swap chains, see Post-processing). The renderer tests run against
 the software rasterizer on every backend the build contains, so all backends are held to the same pixels.
 
 ## Texture replacement
@@ -217,6 +218,26 @@ capture. All intermediate images use the swap chain's colour format, so a single
 target; pipelines are created the first time a pass is used. Every shader goes through the same SPIR-V, DXIL and MSL
 conversion as the rest. The SMAA search and area lookups and the FSR gather are done with explicit texel fetches,
 because the passes read plain textures without samplers.
+
+Widescreen battles (`graphics.widescreen`): the render targets get extra columns to the right of VRAM that hold a wider
+copy of the two frame buffers (`runtime/include/dw3/widescreen.h`). While the game is in battle mode, every primitive
+and fill that lands in a frame buffer is drawn a second time into the copy, shifted so the 320-pixel frame sits in its
+centre. The game submits its 3D ground and sky well past the 4:3 edges (the drawing area only clips them), so the
+margins fill with the arena; 2D menus and windows are drawn at their normal place in the centre, and flat 2D shapes that
+touch a frame edge (fades, backdrops) stretch to the new edge. The extra columns are never read back to the CPU. The
+wide copy is shown instead of the 4:3 picture with its own aspect while it is current; every other screen is 4:3 with
+borders.
+
+HDR output (`graphics.hdr`): with the plume HDR patch the swap chain can be R16G16B16A16_FLOAT in the scRGB colour
+space (Vulkan `VK_EXT_swapchain_colorspace` extended sRGB, Direct3D 12 `DXGI_COLOR_SPACE_RGB_FULL_G10_NONE_P709`).
+The picture is then always post-processed, and the last pass (scale, RCAS or CRT) ends in the transform of
+`render/shaders/post/hdr.glsl`, which repeats `runtime/include/dw3/hdr.h`: sRGB to linear, SDR white placed at the
+paper white level, and only the part above a knee lifted smoothly towards the peak for white, with the same gain on
+all channels so hue is kept. The intermediate images are half floats too in that case, and window captures are not
+available. Without an HDR swap chain the option does nothing. Metal has no HDR path yet (it would need
+`wantsExtendedDynamicRangeContent` and an extended linear colour space on the layer, set from `plume_apple.mm`), and
+HDR10 (PQ, Rec. 2020) is implemented in the shader and the maths but not offered, because plume has no 10-bit
+RGB10A2 format to create such a swap chain with.
 
 ## Platforms
 

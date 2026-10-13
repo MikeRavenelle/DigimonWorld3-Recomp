@@ -394,9 +394,11 @@ int main(int argc, char** argv) {
     SDL_Log("presenting with %s", presenter->name());
     dw3app::MonitorList monitors;
     double refresh_hz = 0.0;
+    bool display_hdr = false;
     auto refresh_display_state = [&] {
         monitors = dw3app::query_monitors(window);
         refresh_hz = dw3app::window_refresh_hz(window);
+        display_hdr = dw3app::window_hdr_enabled(window);
     };
     dw3app::apply_display_settings(window, active.graphics);
     refresh_display_state();
@@ -643,6 +645,7 @@ int main(int argc, char** argv) {
     auto on_frame = [&](uint64_t frame) {
         host_input.frame = static_cast<int64_t>(frame);
         settings_screen.apply_pending();
+        settings_screen.set_hdr_available(display_hdr && presenter->supports_hdr());
         for (const auto& act : opt.window_actions) {
             if (act.frame != static_cast<int64_t>(frame)) continue;
             if (act.w > 0) {
@@ -667,7 +670,8 @@ int main(int argc, char** argv) {
         SDL_Event e;
         while (SDL_PollEvent(&e)) {
             if (e.type == SDL_EVENT_QUIT) dw3::host::Host::stop();
-            if ((e.type >= SDL_EVENT_DISPLAY_FIRST && e.type <= SDL_EVENT_DISPLAY_LAST) || e.type == SDL_EVENT_WINDOW_DISPLAY_CHANGED)
+            if ((e.type >= SDL_EVENT_DISPLAY_FIRST && e.type <= SDL_EVENT_DISPLAY_LAST) || e.type == SDL_EVENT_WINDOW_DISPLAY_CHANGED ||
+                e.type == SDL_EVENT_WINDOW_HDR_STATE_CHANGED)
                 display_changed = true;
             if (host_input.handle_event(e)) continue;
             if (e.type == SDL_EVENT_KEY_DOWN && !e.key.repeat) {
