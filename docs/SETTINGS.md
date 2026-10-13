@@ -103,8 +103,9 @@ Making a pack:
    `--gpu N` (if the upscaler picks a software device), `--pad`, `--work`. Running it again with more dumps adds to the
    pack and leaves finished images alone. Each background image is upscaled together with the pixels around it, taken
    from the neighbouring images seen in the dump, so the borders between images line up.
-4. Start the game with `graphics.texture_pack = "general-x4"` in `settings.toml` (or `--texture-pack general-x4`) and
-   switch HD BG on in the settings screen (or `--hd-backgrounds`, or use the Remaster preset).
+4. Switch HD BG on in the settings screen (or `--hd-backgrounds`, or use the Remaster preset). With
+   `graphics.texture_pack` empty the game uses the first folder in `texture-packs` that has a manifest; to pick a
+   pack, set `graphics.texture_pack = "general-x4"` in `settings.toml` (or `--texture-pack general-x4`).
 
 Notes and limits:
 
