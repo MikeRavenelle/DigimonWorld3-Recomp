@@ -19,6 +19,8 @@ Keys
     Q / W          L1 / R1            1 / 2           L2 / R2
     F5             save state         F7              load state
     F6 / F8        previous / next state slot (1 to 9)
+    F9             Original <-> enhanced picture (comparison)
+    Tab (hold)     fast-forward       F10             latch fast-forward
     F11, Alt+Enter fullscreen         Close window  quit
 A gamepad that SDL recognizes is used as well.
 
@@ -28,5 +30,10 @@ Options
     --window-size 1280x960   --fullscreen        window
     --internal-res N                             GPU renderer internal resolution multiplier, 1 to 8
     --mute                                       no audio
+    --preset original|enhanced|remaster          visual preset (default: original)
+    --config PATH   --no-config                  settings file to use, or none
+
+Settings are kept in %APPDATA%\DW3Recomp\settings.toml (created on the first start, commented). Command-line
+options override it for one run and are not saved. See docs/SETTINGS.md for every option.
 
 License: GPL-3.0 (see LICENSE).

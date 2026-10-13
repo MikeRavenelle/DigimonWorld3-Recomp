@@ -45,7 +45,8 @@ build/linux-x64-debug/tools/dw3extract/dw3extract "game/Digimon World 3 (USA).cu
 | `tests/` | GoogleTest unit and integration tests |
 | `docs/` | architecture notes |
 
-See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
+See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md). Options, visual presets, hotkeys and fast-forward are
+described in [docs/SETTINGS.md](docs/SETTINGS.md).
 
 ## License
 

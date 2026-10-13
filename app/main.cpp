@@ -32,6 +32,7 @@
 //   --fullscreen       start in (borderless, desktop) fullscreen; F11 or Alt+Enter toggles it
 //   --resize-at F WxH  resize the window at frame F (repeatable; for checking swap chain resizing in audit runs)
 //   --fullscreen-at F  toggle fullscreen at frame F (repeatable)
+//   --compare-at F     press the Original/enhanced comparison hotkey at frame F (repeatable; for audit runs)
 //   --scale M          fit (default, 4:3 letterbox), integer or stretch
 //   --filter F         nearest (default) or linear
 //   --no-vsync         present without waiting for the display refresh (always on with --uncapped/--frames)
@@ -92,6 +93,7 @@ struct Options {
         int w, h;  // 0x0: toggle fullscreen
     };
     std::vector<WindowAction> window_actions;
+    std::vector<int64_t> compare_frames;
     bool intro = false;
     int shot_every = 0;
     std::string shot_dir;
@@ -222,6 +224,7 @@ Options parse(int argc, char** argv) {
             o.window_actions.push_back(act);
         }
         else if (a == "--fullscreen-at" && i + 1 < argc) o.window_actions.push_back({std::atoll(argv[++i]), 0, 0});
+        else if (a == "--compare-at" && i + 1 < argc) o.compare_frames.push_back(std::atoll(argv[++i]));
         else if (a == "--intro") o.intro = true;
         else if (a == "--renderer" && i + 1 < argc) set("graphics.renderer", argv[++i]);
         else if (a == "--preset" && i + 1 < argc) set("graphics.preset", argv[++i]);
@@ -584,6 +587,12 @@ int main(int argc, char** argv) {
                 toggle_fullscreen();
             }
         }
+        for (const int64_t f : opt.compare_frames)
+            if (f == static_cast<int64_t>(frame)) {
+                const std::string mode = settings.toggle_comparison();
+                SDL_Log("visual preset: %s", mode.c_str());
+                presenter->notify("Visual preset: " + mode);
+            }
         audio.pump(machine.spu());
         {
             std::lock_guard lock(saves.mutex);
