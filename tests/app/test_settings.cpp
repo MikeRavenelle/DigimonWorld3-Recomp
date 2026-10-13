@@ -135,7 +135,7 @@ TEST(Presets, EachPresetSetsItsBundle) {
         EXPECT_EQ(bundle_of(s), preset(p).graphics);
         EXPECT_EQ(s.graphics.preset, p);
     }
-    EXPECT_EQ(preset(kPresetOriginal).graphics, (GraphicsBundle{1, false, 0, false, 0}));
+    EXPECT_EQ(preset(kPresetOriginal).graphics, (GraphicsBundle{1, false, 0, false, 0, 0, 0, 0}));
     EXPECT_GT(preset(kPresetEnhanced).graphics.internal_res, 1);
     EXPECT_GE(preset(kPresetRemaster).graphics.internal_res, preset(kPresetEnhanced).graphics.internal_res);
 }
@@ -340,4 +340,37 @@ TEST(Pacer, LongStallDoesNotCauseASprint) {
     const int64_t second = static_cast<int64_t>(Pacer::kCpuHz);
     EXPECT_EQ(p.delay_ns(5000000000ull, second), 0u);  // 4 s late: the anchor moves up
     EXPECT_GT(p.delay_ns(5000000000ull, 2 * second), 900000000u);
+}
+
+TEST(Presets, PostProcessingPerPreset) {
+    const auto& original = preset(kPresetOriginal).graphics;
+    EXPECT_EQ(original.antialiasing, 0);
+    EXPECT_EQ(original.sharpening, 0);
+    EXPECT_EQ(original.color_grade, 0);
+    EXPECT_EQ(original.output_filter, 0);
+    const auto& remaster = preset(kPresetRemaster).graphics;
+    EXPECT_GT(remaster.sharpening, preset(kPresetEnhanced).graphics.sharpening);
+    EXPECT_EQ(remaster.color_grade, 1);
+    EXPECT_EQ(remaster.antialiasing, 0);
+}
+
+TEST(Presets, CrtIsNotPartOfAnyPreset) {
+    for (std::string_view id : preset_member_ids()) EXPECT_NE(id, "graphics.crt");
+    Settings s = defaults();
+    EXPECT_EQ(s.graphics.crt, 0);
+    ASSERT_TRUE(set(s, "graphics.crt", "crt"));
+    EXPECT_EQ(s.graphics.preset, kPresetOriginal);  // switching the look on leaves the preset alone
+    ASSERT_TRUE(set(s, "graphics.preset", "remaster"));
+    EXPECT_EQ(s.graphics.crt, 2);  // and so does choosing a preset
+}
+
+TEST(Settings, PostProcessingRoundTripsThroughToml) {
+    Settings s = defaults();
+    ASSERT_TRUE(set(s, "graphics.output_filter", "fsr"));
+    ASSERT_TRUE(set(s, "graphics.antialiasing", "smaa"));
+    ASSERT_TRUE(set(s, "graphics.sharpening", "high"));
+    ASSERT_TRUE(set(s, "graphics.color_grade", "warm"));
+    LoadReport report;
+    EXPECT_EQ(settings_from_toml(settings_to_toml(s), report), s);
+    EXPECT_FALSE(set(s, "graphics.sharpening", "extreme"));
 }

@@ -24,12 +24,17 @@ struct Settings {
         bool true_color = false;
         int texture_filter = 0;      // nearest, bilinear, xbr
         bool precise_geometry = false;
-        int output_filter = 0;       // nearest, linear (scaling the picture to the window)
+        int output_filter = 0;       // nearest, linear, fsr (scaling the picture to the window)
         int scale_mode = 0;          // fit, integer, stretch
         int window_width = 1280;
         int window_height = 960;
         bool fullscreen = false;
         bool vsync = true;
+        // Post-processing (GPU renderer only; see docs/SETTINGS.md).
+        int antialiasing = 0;        // off, smaa
+        int sharpening = 0;          // off, low, medium, high
+        int color_grade = 0;         // neutral, vivid, warm, cool
+        int crt = 0;                 // off, scanlines, crt (not part of any preset)
         bool operator==(const Graphics&) const = default;
     } graphics;
     struct Audio {

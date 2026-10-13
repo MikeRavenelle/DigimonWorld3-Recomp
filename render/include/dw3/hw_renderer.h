@@ -41,6 +41,7 @@
 #include <vector>
 
 #include "dw3/gpu.h"
+#include "dw3/postfx.h"
 #include "dw3/present_layout.h"
 
 namespace dw3 {
@@ -115,8 +116,16 @@ public:
     // Shows the display area in the window and ends the frame. When `capture` is given the window image is also
     // read back into it (RGBA8, `capture_w` x `capture_h`). Returns false if nothing could be presented.
     // `overlay` is blended over the window image after the picture; it is not part of `capture`.
+    // `post` selects the post-processing passes (postfx.h); null, or options with everything off, takes the plain
+    // path, which scales with `linear` and leaves the picture untouched. With post-processing the scaler in `post`
+    // replaces `linear`.
     bool present(const DisplayState& display, ScaleMode mode, bool linear, std::vector<uint32_t>* capture = nullptr,
-                 int* capture_w = nullptr, int* capture_h = nullptr, const HwOverlay* overlay = nullptr);
+                 int* capture_w = nullptr, int* capture_h = nullptr, const HwOverlay* overlay = nullptr,
+                 const PostFx* post = nullptr);
+    // Draws the display area the way present() would into an offscreen image of width x height pixels and reads it back
+    // (RGBA8, rows top to bottom). Works without a window. For tests and diagnostics.
+    bool render_to_image(const DisplayState& display, ScaleMode mode, bool linear, const PostFx* post, int width, int height,
+                         std::vector<uint32_t>& rgba);
     void set_vsync(bool enabled);
 
     // Changes the internal resolution and the display options of a running renderer. `vram` is the machine's VRAM

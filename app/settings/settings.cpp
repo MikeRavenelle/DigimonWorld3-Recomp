@@ -19,7 +19,11 @@ constexpr std::string_view kPresetNames[] = {"original", "enhanced", "remaster",
 constexpr std::string_view kBaseNames[] = {"original", "enhanced", "remaster"};
 constexpr std::string_view kComparisonNames[] = {"original", "enhanced", "remaster"};
 constexpr std::string_view kTextureFilters[] = {"nearest", "bilinear", "xbr"};
-constexpr std::string_view kOutputFilters[] = {"nearest", "linear"};
+constexpr std::string_view kOutputFilters[] = {"nearest", "linear", "fsr"};
+constexpr std::string_view kAntialiasing[] = {"off", "smaa"};
+constexpr std::string_view kSharpening[] = {"off", "low", "medium", "high"};
+constexpr std::string_view kColorGrades[] = {"neutral", "vivid", "warm", "cool"};
+constexpr std::string_view kCrt[] = {"off", "scanlines", "crt"};
 constexpr std::string_view kScaleModes[] = {"fit", "integer", "stretch"};
 constexpr std::string_view kSpeeds[] = {"2x", "4x", "unlimited"};
 
@@ -43,7 +47,7 @@ const SettingInfo kSettings[] = {
      Group::Graphics, Type::Choice, Apply::Live, 0, 0, kTextureFilters, false, DW3_FIELD(graphics.texture_filter)},
     {"graphics.precise_geometry", "Precise geometry", "Sub-pixel 3D vertices and perspective-correct textures (best with internal resolution above 1).",
      Group::Graphics, Type::Bool, Apply::Live, 0, 0, {}, false, DW3_FIELD(graphics.precise_geometry)},
-    {"graphics.output_filter", "Output filter", "How the picture is scaled to the window.",
+    {"graphics.output_filter", "Output filter", "How the picture is scaled to the window: nearest, linear, or fsr (AMD FidelityFX Super Resolution 1, sharper when the window is larger than the picture; GPU renderer only).",
      Group::Graphics, Type::Choice, Apply::Live, 0, 0, kOutputFilters, false, DW3_FIELD(graphics.output_filter)},
     {"graphics.scale_mode", "Scaling", "fit keeps 4:3 with borders, integer uses whole multiples only, stretch fills the window.",
      Group::Graphics, Type::Choice, Apply::Live, 0, 0, kScaleModes, false, DW3_FIELD(graphics.scale_mode)},
@@ -55,6 +59,15 @@ const SettingInfo kSettings[] = {
      Group::Graphics, Type::Bool, Apply::Live, 0, 0, {}, false, DW3_FIELD(graphics.fullscreen)},
     {"graphics.vsync", "Vertical sync", "Wait for the display refresh when presenting.",
      Group::Graphics, Type::Bool, Apply::Live, 0, 0, {}, false, DW3_FIELD(graphics.vsync)},
+
+    {"graphics.antialiasing", "Anti-aliasing", "SMAA edge smoothing of the finished picture (GPU renderer only). Mostly useful at internal resolution 1x to 2x.",
+     Group::Graphics, Type::Choice, Apply::Live, 0, 0, kAntialiasing, false, DW3_FIELD(graphics.antialiasing)},
+    {"graphics.sharpening", "Sharpening", "Contrast adaptive sharpening (AMD FidelityFX CAS) of the finished picture; with the fsr output filter it sets the strength of FSR's own sharpening (GPU renderer only).",
+     Group::Graphics, Type::Choice, Apply::Live, 0, 0, kSharpening, false, DW3_FIELD(graphics.sharpening)},
+    {"graphics.color_grade", "Colour grading", "A colour look applied to the finished picture: neutral changes nothing (GPU renderer only).",
+     Group::Graphics, Type::Choice, Apply::Live, 0, 0, kColorGrades, false, DW3_FIELD(graphics.color_grade)},
+    {"graphics.crt", "CRT look", "Scanlines, or scanlines with a phosphor mask, slight curvature and vignette. Not part of any preset (GPU renderer only).",
+     Group::Graphics, Type::Choice, Apply::Live, 0, 0, kCrt, false, DW3_FIELD(graphics.crt)},
 
     {"audio.mute", "Mute", "No sound output.",
      Group::Audio, Type::Bool, Apply::Live, 0, 0, {}, false, DW3_FIELD(audio.mute)},

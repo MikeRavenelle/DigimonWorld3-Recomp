@@ -32,9 +32,27 @@ if(DW3_HAVE_PLUME)
     endif()
 
     set(SHADER_HEADERS)
+    file(GLOB SHADER_INCLUDES CONFIGURE_DEPENDS ${SHADER_DIR}/post/*.glsl)
+    # Lookup textures of the SMAA passes (generated data from the reference implementation, MIT licence).
+    foreach(blob smaa_area smaa_search)
+        set(blob_hdr ${SHADER_OUT}/${blob}.h)
+        add_custom_command(
+            OUTPUT ${blob_hdr}
+            COMMAND ${CMAKE_COMMAND} -DINPUT=${CMAKE_CURRENT_SOURCE_DIR}/data/${blob}.bin -DOUTPUT=${blob_hdr} -DSYMBOL=${blob}
+                    -P ${PROJECT_SOURCE_DIR}/cmake/EmbedBinary.cmake
+            DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/data/${blob}.bin ${PROJECT_SOURCE_DIR}/cmake/EmbedBinary.cmake
+            COMMENT "Embedding ${blob}"
+            VERBATIM)
+        list(APPEND SHADER_HEADERS ${blob_hdr})
+    endforeach()
     # name|source|extra glslang options. The display layer variant of the draw shader writes a second target.
     foreach(entry psx_draw.vert|psx_draw.vert psx_draw.frag|psx_draw.frag psx_draw_layer.frag|psx_draw.frag|-DDISPLAY_LAYER
-                  present.vert|present.vert present.frag|present.frag osd.vert|osd.vert osd.frag|osd.frag vram_copy.vert|vram_copy.vert vram_copy.frag|vram_copy.frag)
+                  present.vert|present.vert present.frag|present.frag osd.vert|osd.vert osd.frag|osd.frag vram_copy.vert|vram_copy.vert vram_copy.frag|vram_copy.frag
+                  # Post-processing passes (render/shaders/post).
+                  post.vert|post/post.vert post_scale.frag|post/scale.frag post_cas.frag|post/cas.frag
+                  post_grade.frag|post/grade.frag post_crt.frag|post/crt.frag post_easu.frag|post/fsr_easu.frag
+                  post_rcas.frag|post/fsr_rcas.frag post_smaa_edges.frag|post/smaa_edges.frag
+                  post_smaa_weights.frag|post/smaa_weights.frag post_smaa_blend.frag|post/smaa_blend.frag)
         string(REPLACE "|" ";" parts "${entry}")
         list(GET parts 0 shader)
         list(GET parts 1 source)
@@ -88,7 +106,7 @@ if(DW3_HAVE_PLUME)
                     -P ${PROJECT_SOURCE_DIR}/cmake/EmbedBinary.cmake
             ${dxil_cmds}
             ${msl_cmds}
-            DEPENDS ${SHADER_DIR}/${source} ${PROJECT_SOURCE_DIR}/cmake/EmbedBinary.cmake ${DW3_SPIRV_CROSS_TARGET}
+            DEPENDS ${SHADER_DIR}/${source} ${SHADER_INCLUDES} ${PROJECT_SOURCE_DIR}/cmake/EmbedBinary.cmake ${DW3_SPIRV_CROSS_TARGET}
                     ${DW3_SPIRV_MSL}
             COMMENT "Compiling shader ${shader}"
             VERBATIM)
@@ -96,7 +114,7 @@ if(DW3_HAVE_PLUME)
     endforeach()
     add_custom_target(dw3_shaders DEPENDS ${SHADER_HEADERS})
 
-    target_sources(dw3render PRIVATE src/hw_renderer.cpp)
+    target_sources(dw3render PRIVATE src/hw_renderer.cpp src/post_chain.cpp)
     add_dependencies(dw3render dw3_shaders)
     target_include_directories(dw3render PUBLIC ${CMAKE_CURRENT_BINARY_DIR})
    

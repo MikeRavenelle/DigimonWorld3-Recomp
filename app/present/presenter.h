@@ -8,6 +8,7 @@
 #include <vector>
 
 #include "dw3/gpu.h"
+#include "dw3/postfx.h"
 #include "dw3/present_layout.h"
 #include "osd.h"
 
@@ -23,6 +24,7 @@ struct PresentOptions {
     bool true_color = false;  // GPU renderer: no dithering, full precision shading
     int texture_filter = 0;   // GPU renderer: 0 nearest, 1 bilinear, 2 xBR
     bool precise_geometry = false;  // GPU renderer: sub-pixel 3D vertices from the GTE
+    dw3::PostFx post;               // GPU renderer: post-processing (the software path ignores it)
 };
 
 // Window contents as seen by the user (borders included), RGBA8888.

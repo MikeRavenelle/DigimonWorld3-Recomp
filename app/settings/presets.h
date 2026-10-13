@@ -20,6 +20,9 @@ struct GraphicsBundle {
     int texture_filter = 0;
     bool precise_geometry = false;
     int output_filter = 0;
+    int antialiasing = 0;
+    int sharpening = 0;
+    int color_grade = 0;
     bool operator==(const GraphicsBundle&) const = default;
 };
 
@@ -27,9 +30,8 @@ struct Preset {
     std::string_view name;   // the value stored in settings.toml
     std::string_view label;  // for the screen
     GraphicsBundle graphics;
-    // Remaster is the home of the features that are still to come (a post-processing chain, replacement textures
-    // for the pre-rendered backgrounds). They belong here as further members, set per preset next to `graphics`,
-    // and are applied by the same code that applies `graphics`.
+    // Features still to come (replacement textures for the pre-rendered backgrounds) belong here as further
+    // members, set per preset next to `graphics`, and are applied by the same code that applies `graphics`.
 };
 
 const Preset& preset(int id);            // id 0..2

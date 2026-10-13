@@ -32,7 +32,11 @@ everything else applies immediately.
 | `graphics.true_color` | bool | `--true-color` |
 | `graphics.texture_filter` | `nearest`, `bilinear`, `xbr` | `--texture-filter` |
 | `graphics.precise_geometry` | bool | `--precise-geometry` |
-| `graphics.output_filter` | `nearest`, `linear` | `--filter` |
+| `graphics.output_filter` | `nearest`, `linear`, `fsr` | `--filter` |
+| `graphics.antialiasing` | `off`, `smaa` | |
+| `graphics.sharpening` | `off`, `low`, `medium`, `high` | |
+| `graphics.color_grade` | `neutral`, `vivid`, `warm`, `cool` | |
+| `graphics.crt` | `off`, `scanlines`, `crt` | |
 | `graphics.scale_mode` | `fit`, `integer`, `stretch` | `--scale` |
 | `graphics.window_width`, `graphics.window_height` | pixels | `--window-size WxH` |
 | `graphics.fullscreen` | bool | `--fullscreen` |
@@ -55,15 +59,41 @@ A preset is a named bundle of the graphics options that can change while the gam
 | texture filter | nearest | bilinear | xbr |
 | precise geometry | off | on | on |
 | output filter | nearest | linear | linear |
+| anti-aliasing | off | off | off |
+| sharpening | off | low | medium |
+| colour grading | neutral | neutral | vivid |
 
 Original is exactly the PlayStation picture. Enhanced makes it sharper without changing the look: higher internal
 resolution (this only matters for 3D, because the fields are pre-rendered), no dithering, no vertex wobble, and
 bilinear smoothing of 3D textures only; flat sprites and backgrounds are left as drawn. Remaster uses the strongest
-settings available and also smooths sprites with xBR. Later versions will add post-processing and replacement
-textures to it.
+settings available, also smooths sprites with xBR, sharpens at the medium level and applies the vivid colour look.
+Enhanced adds only the lowest sharpening level, which wins back what the linear scale takes off the 4x picture. SMAA
+is off in all three: at 8x the edges are a fraction of a window pixel wide already. Remaster scales linearly instead of
+with FSR for the same reason: its picture (2560x1920 and up) is nearly always larger than the window, so there is
+nothing to upscale. The CRT look belongs to no preset; it is a separate option that can be switched on in any of them.
+Later versions will add replacement textures to Remaster.
 
 Changing any of the covered options after picking a preset shows as `custom`; `preset_base` remembers which preset it
 started from.
+
+## Post-processing
+
+These options act on the finished picture (the part of VRAM the console would display), after the internal-resolution
+rendering and before or while it is scaled to the window. They need the GPU renderer: the software path ignores them
+and the settings screen still lists them. With all of them off the output is bit-for-bit what it is without the
+feature. The order of the passes is described in [ARCHITECTURE.md](ARCHITECTURE.md#post-processing).
+
+- **Anti-aliasing** `smaa`: SMAA 1x. Smooths stair-stepped edges; mostly useful at internal resolution 1x to 2x.
+- **Sharpening**: contrast adaptive sharpening (CAS) at three strengths. Flat areas are never changed. With the `fsr`
+  output filter this setting drives FSR's own sharpening step instead (off skips it).
+- **Output filter** `fsr`: FidelityFX Super Resolution 1 (edge-adaptive upscale plus sharpening). It improves on
+  `linear` when the window is larger than the picture; if the picture is not enlarged on either axis (an 8x picture
+  in a small window), it falls back to `linear`.
+- **Colour grading**: `neutral` leaves colours alone; `vivid` adds saturation, contrast and a little vibrance; `warm`
+  and `cool` tint the picture.
+- **CRT look**: `scanlines` darkens the gaps between the console's lines (beams widen on bright colours);
+  `crt` adds a phosphor mask, slight screen curvature with rounded corners and a vignette. Scanlines follow the
+  console's lines, not the window's, so they look best at windows several times the console resolution.
 
 ## Hotkeys
 
