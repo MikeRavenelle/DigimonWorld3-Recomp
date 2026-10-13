@@ -1,4 +1,4 @@
-// Gameplay options that change what the game does: random encounters and the party's invulnerability.
+// Gameplay options that change what the game does: random encounters, the party's invulnerability and experience.
 // Each is a host override of one game function (see docs/ARCHITECTURE.md, "Host overrides"); the options are read from
 // the controller every time the function runs, so a change takes effect at once.
 #pragma once

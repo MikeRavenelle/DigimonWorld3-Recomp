@@ -161,7 +161,7 @@ hold = ["LEFT"]
 at = 1809
 label = "encounter start"
 display_enabled = true
-ram = [{ addr = 0x800554D4, size = 4, value = 0x1FA }]
+ram = [{ addr = 0x800554D4, size = 4, value = 0x1FA }, { addr = 0x80048C68, size = 4, value = 4 }]
 screenshot = true
 
 [[check]]
@@ -203,7 +203,7 @@ at = 2654
 label = "field after the battle"
 display_enabled = true
 screen_hash = "0780028000000000ffbedff95ff017c0fe00fe00fe02ff023ffefffefffeff80"
-ram = [{ addr = 0x800554D0, size = 4, value = 2 }, { addr = 0x800554D4, size = 4, value = 0x1D2 }]
+ram = [{ addr = 0x800554D0, size = 4, value = 2 }, { addr = 0x800554D4, size = 4, value = 0x1D2 }, { addr = 0x80048C68, size = 4, value = 10 }]
 screenshot = true
 
 [[check]]

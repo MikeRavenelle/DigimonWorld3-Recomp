@@ -8,6 +8,8 @@
 
 #include "controller.h"
 #include "fastforward.h"
+#include "audio_mix.h"
+#include "gameplay_scaling.h"
 #include "timestretch.h"
 
 using namespace dw3app;
@@ -383,6 +385,8 @@ TEST(GameplaySettings, DefaultsAreTheOriginalGame) {
     EXPECT_EQ(get_text(s, *find_setting("gameplay.encounters")), "normal");
     EXPECT_EQ(get_text(s, *find_setting("gameplay.game_speed")), "1x");
     EXPECT_EQ(get_text(s, *find_setting("gameplay.god_mode")), "false");
+    EXPECT_EQ(get_text(s, *find_setting("gameplay.xp_multiplier")), "1x");
+    EXPECT_EQ(get_text(s, *find_setting("gameplay.text_speed")), "normal");
 }
 
 TEST(GameplaySettings, ValuesRoundTripThroughToml) {
@@ -390,9 +394,85 @@ TEST(GameplaySettings, ValuesRoundTripThroughToml) {
     EXPECT_TRUE(set(s, "gameplay.encounters", "off"));
     EXPECT_TRUE(set(s, "gameplay.game_speed", "3x"));
     EXPECT_TRUE(set(s, "gameplay.god_mode", "true"));
+    EXPECT_TRUE(set(s, "gameplay.xp_multiplier", "5x"));
+    EXPECT_TRUE(set(s, "gameplay.text_speed", "instant"));
+    EXPECT_FALSE(set(s, "gameplay.text_speed", "slow"));
     EXPECT_FALSE(set(s, "gameplay.game_speed", "9x"));
+    EXPECT_FALSE(set(s, "gameplay.xp_multiplier", "4x"));
     LoadReport report;
     EXPECT_EQ(settings_from_toml(settings_to_toml(s), report), s);
+}
+
+TEST(Experience, MultiplierFollowsTheChoice) {
+    EXPECT_EQ(xp_multiplier(0), 1);
+    EXPECT_EQ(xp_multiplier(1), 2);
+    EXPECT_EQ(xp_multiplier(2), 3);
+    EXPECT_EQ(xp_multiplier(3), 5);
+    EXPECT_EQ(xp_multiplier(4), 10);
+    EXPECT_EQ(xp_multiplier(-1), 1);
+    EXPECT_EQ(xp_multiplier(9), 10);
+}
+
+TEST(Experience, AwardScalesAndStopsAtTheFieldMaximum) {
+    EXPECT_EQ(scaled_experience(6, 1), 6u);
+    EXPECT_EQ(scaled_experience(6, 2), 12u);
+    EXPECT_EQ(scaled_experience(0, 10), 0u);
+    EXPECT_EQ(scaled_experience(100000, 10), kMaxExperience);
+    EXPECT_EQ(scaled_experience(0xFFFFFFFFu, 10), kMaxExperience);
+    EXPECT_EQ(scaled_experience(6, 0), 6u);
+}
+
+TEST(AudioSettings, MusicAndEffectsDefaultToFullAndRoundTrip) {
+    Settings s = defaults();
+    EXPECT_EQ(get_text(s, *find_setting("audio.music_volume")), "100");
+    EXPECT_EQ(get_text(s, *find_setting("audio.sfx_volume")), "100");
+    EXPECT_TRUE(set(s, "audio.music_volume", "40"));
+    EXPECT_TRUE(set(s, "audio.sfx_volume", "0"));
+    EXPECT_FALSE(set(s, "audio.music_volume", "101"));
+    EXPECT_FALSE(set(s, "audio.sfx_volume", "-1"));
+    LoadReport report;
+    const Settings loaded = settings_from_toml(settings_to_toml(s), report);
+    EXPECT_EQ(loaded, s);
+    EXPECT_EQ(loaded.audio.music_volume, 40);
+    EXPECT_EQ(loaded.audio.sfx_volume, 0);
+}
+
+TEST(AudioMix, SequencesFromAccessesTwoAndUpAreMusic) {
+    EXPECT_TRUE(is_music_sequence(0x0002));
+    EXPECT_TRUE(is_music_sequence(0x0003));
+    EXPECT_TRUE(is_music_sequence(0x0402));  // another score of the same file
+}
+
+TEST(AudioMix, EffectBanksAndDirectKeyOnsAreEffects) {
+    EXPECT_FALSE(is_music_sequence(0x0000));
+    EXPECT_FALSE(is_music_sequence(0x0e01));
+    EXPECT_FALSE(is_music_sequence(0x0b00));
+    EXPECT_FALSE(is_music_sequence(kUtilityKeyOnSequence));
+    EXPECT_FALSE(is_music_sequence(0x00FF));  // a voice no sequence has used
+}
+
+TEST(TextSpeed, ChoiceMapsToSpeed) {
+    EXPECT_EQ(text_speed(0), TextSpeed::Normal);
+    EXPECT_EQ(text_speed(1), TextSpeed::Fast);
+    EXPECT_EQ(text_speed(2), TextSpeed::Instant);
+    EXPECT_EQ(text_speed(7), TextSpeed::Normal);
+}
+
+TEST(TextSpeed, NormalLeavesTheWindowAlone) {
+    EXPECT_EQ(text_position_before_tick(TextSpeed::Normal, 5, 55), 5u);
+}
+
+TEST(TextSpeed, FastAdvancesAndStopsShortOfTheBoxEnd) {
+    EXPECT_EQ(text_position_before_tick(TextSpeed::Fast, 5, 55), 5u + kFastTextChars - 1);
+    EXPECT_EQ(text_position_before_tick(TextSpeed::Fast, 51, 55), 53u);
+    EXPECT_EQ(text_position_before_tick(TextSpeed::Fast, 54, 55), 54u);
+    EXPECT_EQ(text_position_before_tick(TextSpeed::Fast, 0, 0), 0u);
+    EXPECT_EQ(text_position_before_tick(TextSpeed::Fast, 60, 55), 60u);
+}
+
+TEST(TextSpeed, InstantPrintsTheWholeBox) {
+    EXPECT_EQ(text_position_before_tick(TextSpeed::Instant, 5, 55), 55u);
+    EXPECT_EQ(text_position_before_tick(TextSpeed::Instant, 60, 55), 60u);
 }
 
 TEST(GameSpeed, MultiplierFollowsTheChoice) {

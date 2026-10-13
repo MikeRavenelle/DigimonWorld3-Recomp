@@ -1,6 +1,7 @@
 #include "gameplay.h"
 
 #include "dw3/recomp.h"
+#include "gameplay_scaling.h"
 
 namespace dw3app::ingame {
 namespace {
@@ -19,6 +20,24 @@ constexpr uint32_t kRecords = 0x800A31F8, kActive = 0x800A31F0;
 constexpr uint32_t kRecordSize = 32, kSideStride = 96, kHp = 8;
 constexpr uint32_t kPartySide = 0, kEnemySide = 1;
 constexpr uint16_t kLift = 0x4000;
+
+// STFGTREP (the battle results screen, game mode 0x14): gives one party member experience and runs the level-ups it
+// causes. a0 is the member's index, a1 the amount; the member's total (at +24 of its record) is capped at 999999.
+// The overlay's code overlaps other mode overlays at this address, so the override only acts in the results mode and
+// when the function's first instructions are the ones of this overlay.
+constexpr uint32_t kGrantExperience = 0x80085870;
+constexpr uint32_t kGrantExperienceSignature = 0x8c42ac2c, kGrantExperienceSignatureAt = 0x80085888;
+constexpr uint32_t kGameMode = 0x800554D0, kResultsMode = 0x14;
+
+// Message windows (field dialogue, menus, battle text), MAIN, once per frame; a0 is the window. State +12 is 1 while the
+// text prints. It prints with a delay: the halfword at +170 is the frames between characters and +168 counts them; each
+// time it is passed the halfword at +164 (the position printed so far, from the start at +166) goes up by one, and the
+// byte at +193 enables the typewriter while the byte at +195 is set once the box is full. kMeasureBox is the function
+// that, for a window in state 1, stores the position of the end of the box in +164 (what pressing a button does).
+constexpr uint32_t kTextWindowTick = 0x8001A890, kMeasureBox = 0x80019C2C;
+constexpr uint32_t kWindowState = 12, kWindowPrinted = 164, kWindowTimer = 168, kWindowDelay = 170;
+constexpr uint32_t kWindowTypewriter = 193, kWindowBoxFull = 195;
+constexpr uint32_t kWindowPrinting = 1;
 
 enum Encounters { kNormal, kHalf, kOff, kDouble };
 
@@ -46,6 +65,34 @@ struct GameplayHook {
         const bool defeated = target_side == kEnemySide && static_cast<int16_t>(after) <= 0;
         if (!defeated) dw3_write16(ctx, record + kHp, before);
     }
+    static void grant_experience(RecompContext* ctx) {
+        GameplayHooks& self = *instance;
+        const bool in_results = dw3_read32(ctx, kGameMode) == kResultsMode &&
+                                dw3_read32(ctx, kGrantExperienceSignatureAt) == kGrantExperienceSignature;
+        if (in_results) ctx->r[5] = scaled_experience(ctx->r[5], xp_multiplier(self.controller_.active().gameplay.xp_multiplier));
+        self.machine_.lookup_original(kGrantExperience)(ctx);
+    }
+    static void text_window_tick(RecompContext* ctx) {
+        GameplayHooks& self = *instance;
+        const TextSpeed speed = text_speed(self.controller_.active().gameplay.text_speed);
+        const uint32_t window = ctx->r[4];
+        const bool typing = dw3_read32(ctx, window + kWindowState) == kWindowPrinting && dw3_read8(ctx, window + kWindowTypewriter) != 0 &&
+                            static_cast<int16_t>(dw3_read16(ctx, window + kWindowDelay)) > 0 && dw3_read8(ctx, window + kWindowBoxFull) == 0;
+        if (speed != TextSpeed::Normal && typing) {
+            const uint32_t sp = ctx->r[29], ra = ctx->r[31];
+            const uint16_t shown = dw3_read16(ctx, window + kWindowPrinted);
+            dw3_call(ctx, kMeasureBox);
+            const uint16_t page_end = dw3_read16(ctx, window + kWindowPrinted);
+            ctx->r[4] = window;
+            ctx->r[29] = sp;
+            ctx->r[31] = ra;
+            dw3_write16(ctx, window + kWindowPrinted, static_cast<uint16_t>(text_position_before_tick(speed, shown, page_end)));
+            // The window counts a character when the timer passes the delay; leave it just short for instant (its box is
+            // already printed) and make it pass for fast.
+            dw3_write16(ctx, window + kWindowTimer, speed == TextSpeed::Fast ? dw3_read16(ctx, window + kWindowDelay) : 0);
+        }
+        self.machine_.lookup_original(kTextWindowTick)(ctx);
+    }
     static void encounter_tick(RecompContext* ctx) {
         GameplayHooks& self = *instance;
         const int mode = self.controller_.active().gameplay.encounters;
@@ -67,11 +114,15 @@ GameplayHooks::GameplayHooks(dw3::Machine& machine, SettingsController& controll
     GameplayHook::instance = this;
     machine_.override_function(kEncounterTick, &GameplayHook::encounter_tick);
     machine_.override_function(kAttackTask, &GameplayHook::attack_task);
+    machine_.override_function(kGrantExperience, &GameplayHook::grant_experience);
+    machine_.override_function(kTextWindowTick, &GameplayHook::text_window_tick);
 }
 
 GameplayHooks::~GameplayHooks() {
     machine_.override_function(kEncounterTick, nullptr);
     machine_.override_function(kAttackTask, nullptr);
+    machine_.override_function(kGrantExperience, nullptr);
+    machine_.override_function(kTextWindowTick, nullptr);
     GameplayHook::instance = nullptr;
 }
 

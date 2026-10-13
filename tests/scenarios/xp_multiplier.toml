@@ -1,0 +1,212 @@
+name = "xp_multiplier"
+description = "The field_battle encounter won with the XP multiplier at 2x: the lead Digimon gains twice the experience it gains at 1x (6 points)."
+start_state = "new_game.state"   # written by new_game_state.toml
+start_frame = 1473
+frames = 2964
+memcard = "blank"
+settings = ["gameplay.xp_multiplier=2x"]
+
+# The lead Digimon's record starts at 0x80048C50: experience (word) at +0x18, level (half) at +0x1C. It holds 4 before the
+# fight; the encounter awards 6, so 1x leaves 10 (field_battle.toml checks that) and 2x leaves 16.
+#
+# The start state is New Game up to Asuka City Central Sector (new_game_state.toml plays the shared prefix
+# common/new_game.toml, which documents the RAM words used below). From there the script is driven by RAM:
+#
+#   map id    0x800554D4 (word): 0x1C3 Asuka City Central Sector, 0x1C4 Asuka Bridge (gate chamber), 0x1D2
+#                                Central Park (field), 0x1FA battle arena
+#   game mode 0x800554D0 (word): 2 field, 5/0xE scene transition, 6 battle, 0x14 battle results
+#   enemy HP  0x800A3260 (half): current HP of the first enemy (max HP at 0x800A325E); 0 once it is defeated
+#
+# Walking onto the red exit arrow of a map edge needs CROSS to take the exit.
+
+# Central Sector: along the street (same legs as save_load_roundtrip.toml) to the exit arrow at the city gate.
+[[walk]]
+at = 1474
+label = "to the gate 1"
+x = { via = 0x8004ADC0, addr = 0x58, size = 4 }
+z = { via = 0x8004ADC0, addr = 0x5C, size = 4 }
+target = [819, 521]
+tolerance = 10
+axes = "x"
+timeout = 900
+guard = [{ addr = 0x800554D4, size = 4, value = 0x1C3 }]
+
+[[walk]]
+at = 1475
+label = "to the gate 2"
+x = { via = 0x8004ADC0, addr = 0x58, size = 4 }
+z = { via = 0x8004ADC0, addr = 0x5C, size = 4 }
+target = [801, 482]
+tolerance = 10
+axes = "z"
+timeout = 900
+guard = [{ addr = 0x800554D4, size = 4, value = 0x1C3 }]
+
+[[walk]]
+at = 1476
+label = "to the gate 3"
+x = { via = 0x8004ADC0, addr = 0x58, size = 4 }
+z = { via = 0x8004ADC0, addr = 0x5C, size = 4 }
+target = [577, 610]
+tolerance = 10
+timeout = 900
+guard = [{ addr = 0x800554D4, size = 4, value = 0x1C3 }]
+
+[[walk]]
+at = 1477
+label = "to the gate 4"
+x = { via = 0x8004ADC0, addr = 0x58, size = 4 }
+z = { via = 0x8004ADC0, addr = 0x5C, size = 4 }
+target = [173, 595]
+tolerance = 10
+axes = "x"
+timeout = 900
+guard = [{ addr = 0x800554D4, size = 4, value = 0x1C3 }]
+
+[[walk]]
+at = 1478
+label = "to the gate 5"
+x = { via = 0x8004ADC0, addr = 0x58, size = 4 }
+z = { via = 0x8004ADC0, addr = 0x5C, size = 4 }
+target = [253, 531]
+tolerance = 10
+axes = "z"
+timeout = 900
+guard = [{ addr = 0x800554D4, size = 4, value = 0x1C3 }]
+
+[[walk]]
+at = 1479
+label = "to the gate 6"
+x = { via = 0x8004ADC0, addr = 0x58, size = 4 }
+z = { via = 0x8004ADC0, addr = 0x5C, size = 4 }
+target = [257, 749]
+tolerance = 10
+axes = "z"
+timeout = 900
+guard = [{ addr = 0x800554D4, size = 4, value = 0x1C3 }]
+
+[[walk]]
+at = 1480
+label = "to the gate 7"
+x = { via = 0x8004ADC0, addr = 0x58, size = 4 }
+z = { via = 0x8004ADC0, addr = 0x5C, size = 4 }
+target = [67, 799]
+tolerance = 10
+axes = "x"
+timeout = 900
+guard = [{ addr = 0x800554D4, size = 4, value = 0x1C3 }]
+
+[[check]]
+at = 1482
+label = "Central Sector gate bridge"
+display_enabled = true
+screenshot = true
+
+# CROSS on the exit arrow leads to the Asuka Bridge (0x1C4), where a second arrow at the far end leads on.
+[[wait]]
+at = 1486
+label = "Asuka Bridge"
+ram = [{ addr = 0x800554D4, size = 4, value = 0x1C4 }, { addr = 0x800554D0, size = 4, value = 2 }]
+timeout = 1500
+press = "CROSS"
+every = 10
+press_hold = 3
+
+[[walk]]
+at = 1488
+label = "to the Central Park arrow"
+x = { via = 0x8004ADC0, addr = 0x58, size = 4 }
+z = { via = 0x8004ADC0, addr = 0x5C, size = 4 }
+target = [226, 494]
+tolerance = 5
+timeout = 900
+guard = [{ addr = 0x800554D4, size = 4, value = 0x1C4 }]
+
+[[check]]
+at = 1490
+label = "Asuka Bridge"
+display_enabled = true
+screenshot = true
+
+[[wait]]
+at = 1494
+label = "Central Park"
+ram = [{ addr = 0x800554D4, size = 4, value = 0x1D2 }, { addr = 0x800554D0, size = 4, value = 2 }]
+timeout = 1500
+press = "CROSS"
+every = 10
+press_hold = 3
+
+[[check]]
+at = 1744
+label = "Central Park"
+display_enabled = true
+screenshot = true
+
+# In the field, holding LEFT starts a random encounter after about a thousand frames; where it happens depends on
+# the frames walked, so the walk is a wait on the battle mode. In battle, CROSS picks Fight, the target and the
+# attack; tapping it until the results screens appear wins against the first enemies. A further wait tapping
+# CROSS leads from the results back to the field.
+# Which enemy appears depends on the exact frame the walk starts. The wait starts 60 frames after the Central
+# Park check (10 frames later than the natural start), which meets a Kunemon that CROSS taps defeat; other
+# offsets can meet a Tapirmon that flees, leaving no results screen. Retune this offset if the prefix timing
+# changes.
+[[wait]]
+at = 1804
+label = "random encounter"
+ram = [{ addr = 0x800554D0, size = 4, value = 6 }]
+timeout = 4000
+hold = ["LEFT"]
+
+[[check]]
+at = 1809
+label = "encounter start"
+display_enabled = true
+ram = [{ addr = 0x800554D4, size = 4, value = 0x1FA }, { addr = 0x80048C68, size = 4, value = 4 }]
+screenshot = true
+
+[[check]]
+at = 2104
+label = "battle menu"
+display_enabled = true
+ram = [{ addr = 0x800554D0, size = 4, value = 6 }, { addr = 0x800A3260, size = 2, value = 0, cmp = "gt" }]
+screenshot = true
+
+[[wait]]
+at = 2204
+label = "battle won"
+ram = [{ addr = 0x800554D0, size = 4, value = 20 }]
+timeout = 4000
+press = "CROSS"
+every = 45
+press_hold = 3
+
+[[check]]
+at = 2304
+label = "victory"
+display_enabled = true
+ram = [{ addr = 0x800A3260, size = 2, value = 0 }]
+screenshot = true
+
+[[wait]]
+at = 2404
+label = "back in the field"
+ram = [{ addr = 0x800554D0, size = 4, value = 2 }, { addr = 0x800554D4, size = 4, value = 0x1D2 }]
+timeout = 1500
+press = "CROSS"
+every = 45
+press_hold = 3
+
+[[check]]
+at = 2654
+label = "field after the battle"
+display_enabled = true
+ram = [{ addr = 0x800554D0, size = 4, value = 2 }, { addr = 0x800554D4, size = 4, value = 0x1D2 }, { addr = 0x80048C68, size = 4, value = 16 }]
+screenshot = true
+
+[[check]]
+at = 2904
+label = "field stays stable"
+display_enabled = true
+ram = [{ addr = 0x800554D0, size = 4, value = 2 }, { addr = 0x800554D4, size = 4, value = 0x1D2 }]
+screenshot = true

@@ -54,6 +54,8 @@ struct Settings {
     struct Audio {
         bool mute = false;
         int volume = 100;            // percent
+        int music_volume = 100;      // percent of the music's level (the master volume applies on top)
+        int sfx_volume = 100;        // percent of the sound effects' level
         std::string device;          // playback device name; empty selects the system default
         bool operator==(const Audio&) const = default;
     } audio;
@@ -78,6 +80,8 @@ struct Settings {
         int encounters = 0;          // choice: normal, half, off, double
         int game_speed = 0;          // choice: 1x, 2x, 3x, 4x
         bool god_mode = false;       // the party takes no damage and defeats enemies in one hit
+        int xp_multiplier = 0;       // choice: 1x, 2x, 3x, 5x, 10x (experience from won battles)
+        int text_speed = 0;          // choice: normal, fast, instant (how quickly message windows print)
         bool operator==(const Gameplay&) const = default;
     } gameplay;
 

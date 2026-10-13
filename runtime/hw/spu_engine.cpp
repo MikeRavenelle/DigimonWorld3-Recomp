@@ -47,6 +47,7 @@ void Spu::key_on(uint32_t mask) {
         v.adsr_counter = 0;
         endx_ &= ~(1u << i);
         key_on_ |= 1u << i;
+        groups_[static_cast<std::size_t>(i)] = classifier_ ? classifier_->classify(i) : VoiceGroup::Music;
         decode_block(v);
     }
 }
@@ -134,6 +135,12 @@ void Spu::generate_sample() {
     };
     const uint32_t pmon = mask32(kPitchMod), non = mask32(kNoiseOn), eon = mask32(kReverbOn);
 
+    if (groups_stale_) {
+        groups_stale_ = false;
+        for (int i = 0; i < kVoices; ++i)
+            groups_[static_cast<std::size_t>(i)] = classifier_ ? classifier_->classify(i) : VoiceGroup::Music;
+    }
+
     int32_t sum_l = 0, sum_r = 0, rev_l = 0, rev_r = 0;
     for (int i = 0; i < kVoices; ++i) {
         Voice& v = voices_[static_cast<std::size_t>(i)];
@@ -146,6 +153,11 @@ void Spu::generate_sample() {
         v.out = static_cast<int16_t>(s);
         if (s) {
             int32_t l = (s * v.vol[0].level) >> 15, r = (s * v.vol[1].level) >> 15;
+            const int32_t gain = group_gain_[static_cast<std::size_t>(groups_[static_cast<std::size_t>(i)])];
+            if (gain != 256) {
+                l = (l * gain) >> 8;
+                r = (r * gain) >> 8;
+            }
             sum_l += l;
             sum_r += r;
             if (eon >> i & 1) {
@@ -192,6 +204,11 @@ void Spu::generate_sample() {
     if (cnt & 1) {
         cdl = (cd_l * static_cast<int16_t>(regs_[kCdVolL >> 1])) >> 15;
         cdr = (cd_r * static_cast<int16_t>(regs_[kCdVolR >> 1])) >> 15;
+        const int32_t cd_gain = group_gain_[static_cast<std::size_t>(VoiceGroup::Music)];
+        if (cd_gain != 256) {
+            cdl = (cdl * cd_gain) >> 8;
+            cdr = (cdr * cd_gain) >> 8;
+        }
         if (cnt & 4) {
             rev_l += cdl;
             rev_r += cdr;
@@ -275,6 +292,7 @@ void Spu::io(StateIo& s) {
     bool batching = !s.loading() && sched_ && sched_->is_pending(batch_event_);
     s.io(batching);
     if (s.loading()) {
+        groups_stale_ = true;
         audio_.clear();
         if (batching && !sched_) throw StateError("SPU state has timed generation but start() was not called");
         if (!batching) batch_event_ = kNoEvent;

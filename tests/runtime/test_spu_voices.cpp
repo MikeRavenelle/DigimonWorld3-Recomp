@@ -512,6 +512,87 @@ TEST(SpuMix, VoicesSumAndSaturate) {
     EXPECT_GE(out[0], 32760);  // 4 x 28650 clamps at full scale before the main volume
 }
 
+namespace {
+
+// Voices below `first_effect` play music, the others effects.
+struct SplitAt final : VoiceClassifier {
+    int first_effect;
+    explicit SplitAt(int first) : first_effect(first) {}
+    VoiceGroup classify(int voice) override { return voice < first_effect ? VoiceGroup::Music : VoiceGroup::Effects; }
+};
+
+// Left output level of one constant voice once it has settled.
+int16_t settled_level(Rig& r, int voice) {
+    constant_voice(r, voice);
+    r.key_on(voice);
+    r.tick(100);
+    r.drain();
+    r.tick(1);
+    return r.drain()[0];
+}
+
+}  // namespace
+
+TEST(SpuGroups, EachGroupIsScaledSeparately) {
+    int16_t full = 0;
+    {
+        Rig r;
+        r.enable_output();
+        full = settled_level(r, 0);
+    }
+    ASSERT_GT(full, 0);
+    SplitAt split(1);
+    {
+        Rig r;  // voice 0 is music, at half level while effects are off
+        r.enable_output();
+        r.spu.set_voice_classifier(&split);
+        r.spu.set_group_volume(VoiceGroup::Music, 50);
+        r.spu.set_group_volume(VoiceGroup::Effects, 0);
+        EXPECT_NEAR(settled_level(r, 0), full / 2, 2);
+    }
+    {
+        Rig r;  // voice 1 is an effect: silent at 0, unchanged at 100
+        r.enable_output();
+        r.spu.set_voice_classifier(&split);
+        r.spu.set_group_volume(VoiceGroup::Music, 100);
+        r.spu.set_group_volume(VoiceGroup::Effects, 0);
+        EXPECT_EQ(settled_level(r, 1), 0);
+    }
+    {
+        Rig r;
+        r.enable_output();
+        r.spu.set_voice_classifier(&split);
+        r.spu.set_group_volume(VoiceGroup::Music, 0);
+        EXPECT_EQ(settled_level(r, 1), full);
+    }
+}
+
+TEST(SpuGroups, WithoutClassifierEveryVoiceIsMusic) {
+    int16_t full = 0;
+    {
+        Rig r;
+        r.enable_output();
+        full = settled_level(r, 3);
+    }
+    Rig r;
+    r.enable_output();
+    r.spu.set_group_volume(VoiceGroup::Effects, 0);
+    EXPECT_EQ(settled_level(r, 3), full);
+}
+
+TEST(SpuGroups, VolumeIsClampedToAPercentage) {
+    int16_t full = 0;
+    {
+        Rig r;
+        r.enable_output();
+        full = settled_level(r, 0);
+    }
+    Rig r;
+    r.enable_output();
+    r.spu.set_group_volume(VoiceGroup::Music, 400);
+    EXPECT_EQ(settled_level(r, 0), full);
+}
+
 TEST(SpuMix, FrameCountMatchesTicks) {
     Rig r;
     r.tick(123);

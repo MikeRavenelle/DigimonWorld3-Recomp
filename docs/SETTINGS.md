@@ -51,6 +51,8 @@ everything else applies immediately.
 | `graphics.brightness` | -50 to 50 (percent) | `--brightness` |
 | `audio.mute` | bool | `--mute` |
 | `audio.volume` | 0 to 100 | |
+| `audio.music_volume` | 0 to 100 (percent; steps of 10 in the in-game screen) | |
+| `audio.sfx_volume` | 0 to 100 (percent; steps of 10 in the in-game screen) | |
 | `audio.device` | device name, empty for the default | |
 | `controls.pad` | `auto`, `1` to `4` | |
 | `controls.left_stick` | bool | |
@@ -64,6 +66,8 @@ everything else applies immediately.
 | `gameplay.encounters` | `normal`, `half`, `off`, `double` | `--encounters` |
 | `gameplay.game_speed` | `1x`, `2x`, `3x`, `4x` | `--game-speed` |
 | `gameplay.god_mode` | bool | `--god-mode` |
+| `gameplay.xp_multiplier` | `1x`, `2x`, `3x`, `5x`, `10x` | `--xp-multiplier` |
+| `gameplay.text_speed` | `normal`, `fast`, `instant` | `--text-speed` |
 
 ## Gameplay options
 
@@ -77,6 +81,19 @@ All of these default to the original game and apply immediately; they also appea
   The fast-forward keys below still override it while active (and, unlike game speed, silence the sound).
 - **God mode** makes the party take no damage and defeat enemies with the first hit that lands, in every battle. Items
   and status effects are untouched. It is off by default and not meant for a first playthrough.
+- **XP multiplier** (1x, 2x, 3x, 5x, 10x) scales the experience each Digimon receives when a won battle's results are
+  applied; the total stays capped at the game's 999,999. The results screen still lists the unscaled award.
+- **Text speed** sets how quickly message boxes print (dialogue, menu descriptions, battle text). `fast` prints three
+  characters per frame instead of one every few frames; `instant` prints each box at once and still waits for the
+  button to close it. Pauses written into the text and scripted timing are unchanged.
+
+## Music and effects volume
+
+`audio.music_volume` and `audio.sfx_volume` scale the two kinds of sound the game plays, below the master `audio.volume`.
+The game's sound driver records, for each voice it keys on, the sequence that started it. Music plays from sequence
+slots 2 and 3, which the field, the battle and the card game load alternately; the effect banks are slots 0 and 1, and
+effects started directly use a fixed id. The SPU mixes each group at its own level before reverb. Movie and other CD
+audio follows the music level. The victory fanfare comes from an effect bank, so it follows the effects level.
 
 ## Visual presets
 

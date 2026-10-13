@@ -38,6 +38,7 @@
 #include "dw3/texrep/stage_dump.h"
 #include "dw3/upload_recorder.h"
 #include "field_menu.h"
+#include "audio_groups.h"
 #include "gameplay.h"
 #include "scenario.h"
 
@@ -458,6 +459,7 @@ int main(int argc, char** argv) {
         dw3app::SettingsController settings_controller(scenario_settings, scenario_settings, nullptr, {});
         dw3app::ingame::FieldMenuSettings settings_screen(host->machine(), settings_controller);
         dw3app::ingame::GameplayHooks gameplay(host->machine(), settings_controller);
+        dw3app::ingame::AudioGroups audio_groups(host->machine(), settings_controller);
         int64_t base = last_frame;  // real frames before this boot; shifted when a state is loaded
         if (boot == 0 && !scenario.start_state.empty()) {
             std::vector<uint8_t> file;

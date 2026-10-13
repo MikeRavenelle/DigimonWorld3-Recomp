@@ -1,0 +1,9 @@
+name = "text_speed_cutscenes"
+description = "Instant text speed through the opening scenes of New Game: scripted dialogue and movies still advance to the first free movement in Asuka City."
+include = ["common/new_game.toml"]
+frames = 1480
+memcard = "blank"
+settings = ["gameplay.text_speed=instant"]
+
+# Same prefix as new_game_state.toml. Every step of it ends on a RAM condition, so the run only passes when each cutscene's
+# text boxes still complete and let the script move on.

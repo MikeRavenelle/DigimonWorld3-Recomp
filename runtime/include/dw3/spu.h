@@ -9,6 +9,7 @@
 // engine up to the current cycle so they land on the right sample. Without start() the SPU is only a register
 // file (unit tests); call run_to() to generate by hand.
 
+#include <algorithm>
 #include <array>
 #include <cstdint>
 #include <span>
@@ -27,6 +28,16 @@ namespace dw3 {
 struct CdAudioSource {
     virtual ~CdAudioSource() = default;
     virtual bool next_frame(int16_t& l, int16_t& r) = 0;  // false: nothing queued (silence)
+};
+
+// Which part of the game a voice belongs to, so that the host can mix them at different levels.
+enum class VoiceGroup : uint8_t { Music, Effects };
+
+// Decides the group of a voice at the moment it is keyed on. The SPU itself cannot tell: that depends on how the game
+// drives it, which the host reads from the game's memory.
+struct VoiceClassifier {
+    virtual ~VoiceClassifier() = default;
+    virtual VoiceGroup classify(int voice) = 0;
 };
 
 class Spu : public DmaDevice {
@@ -55,6 +66,16 @@ public:
     // DmaDevice (channel 4): RAM -> SPU RAM writes and SPU RAM -> RAM reads at the transfer address.
     void dma_write(std::span<const uint32_t> words) override;
     void dma_read(std::span<uint32_t> out) override;
+
+    // Host mixing by voice group (not guest state, so not saved): percent 0..100 of each group's level, applied before
+    // reverb. CD/XA audio follows the music group. Without a classifier every voice is music.
+    void set_voice_classifier(VoiceClassifier* classifier) {
+        classifier_ = classifier;
+        groups_stale_ = true;
+    }
+    void set_group_volume(VoiceGroup group, int percent) {
+        group_gain_[static_cast<std::size_t>(group)] = std::clamp(percent, 0, 100) * 256 / 100;
+    }
 
     // Starts timed sample generation driven by the scheduler.
     void start(Scheduler& sched);
@@ -145,6 +166,10 @@ private:
     uint32_t key_on_ = 0, endx_ = 0;
 
     std::array<Voice, kVoices> voices_;
+    VoiceClassifier* classifier_ = nullptr;
+    std::array<VoiceGroup, kVoices> groups_{};
+    bool groups_stale_ = false;      // classify every voice again before the next sample (after a state load)
+    std::array<int32_t, 2> group_gain_{256, 256};  // 256 is unity
     std::array<Sweep, 2> main_vol_;
     spu_dsp::Noise noise_;
     spu_dsp::Reverb reverb_;
