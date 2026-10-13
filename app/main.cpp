@@ -31,6 +31,7 @@
 //   --precise-geometry GPU renderer: sub-pixel 3D vertices and perspective-correct textures from the GTE's projections
 //                      (best with --internal-res > 1; off by default)
 //   --texture-filter F GPU renderer: nearest (default), bilinear (3D triangles) or xbr (sprites, needs --internal-res > 1)
+//   --seamless-bg      GPU renderer: draw the parts of a field map the game has not loaded yet (no popping blocks at the edges)
 //   --hd-backgrounds   GPU renderer: show the replacement backgrounds of the texture pack (--texture-pack NAME, a folder
 //                      under <user data dir>/texture-packs)
 //   --dump-textures DIR  GPU renderer: record the background images the game draws and write them to DIR on exit
@@ -214,6 +215,7 @@ Options parse(int argc, char** argv) {
         else if (a == "--texture-filter" && i + 1 < argc) set("graphics.texture_filter", argv[++i]);
         else if (a == "--no-vsync") set("graphics.vsync", "off");
         else if (a == "--hd-backgrounds") set("graphics.hd_backgrounds", "true");
+        else if (a == "--seamless-bg") set("graphics.seamless_bg", "true");
         else if (a == "--texture-pack" && i + 1 < argc) set("graphics.texture_pack", argv[++i]);
         else if (a == "--dump-textures" && i + 1 < argc) o.dump_textures = argv[++i];
         else if (a == "--fast-forward-speed" && i + 1 < argc) set("system.fast_forward_speed", argv[++i]);
@@ -365,6 +367,7 @@ int main(int argc, char** argv) {
     dw3app::FastForwardInput fast_forward;
     // What the presenter should do for a configuration; vsync is off whenever the run is not paced to the display.
     dw3app::TexturePackCache texture_packs;
+    dw3app::StageLibraryCache stage_libraries;
     auto present_options = [&](const dw3app::Settings& st) {
         dw3app::PresentOptions po;
         const auto& g = st.graphics;
@@ -378,6 +381,7 @@ int main(int argc, char** argv) {
         po.precise_geometry = g.precise_geometry;
         po.widescreen = static_cast<dw3::WideAspect>(g.widescreen);
         po.texture_pack = texture_packs.get(g);
+        po.stage_library = stage_libraries.get(g, *disc);
         const char* modes[] = {"fit", "integer", "stretch"};
         dw3::parse_scale_mode(modes[g.scale_mode], po.scale);
         return po;
@@ -405,8 +409,8 @@ int main(int argc, char** argv) {
     int last_fullscreen_mode = active.graphics.display_mode != 0 ? active.graphics.display_mode : 1;
     presenter->attach(machine.gpu());
     const bool software_presenter = std::string(presenter->name()).find("software") != std::string::npos;
-    if (software_presenter && (active.graphics.hd_backgrounds || !opt.dump_textures.empty()))
-        SDL_Log("texture replacement and dumping need the GPU renderer; ignored");
+    if (software_presenter && (active.graphics.hd_backgrounds || active.graphics.seamless_bg || !opt.dump_textures.empty()))
+        SDL_Log("texture replacement, seamless backgrounds and dumping need the GPU renderer; ignored");
     if (!opt.dump_textures.empty() && presenter->set_texture_dump(opt.dump_textures))
         SDL_Log("recording background images for %s", opt.dump_textures.c_str());
     bool precise_installed = false;

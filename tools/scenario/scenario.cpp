@@ -323,6 +323,10 @@ Scenario parse(const std::string& text, const std::string& src) {
             c.screenshot = t["screenshot"].value_or(false);
             if (auto v = t["margin_colors_min"].value<int64_t>()) c.margin_colors_min = static_cast<int>(*v);
             if (auto v = t["margin_colors_max"].value<int64_t>()) c.margin_colors_max = static_cast<int>(*v);
+            if (auto v = t["backdrop_pieces_min"].value<int64_t>()) c.backdrop_pieces_min = static_cast<uint64_t>(*v);
+            if (auto v = t["squares_hidden_min"].value<int64_t>()) c.squares_hidden_min = static_cast<uint64_t>(*v);
+            if (auto v = t["squares_drawn_min"].value<int64_t>()) c.squares_drawn_min = static_cast<uint64_t>(*v);
+            if (auto v = t["squares_drawn_max"].value<int64_t>()) c.squares_drawn_max = static_cast<uint64_t>(*v);
             if (auto v = t["audio_min_rms"].value<double>()) c.audio_min_rms = *v;
             if (auto v = t["audio_max_rms"].value<double>()) c.audio_max_rms = *v;
             c.audio_frames = static_cast<int>(t["audio_frames"].value_or(int64_t{60}));

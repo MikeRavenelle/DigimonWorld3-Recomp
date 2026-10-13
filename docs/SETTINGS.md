@@ -33,6 +33,7 @@ everything else applies immediately.
 | `graphics.texture_filter` | `nearest`, `bilinear`, `xbr` | `--texture-filter` |
 | `graphics.precise_geometry` | bool | `--precise-geometry` |
 | `graphics.hd_backgrounds` | bool | `--hd-backgrounds` |
+| `graphics.seamless_bg` | bool | `--seamless-bg` |
 | `graphics.texture_pack` | folder name under `texture-packs`; not listed in the in-game screen | `--texture-pack` |
 | `graphics.output_filter` | `nearest`, `linear`, `fsr` | `--filter` |
 | `graphics.antialiasing` | `off`, `smaa` | |
@@ -139,6 +140,14 @@ resolution equal to the pack's scale (4x for the default pack); other values wor
 The first-run setup (`dw3recomp --setup`) can do all of this for you: on "Accept" it downloads the upscaler and the model
 into `<user data dir>/tools` (checked by SHA-256, with the system `curl`), builds a pack named `disc-hd` from the disc,
 and sets `graphics.hd_backgrounds` and `graphics.texture_pack`. The steps below are the manual route.
+
+Seamless backgrounds (`graphics.seamless_bg`, "Seamless BG" in the settings screen, GPU renderer only) remove the blocks
+that pop in at the edges of a field map while it scrolls. The game keeps only a dozen map cells in memory and covers the
+rest with dark squares; with the option on, the missing pieces of the map are drawn from the disc's own map files and the
+squares are hidden. It works with and without an HD pack (the pack's images are used where it has them), at any internal
+resolution, and is not part of any preset. The map files are indexed in the background when the option is first turned
+on, so it takes effect a few seconds later. Limits: while a map is still loading, before the game has drawn any of its
+cells, the game's squares remain; a foreground piece is only drawn in frames where the game draws some foreground piece.
 
 Making a pack:
 

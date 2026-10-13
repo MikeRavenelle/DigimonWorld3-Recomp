@@ -17,6 +17,8 @@ add_library(dw3texrep STATIC
     src/texrep/pack_job.cpp
     src/texrep/stage_pack.cpp
     src/texrep/stage_dump.cpp
+    src/texrep/stage_library.cpp
+    src/texrep/field_backdrop.cpp
     src/texrep/window.cpp
     src/texrep/stb_impl.cpp)
 target_include_directories(dw3texrep PUBLIC include)
