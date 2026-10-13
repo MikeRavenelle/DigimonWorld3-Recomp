@@ -293,7 +293,23 @@ int Machine::resident_segment(uint32_t addr) {
     return best;
 }
 
+void Machine::override_function(uint32_t addr, RecompFunc fn) {
+    if (fn) overrides_[0x80000000u | phys(addr)] = fn;
+    else overrides_.erase(0x80000000u | phys(addr));
+}
+
 RecompFunc Machine::lookup(uint32_t addr) {
+    if (!overrides_.empty()) {
+        auto it = overrides_.find(0x80000000u | phys(addr));
+        if (it != overrides_.end()) {
+            ++lookups_;
+            return it->second;
+        }
+    }
+    return lookup_original(addr);
+}
+
+RecompFunc Machine::lookup_original(uint32_t addr) {
     ++lookups_;
     // Functions are keyed by their KSEG0 address; normalise KUSEG/KSEG1 aliases.
     uint32_t key = 0x80000000u | phys(addr);

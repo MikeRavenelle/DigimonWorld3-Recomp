@@ -287,3 +287,45 @@ TEST(Machine, GteBridge) {
     dw3_gte_cmd(&m.ctx(), 0x0A00428);  // SQR
     EXPECT_GT(m.ctx().cycles, before);
 }
+
+namespace {
+int g_override_calls = 0, g_original_via_override = 0;
+void fn_override(RecompContext*) { ++g_override_calls; }
+void fn_override_calls_original(RecompContext* ctx) {
+    ++g_override_calls;
+    static_cast<dw3::Machine*>(ctx->machine)->lookup_original(0x80010000)(ctx);
+    ++g_original_via_override;
+}
+}  // namespace
+
+TEST(Machine, OverrideReplacesLookupAndAliases) {
+    dw3::Machine m(kSegs);
+    g_calls_main = g_override_calls = 0;
+    m.override_function(0x80010000, fn_override);
+    dw3_call(&m.ctx(), 0x80010000);
+    dw3_call(&m.ctx(), 0xA0010000);  // KSEG1 alias
+    dw3_call(&m.ctx(), 0x00010000);  // KUSEG alias
+    EXPECT_EQ(g_override_calls, 3);
+    EXPECT_EQ(g_calls_main, 0);
+}
+
+TEST(Machine, OverrideCanCallTheOriginalAndBeRemoved) {
+    dw3::Machine m(kSegs);
+    g_calls_main = g_override_calls = g_original_via_override = 0;
+    m.override_function(0x80010000, fn_override_calls_original);
+    dw3_call(&m.ctx(), 0x80010000);
+    EXPECT_EQ(g_calls_main, 1);
+    EXPECT_EQ(g_original_via_override, 1);
+    m.override_function(0x80010000, nullptr);
+    dw3_call(&m.ctx(), 0x80010000);
+    EXPECT_EQ(g_calls_main, 2);
+    EXPECT_EQ(g_override_calls, 1);
+}
+
+TEST(Machine, OverrideDoesNotAffectOtherAddresses) {
+    Throwing t;
+    dw3::Machine m(kSegs);
+    m.override_function(0x80010000, fn_override);
+    EXPECT_THROW(dw3_lookup_func(&m.ctx(), 0x80010004), std::runtime_error);
+    EXPECT_NE(m.lookup_original(0x80010000), fn_override);
+}

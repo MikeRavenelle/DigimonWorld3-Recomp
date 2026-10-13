@@ -72,6 +72,7 @@
 #include "audio_out.h"
 #include "dw3/host.h"
 #include "dw3/platform.h"
+#include "ingame/field_menu.h"
 #include "present/native_window.h"
 #include "settings/controller.h"
 #include "settings/fastforward.h"
@@ -396,6 +397,7 @@ int main(int argc, char** argv) {
         bool apply(const dw3app::Settings& now, std::span<const dw3app::SettingInfo* const> changed) override { return fn(now, changed); }
     } sink;
     dw3app::SettingsController settings(stored, active, &sink, config_file);
+    dw3app::ingame::FieldMenuSettings settings_screen(machine, settings);
     sink.fn = [&](const dw3app::Settings& now, std::span<const dw3app::SettingInfo* const> changed) {
         bool ok = true, graphics = false, window_size = false;
         for (const dw3app::SettingInfo* info : changed) {
@@ -578,6 +580,7 @@ int main(int argc, char** argv) {
     bool pacer_started = false, fast_forwarding = false;
     auto on_frame = [&](uint64_t frame) {
         host_pad.frame = static_cast<int64_t>(frame);
+        settings_screen.apply_pending();
         for (const auto& act : opt.window_actions) {
             if (act.frame != static_cast<int64_t>(frame)) continue;
             if (act.w > 0) {

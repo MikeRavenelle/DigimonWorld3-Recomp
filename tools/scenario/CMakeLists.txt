@@ -7,7 +7,7 @@ dw3_target_defaults(dw3scenario_core)
 # Headless runner: boots the recompiled game with the scenario's scripted pad and evaluates its checks.
 if(DW3_HAVE_GENERATED)
     add_executable(dw3scenario runner.cpp)
-    target_link_libraries(dw3scenario PRIVATE dw3host dw3scenario_core)
+    target_link_libraries(dw3scenario PRIVATE dw3host dw3scenario_core dw3ingame)
     target_compile_definitions(dw3scenario PRIVATE DW3_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
     dw3_target_defaults(dw3scenario)
 endif()

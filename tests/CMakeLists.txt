@@ -127,3 +127,8 @@ target_include_directories(test_osd PRIVATE ${PROJECT_SOURCE_DIR}/app)
 dw3_add_test(test_settings
     SOURCES app/test_settings.cpp
     LIBS dw3settings)
+
+# The settings list of the in-game screen and its text encoding.
+dw3_add_test(test_ingame
+    SOURCES app/test_ingame.cpp
+    LIBS dw3ingame)
