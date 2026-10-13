@@ -1,12 +1,14 @@
 #include <gtest/gtest.h>
 
 #include <algorithm>
+#include <cmath>
 #include <filesystem>
 #include <memory>
 #include <vector>
 
 #include "controller.h"
 #include "fastforward.h"
+#include "timestretch.h"
 
 using namespace dw3app;
 
@@ -373,4 +375,70 @@ TEST(Settings, PostProcessingRoundTripsThroughToml) {
     LoadReport report;
     EXPECT_EQ(settings_from_toml(settings_to_toml(s), report), s);
     EXPECT_FALSE(set(s, "graphics.sharpening", "extreme"));
+}
+
+TEST(GameplaySettings, DefaultsAreTheOriginalGame) {
+    const Settings s = defaults();
+    EXPECT_EQ(get_text(s, *find_setting("gameplay.encounters")), "normal");
+    EXPECT_EQ(get_text(s, *find_setting("gameplay.game_speed")), "1x");
+    EXPECT_EQ(get_text(s, *find_setting("gameplay.god_mode")), "false");
+}
+
+TEST(GameplaySettings, ValuesRoundTripThroughToml) {
+    Settings s = defaults();
+    EXPECT_TRUE(set(s, "gameplay.encounters", "off"));
+    EXPECT_TRUE(set(s, "gameplay.game_speed", "3x"));
+    EXPECT_TRUE(set(s, "gameplay.god_mode", "true"));
+    EXPECT_FALSE(set(s, "gameplay.game_speed", "9x"));
+    LoadReport report;
+    EXPECT_EQ(settings_from_toml(settings_to_toml(s), report), s);
+}
+
+TEST(GameSpeed, MultiplierFollowsTheChoice) {
+    EXPECT_EQ(game_speed_multiplier(0), 1.0);
+    EXPECT_EQ(game_speed_multiplier(1), 2.0);
+    EXPECT_EQ(game_speed_multiplier(3), 4.0);
+}
+
+namespace {
+
+std::vector<int16_t> sine(std::size_t frames, double hz) {
+    std::vector<int16_t> v(frames * 2);
+    for (std::size_t i = 0; i < frames; ++i)
+        v[i * 2] = v[i * 2 + 1] = static_cast<int16_t>(12000 * std::sin(2 * 3.14159265358979 * hz * static_cast<double>(i) / 44100.0));
+    return v;
+}
+
+// Rising zero crossings of the left channel per second of output.
+double crossings_per_second(const std::vector<int16_t>& v, std::size_t skip_frames) {
+    int count = 0;
+    for (std::size_t i = skip_frames + 1; i < v.size() / 2; ++i)
+        if (v[(i - 1) * 2] < 0 && v[i * 2] >= 0) ++count;
+    return count * 44100.0 / static_cast<double>(v.size() / 2 - skip_frames);
+}
+
+}  // namespace
+
+class TimeStretchSpeed : public testing::TestWithParam<double> {};
+
+TEST_P(TimeStretchSpeed, ShortensByTheSpeedAndKeepsThePitch) {
+    const double speed = GetParam();
+    TimeStretch stretch;
+    stretch.set_speed(speed);
+    const std::vector<int16_t> in = sine(44100 * 2, 440.0);
+    std::vector<int16_t> out;
+    for (std::size_t at = 0; at < in.size() / 2; at += 735) stretch.process(&in[at * 2], std::min<std::size_t>(735, in.size() / 2 - at), out);
+    const double ratio = static_cast<double>(in.size()) / static_cast<double>(out.size());
+    EXPECT_NEAR(ratio, speed, speed * 0.1);
+    EXPECT_NEAR(crossings_per_second(out, 4000), 440.0, 15.0);
+}
+
+INSTANTIATE_TEST_SUITE_P(Speeds, TimeStretchSpeed, testing::Values(2.0, 3.0, 4.0));
+
+TEST(TimeStretch, NormalSpeedPassesThroughUnchanged) {
+    TimeStretch stretch;
+    const std::vector<int16_t> in = sine(1000, 300.0);
+    std::vector<int16_t> out;
+    stretch.process(in.data(), 1000, out);
+    EXPECT_EQ(out, in);
 }

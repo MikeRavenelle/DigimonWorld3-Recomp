@@ -35,6 +35,9 @@ constexpr Labels kLabels[] = {
     {"audio.mute", "Mute", 1},
     {"audio.volume", "Volume", 10},
     {"system.fast_forward_speed", "Fast Forward", 1},
+    {"gameplay.encounters", "Encounters", 1},
+    {"gameplay.game_speed", "Game Speed", 1},
+    {"gameplay.god_mode", "God Mode", 1},
 };
 
 std::string capitalised(std::string_view name) {
@@ -48,7 +51,7 @@ std::string choice_label(std::string_view name) {
     if (name == "smaa") return "SMAA";
     if (name == "fsr") return "FSR";
     if (name == "crt") return "Full";
-    if (name == "2x" || name == "4x") return std::string(1, name[0]) + "X";
+    if (name.size() == 2 && name[1] == 'x' && std::isdigit(static_cast<unsigned char>(name[0]))) return std::string(1, name[0]) + "X";
     if (name == "unlimited") return "Max";
     return capitalised(name);
 }

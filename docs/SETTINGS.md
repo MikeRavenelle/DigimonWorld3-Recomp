@@ -20,7 +20,7 @@ never written to the file.
 
 ## Options
 
-Keys are grouped in `[graphics]`, `[audio]` and `[system]`. Settings marked "restart" take effect on the next start;
+Keys are grouped in `[graphics]`, `[audio]`, `[system]` and `[gameplay]`. Settings marked "restart" take effect on the next start;
 everything else applies immediately.
 
 | Key | Values | Flag |
@@ -47,6 +47,22 @@ everything else applies immediately.
 | `system.memcards` (restart) | bool | `--no-memcard` |
 | `system.memcard1`, `system.memcard2` (restart) | paths, empty for the defaults | `--memcard1`, `--memcard2` |
 | `system.fast_forward_speed` | `2x`, `4x`, `unlimited` | `--fast-forward-speed` |
+| `gameplay.encounters` | `normal`, `half`, `off`, `double` | `--encounters` |
+| `gameplay.game_speed` | `1x`, `2x`, `3x`, `4x` | `--game-speed` |
+| `gameplay.god_mode` | bool | `--god-mode` |
+
+## Gameplay options
+
+All of these default to the original game and apply immediately; they also appear in the in-game settings screen.
+
+- **Random encounters** changes how often walking starts a battle: `half` and `double` change the rate of the game's
+  own step countdown, `off` never starts one. Scripted battles are not affected.
+- **Game speed** runs the whole game (field, menus, battles, cutscenes) at 2x to 4x. Sound keeps playing at its normal
+  pitch: the SPU output is time-compressed with a waveform-similarity overlap-add stretcher, so music and effects stay
+  in tune but cover more game time per second. F4 (the gamepad's Guide button) cycles the speed for this session.
+  The fast-forward keys below still override it while active (and, unlike game speed, silence the sound).
+- **God mode** makes the party take no damage and defeat enemies with the first hit that lands, in every battle. Items
+  and status effects are untouched. It is off by default and not meant for a first playthrough.
 
 ## Visual presets
 
@@ -102,6 +118,7 @@ feature. The order of the passes is described in [ARCHITECTURE.md](ARCHITECTURE.
 | F9 | Switch between Original and the preset in `graphics.comparison_preset`, for comparing side by side. Not saved. Pressing it again restores your exact previous settings. |
 | Tab (hold) | Fast-forward while held |
 | F10 | Latch fast-forward on or off |
+| F4 | Cycle game speed 1x, 2x, 3x, 4x |
 | F11, Alt+Enter | Fullscreen |
 | F5 / F7, F6 / F8 | Save state / load state, previous / next slot |
 

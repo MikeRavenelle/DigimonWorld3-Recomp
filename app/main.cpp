@@ -46,7 +46,8 @@
 //
 // Hotkeys: F9 switches between the Original picture and the chosen enhanced preset (a quick comparison, not saved);
 // Tab (held) or F10 (latched) fast-forwards at system.fast_forward_speed; on a gamepad, pressing the right stick
-// fast-forwards while held and pressing the left stick latches it.
+// fast-forwards while held and pressing the left stick latches it. F4 (the gamepad's Guide button) cycles
+// gameplay.game_speed through 1x to 4x.
 //
 // Save states (keyboard): F5 saves and F7 loads the current slot, F6 / F8 select the previous / next slot (1 to 9).
 // Slots are <user data dir>/states/slotN.state. A state is written or restored within a frame or two of the key
@@ -73,6 +74,7 @@
 #include "dw3/host.h"
 #include "dw3/platform.h"
 #include "ingame/field_menu.h"
+#include "ingame/gameplay.h"
 #include "present/native_window.h"
 #include "settings/controller.h"
 #include "settings/fastforward.h"
@@ -238,6 +240,9 @@ Options parse(int argc, char** argv) {
         else if (a == "--texture-filter" && i + 1 < argc) set("graphics.texture_filter", argv[++i]);
         else if (a == "--no-vsync") set("graphics.vsync", "false");
         else if (a == "--fast-forward-speed" && i + 1 < argc) set("system.fast_forward_speed", argv[++i]);
+        else if (a == "--encounters" && i + 1 < argc) set("gameplay.encounters", argv[++i]);
+        else if (a == "--game-speed" && i + 1 < argc) set("gameplay.game_speed", argv[++i]);
+        else if (a == "--god-mode") set("gameplay.god_mode", "true");
         else if (a == "--screenshot-every" && i + 2 < argc) {
             o.shot_every = std::atoi(argv[++i]);
             o.shot_dir = argv[++i];
@@ -351,7 +356,7 @@ int main(int argc, char** argv) {
     auto present_options = [&](const dw3app::Settings& st) {
         dw3app::PresentOptions po;
         const auto& g = st.graphics;
-        po.vsync = g.vsync && !unpaced && !fast_forward.active();
+        po.vsync = g.vsync && !unpaced && !fast_forward.active() && st.gameplay.game_speed == 0;
         po.linear = g.output_filter >= 1;
         po.post = dw3app::post_fx_from(g);
         po.internal_res = g.internal_res;
@@ -392,6 +397,7 @@ int main(int argc, char** argv) {
     dw3app::AudioOutput audio;
     audio.open(opt.uncapped || (opt.max_frames >= 0 && !opt.audio), active.audio.mute, active.audio.device,
                active.audio.volume);
+    audio.set_speed(dw3app::game_speed_multiplier(active.gameplay.game_speed));
 
     // Live changes of settings: one function applies whatever changed.
     struct LiveSink final : dw3app::SettingsSink {
@@ -400,12 +406,17 @@ int main(int argc, char** argv) {
     } sink;
     dw3app::SettingsController settings(stored, active, &sink, config_file);
     dw3app::ingame::FieldMenuSettings settings_screen(machine, settings);
+    dw3app::ingame::GameplayHooks gameplay(machine, settings);
     sink.fn = [&](const dw3app::Settings& now, std::span<const dw3app::SettingInfo* const> changed) {
         bool ok = true, graphics = false, window_size = false;
         for (const dw3app::SettingInfo* info : changed) {
             const std::string_view id = info->id;
             if (id == "graphics.fullscreen") SDL_SetWindowFullscreen(window, now.graphics.fullscreen);
             else if (id == "graphics.window_width" || id == "graphics.window_height") window_size = true;
+            else if (id == "gameplay.game_speed") {
+                audio.set_speed(dw3app::game_speed_multiplier(now.gameplay.game_speed));
+                graphics = true;  // vsync is off while the game runs faster than the display
+            }
             else if (id == "audio.mute") audio.set_muted(now.audio.mute);
             else if (id == "audio.volume") audio.set_volume(now.audio.volume);
             else if (id == "audio.device") audio.set_device(now.audio.device);
@@ -578,6 +589,12 @@ int main(int argc, char** argv) {
                               ? (mult > 0 ? "Fast-forward on (" + std::to_string(static_cast<int>(mult)) + "x)" : std::string("Fast-forward on (unlimited)"))
                               : std::string("Fast-forward off"));
     };
+    auto cycle_game_speed = [&] {
+        const int next = (settings.active().gameplay.game_speed + 1) % 4;
+        const std::string value = std::to_string(next + 1) + "x";
+        settings.set("gameplay.game_speed", value);
+        presenter->notify("Game speed " + value);
+    };
     dw3app::Pacer pacer;
     bool pacer_started = false, fast_forwarding = false;
     auto on_frame = [&](uint64_t frame) {
@@ -618,6 +635,7 @@ int main(int argc, char** argv) {
                         presenter->notify("Visual preset: " + mode);
                         break;
                     }
+                    case SDL_SCANCODE_F4: cycle_game_speed(); break;
                     case SDL_SCANCODE_F10: toggle_fast_forward_latch(); break;
                     case SDL_SCANCODE_F11: toggle_fullscreen(); break;
                     case SDL_SCANCODE_RETURN:
@@ -629,6 +647,7 @@ int main(int argc, char** argv) {
             }
             if (e.type == SDL_EVENT_GAMEPAD_BUTTON_DOWN && e.gbutton.button == SDL_GAMEPAD_BUTTON_LEFT_STICK)
                 toggle_fast_forward_latch();
+            if (e.type == SDL_EVENT_GAMEPAD_BUTTON_DOWN && e.gbutton.button == SDL_GAMEPAD_BUTTON_GUIDE) cycle_game_speed();
             if (e.type == SDL_EVENT_GAMEPAD_ADDED && !host_pad.gamepad) host_pad.gamepad = SDL_OpenGamepad(e.gdevice.which);
         }
         {
@@ -666,7 +685,9 @@ int main(int argc, char** argv) {
                 pacer_started = true;
                 pacing_reset = false;
             }
-            pacer.set_speed(ff ? dw3app::fast_forward_multiplier(settings.active().system.fast_forward_speed) : 1.0, now,
+            pacer.set_speed(ff ? dw3app::fast_forward_multiplier(settings.active().system.fast_forward_speed)
+                                : dw3app::game_speed_multiplier(settings.active().gameplay.game_speed),
+                            now,
                             machine.ctx().cycles);
             if (opt.uncapped) return;
             const uint64_t wait = pacer.delay_ns(now, machine.ctx().cycles);
