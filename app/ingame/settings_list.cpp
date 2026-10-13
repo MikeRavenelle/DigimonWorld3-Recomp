@@ -35,6 +35,10 @@ constexpr Labels kLabels[] = {
     {"graphics.vsync", "VSync", 1},
     {"audio.mute", "Mute", 1},
     {"audio.volume", "Volume", 10},
+    {"controls.pad", "Gamepad", 1},
+    {"controls.left_stick", "Left Stick", 1},
+    {"controls.deadzone", "Deadzone", 5},
+    {"controls.prompts", "Prompts", 1},
     {"system.fast_forward_speed", "Fast Forward", 1},
     {"gameplay.encounters", "Encounters", 1},
     {"gameplay.game_speed", "Game Speed", 1},
@@ -54,6 +58,7 @@ std::string choice_label(std::string_view name) {
     if (name == "crt") return "Full";
     if (name.size() == 2 && name[1] == 'x' && std::isdigit(static_cast<unsigned char>(name[0]))) return std::string(1, name[0]) + "X";
     if (name == "unlimited") return "Max";
+    if (name == "playstation") return "PlayStation";
     return capitalised(name);
 }
 
@@ -72,7 +77,26 @@ std::string stepped_preset(const Settings& settings, int direction) {
     return std::string(preset(next).name);
 }
 
+Page page_of(const SettingInfo& info) {
+    switch (info.group) {
+        case Group::Graphics: return Page::Graphics;
+        case Group::Audio: return Page::Audio;
+        case Group::Controls: return Page::Controls;
+        default: return Page::Gameplay;
+    }
+}
+
 }  // namespace
+
+std::string_view page_name(Page p) {
+    switch (p) {
+        case Page::Graphics: return "Graphics";
+        case Page::Audio: return "Audio";
+        case Page::Controls: return "Controls";
+        case Page::Gameplay: return "Gameplay";
+    }
+    return "";
+}
 
 const std::vector<Entry>& entries() {
     static const std::vector<Entry> list = [] {
@@ -82,19 +106,60 @@ const std::vector<Entry>& entries() {
         std::vector<Entry> out;
         for (const Labels& l : kLabels) {
             const SettingInfo* info = find_setting(l.id);
-            if (info && listed(*info)) out.push_back({info, std::string(l.label), l.step});
+            if (info && listed(*info)) out.push_back({info, std::string(l.label), l.step, page_of(*info)});
         }
         // A live setting added later shows up with its full label until it gets a short one above.
         for (const SettingInfo& info : all_settings()) {
             const bool known = std::any_of(out.begin(), out.end(), [&](const Entry& e) { return e.info == &info; });
-            if (listed(info) && !known) out.push_back({&info, std::string(info.label), 1});
+            if (listed(info) && !known) out.push_back({&info, std::string(info.label), 1, page_of(info)});
         }
+        // Stable by page, so that the pages are contiguous whatever order the settings were listed in.
+        std::stable_sort(out.begin(), out.end(), [](const Entry& a, const Entry& b) { return a.page < b.page; });
+        // The bindings and the reset row close the controls page, after its settings.
+        auto at = std::find_if(out.begin(), out.end(), [](const Entry& e) { return e.page > Page::Controls; });
+        std::vector<Entry> bindings;
+        for (std::size_t i = 0; i < input::kActionCount; ++i) {
+            const input::Action a = input::action_at(i);
+            bindings.push_back({nullptr, std::string(input::action_label(a)), 0, Page::Controls, Kind::Binding, a});
+        }
+        bindings.push_back({nullptr, "Reset Controls", 0, Page::Controls, Kind::Reset});
+        out.insert(at, bindings.begin(), bindings.end());
         return out;
     }();
     return list;
 }
 
-std::string value_label(const Settings& settings, const Entry& entry) {
+std::pair<std::size_t, std::size_t> page_range(std::size_t index) {
+    const auto& list = entries();
+    const Page page = list[index].page;
+    std::size_t first = index, last = index;
+    while (first > 0 && list[first - 1].page == page) --first;
+    while (last + 1 < list.size() && list[last + 1].page == page) ++last;
+    return {first, last - first + 1};
+}
+
+std::size_t jump_page(std::size_t index, int direction) {
+    const auto& list = entries();
+    const auto [first, count] = page_range(index);
+    if (direction > 0) return first + count < list.size() ? first + count : 0;
+    return first > 0 ? page_range(first - 1).first : page_range(list.size() - 1).first;
+}
+
+std::vector<std::pair<std::string, std::string>> controls_reset_changes() {
+    const Settings defaults;
+    std::vector<std::pair<std::string, std::string>> out;
+    for (const SettingInfo& info : all_settings())
+        if (info.group == Group::Controls) out.emplace_back(std::string(info.id), get_text(defaults, info));
+    return out;
+}
+
+std::string value_label(const Settings& settings, const Entry& entry, const RowContext& context) {
+    if (entry.kind == Kind::Reset) return "";
+    if (entry.kind == Kind::Binding) {
+        if (context.capturing == entry.action) return "Press key";
+        const auto bindings = input::bindings_from_text(settings.controls.bindings);
+        return input::binding_label(bindings[input::index_of(entry.action)], context.style);
+    }
     const SettingInfo& info = *entry.info;
     switch (info.type) {
         case Type::Bool: return get_text(settings, info) == "true" ? "On" : "Off";
@@ -109,11 +174,13 @@ std::string value_label(const Settings& settings, const Entry& entry) {
     return "";
 }
 
-std::string row_text(const Settings& settings, const Entry& entry) {
-    return entry.label + ": " + value_label(settings, entry);
+std::string row_text(const Settings& settings, const Entry& entry, const RowContext& context) {
+    if (entry.kind == Kind::Reset) return entry.label;
+    return entry.label + ": " + value_label(settings, entry, context);
 }
 
 std::string stepped_value(const Settings& settings, const Entry& entry, int direction) {
+    if (entry.kind != Kind::Setting) return "";
     const SettingInfo& info = *entry.info;
     switch (info.type) {
         case Type::Bool: return get_text(settings, info) == "true" ? "false" : "true";

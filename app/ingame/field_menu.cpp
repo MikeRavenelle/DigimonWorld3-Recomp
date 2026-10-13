@@ -52,7 +52,9 @@ constexpr uint32_t kPad = 0x8004AF78;
 constexpr uint32_t kPadPressed = kPad + 0x48;
 constexpr uint32_t kPadRepeat = kPad + 0x4A;
 constexpr uint32_t kPadShifts = kPad + 0xA4;
-enum Button { kSelect = 0, kUp = 4, kRight = 5, kDown = 6, kLeft = 7, kTriangle = 12, kCircle = 13 };
+// The game's own button numbering: 12 is the cancel button (the pad's circle), 13 confirm (cross) and 14 the menu's
+// close button (triangle).
+enum Button { kSelect = 0, kUp = 4, kRight = 5, kDown = 6, kLeft = 7, kL1 = 10, kR1 = 11, kCancel = 12, kConfirm = 13, kMenuClose = 14 };
 
 // Sounds: the game's cue function pointer and the cues the menu itself plays.
 constexpr uint32_t kPlaySound = 0x800553F0;
@@ -127,9 +129,9 @@ std::vector<uint8_t> text_of(std::initializer_list<std::string_view> parts) {
 }
 
 // The header's hint, in place of the menu's own: the triangle glyph, "Close", then the way to the settings.
-std::vector<uint8_t> header_hint() {
+std::vector<uint8_t> header_hint(const std::string& select_name) {
     std::vector<uint8_t> out = {1, 0x34, 1, 1};
-    const std::vector<uint8_t> rest = text_of({"Close SELECT: SETTINGS"});
+    const std::vector<uint8_t> rest = text_of({"Close ", select_name, ": SETTINGS"});
     out.insert(out.end(), rest.begin(), rest.end());
     return out;
 }
@@ -153,16 +155,31 @@ struct MenuHook {
         if (g.r32(cursor + kCursorTargetY) != y) g.call(g.r32(cursor + kCursorMoveTo), cursor, kCursorX, y);
     }
 
-    static void draw_screen(Guest& g, uint32_t windows, uint32_t rows, uint32_t selected, const Settings& view) {
+    static input::PromptStyle style_of(const FieldMenuSettings& self) {
+        return self.controls_ ? self.controls_->prompt_style() : input::PromptStyle::Xbox;
+    }
+
+    static RowContext context_of(const FieldMenuSettings& self) {
+        RowContext context;
+        context.style = style_of(self);
+        if (self.controls_) context.capturing = self.controls_->capturing();
+        return context;
+    }
+
+    static void draw_screen(Guest& g, uint32_t windows, uint32_t rows, uint32_t selected, const Settings& view,
+                            const RowContext& context) {
         const auto& list = entries();
         const uint32_t count = static_cast<uint32_t>(list.size());
         const uint32_t top = std::min(selected > 2 ? selected - 2 : 0u, count > rows ? count - rows : 0u);
+        const auto [page_first, page_count] = page_range(selected);
         g.show(g.r32(windows + kWindowHeader),
-               text_of({"Settings  ", std::to_string(selected + 1), " of ", std::to_string(count)}));
+               context.capturing ? text_of({"Press key - Esc cancels"})
+                                 : text_of({page_name(list[selected].page), "  ", std::to_string(selected - page_first + 1),
+                                            " of ", std::to_string(page_count)}));
         for (uint32_t i = 0; i < rows; ++i) {
             const uint32_t at = top + i;
             g.show(g.r32(windows + kWindowRow0 + 4 * i),
-                   at < count ? text_of({row_text(view, list[at])}) : text_of({""}));
+                   at < count ? text_of({row_text(view, list[at], context)}) : text_of({""}));
         }
         move_cursor(g, g.r32(windows + kWindowCursor), selected - top);
     }
@@ -187,14 +204,27 @@ struct MenuHook {
         uint32_t selected = std::min(g.r32(task + kScreenCursor), count - 1);
         Settings view = view_of(self);
 
-        const bool up = g.pressed(kUp, true), down = g.pressed(kDown, true);
-        const bool left = g.pressed(kLeft, true), right = g.pressed(kRight, true);
-        const bool close = g.pressed(kCircle, false) || g.pressed(kTriangle, false);
+        // While a key or button is being captured the pad belongs to the capture.
+        const bool idle = self.controls_ && self.controls_->capturing();
+        const bool up = !idle && g.pressed(kUp, true), down = !idle && g.pressed(kDown, true);
+        const bool left = !idle && g.pressed(kLeft, true), right = !idle && g.pressed(kRight, true);
+        const bool page_back = !idle && g.pressed(kL1, false), page_forward = !idle && g.pressed(kR1, false);
+        const bool confirm = !idle && g.pressed(kConfirm, false);
+        const bool close = !idle && (g.pressed(kCancel, false) || g.pressed(kMenuClose, false));
         g.consume_input();  // the menu's own handler then sees an idle pad and only draws
 
-        if (up != down) {
+        if (page_back != page_forward) {
+            selected = static_cast<uint32_t>(jump_page(selected, page_forward ? 1 : -1));
+            g.play(kSoundCursor);
+        } else if (up != down) {
             selected = up ? (selected + count - 1) % count : (selected + 1) % count;
             g.play(kSoundCursor);
+        } else if (confirm && list[selected].kind == Kind::Binding) {
+            if (self.controls_) self.controls_->begin_capture(list[selected].action);
+            g.play(kSoundConfirm);
+        } else if (confirm && list[selected].kind == Kind::Reset) {
+            for (const auto& [id, value] : controls_reset_changes()) self.pending_.push_back({id, value});
+            g.play(kSoundConfirm);
         } else if (left != right) {
             const std::string value = stepped_value(view, list[selected], right ? 1 : -1);
             if (!value.empty()) {
@@ -213,7 +243,7 @@ struct MenuHook {
         ctx->r[4] = task;
         ctx->r[5] = windows;
         self.machine_.lookup_original(kListTaskFunction)(ctx);
-        if (!close) draw_screen(g, windows, rows, selected, view);
+        if (!close) draw_screen(g, windows, rows, selected, view_of(self), context_of(self));
     }
 
     static void list_task(RecompContext* ctx) {
@@ -233,20 +263,24 @@ struct MenuHook {
         self->machine_.lookup_original(kListTaskFunction)(ctx);
         if (g.r32(task + kState) != kStateRunning || g.r32(task + kSubState) != kSubStateWaiting) return;
         const uint32_t header = g.r32(windows + kWindowHeader);
-        if (header) g.show(header, header_hint());
+        if (header) {
+            const auto bindings = input::bindings_from_text(self->controller_.active().controls.bindings);
+            g.show(header, header_hint(input::select_hint(bindings[input::index_of(input::Action::Select)], style_of(*self),
+                                                          self->controls_ && self->controls_->pad_connected())));
+        }
         if (g.pressed(kSelect, false) && g.r32(task + kRowCount) > 0) {
             g.w32(task + kScreenCursor, 0);
             g.w32(task + kScreenMarker, kScreenOpen);
             g.play(kSoundConfirm);
-            draw_screen(g, windows, g.r32(task + kRowCount), 0, view_of(*self));
+            draw_screen(g, windows, g.r32(task + kRowCount), 0, view_of(*self), context_of(*self));
         }
     }
 };
 
 FieldMenuSettings* MenuHook::instance = nullptr;
 
-FieldMenuSettings::FieldMenuSettings(dw3::Machine& machine, SettingsController& controller)
-    : machine_(machine), controller_(controller) {
+FieldMenuSettings::FieldMenuSettings(dw3::Machine& machine, SettingsController& controller, input::ControlsHost* controls)
+    : machine_(machine), controller_(controller), controls_(controls) {
     MenuHook::instance = this;
     machine_.override_function(kListTaskFunction, &MenuHook::list_task);
 }

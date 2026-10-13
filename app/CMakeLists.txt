@@ -1,4 +1,5 @@
 add_executable(dw3recomp main.cpp
+    host_input.cpp
     present/presenter.cpp
     present/osd.cpp
     present/software_presenter.cpp
