@@ -1,0 +1,136 @@
+name = "ingame_settings"
+description = "Field START menu: SELECT opens the settings screen, a value and the cursor change, circle returns to the menu as it was, the menu closes and the player walks on."
+start_state = "new_game.state"   # written by new_game_state.toml
+start_frame = 1473
+frames = 3200
+memcard = "blank"
+
+# RAM words (USA executable). The menu list is the task object at 0x800AB6F4:
+#   +0x0C state (1 running), +0x10 sub-state (3: list waits for input), +0x68 settings cursor, +0x6C marker
+#   0x53455453 while the settings screen is open. Its first row window is at 0x800AB9D8 and keeps a pointer to its
+#   text at +0x5C; the text is in the game's own encoding (I = 0x16, E = 0x12, P = 0x1D).
+#   game mode 0x800554D0: 2 field.
+
+[[press]]
+button = "START"
+at = 1720
+
+[[wait]]
+at = 1730
+label = "menu rows drawn"
+ram = [{ via = 0x800ABA34, addr = 0, size = 1, value = 0x16 }]
+timeout = 600
+
+[[check]]
+at = 1731
+label = "menu: first row reads ITEMS, header carries the hint"
+ram = [{ addr = 0x800AB700, size = 4, value = 1 }]
+screenshot = true
+
+# SELECT opens the settings screen on its first row (the visual preset).
+[[wait]]
+at = 1740
+label = "settings open"
+press = "SELECT"
+every = 40
+ram = [{ addr = 0x800AB760, size = 4, value = 0x53455453 }]
+timeout = 300
+
+[[check]]
+at = 1741
+label = "settings: cursor on the first row, which reads Preset"
+ram = [
+    { addr = 0x800AB75C, size = 4, value = 0 },
+    { via = 0x800ABA34, addr = 0, size = 1, value = 0x1D },
+]
+screenshot = true
+
+# RIGHT steps the preset from Original to Enhanced; the row shows it.
+[[wait]]
+at = 1750
+label = "preset changed"
+press = "RIGHT"
+every = 40
+ram = [{ via = 0x800ABA34, addr = 10, size = 1, value = 0x12 }]
+timeout = 300
+
+[[check]]
+at = 1751
+label = "settings still open after the change"
+ram = [{ addr = 0x800AB760, size = 4, value = 0x53455453 }]
+screenshot = true
+
+[[wait]]
+at = 1760
+label = "cursor on the second row"
+press = "DOWN"
+every = 40
+ram = [{ addr = 0x800AB75C, size = 4, value = 1 }]
+timeout = 300
+
+# A save state taken with the screen open loads back into it.
+[[savestate]]
+at = 1762
+path = "ingame_settings.state"
+
+# Circle returns to the menu: the rows read as before and the menu waits for input again.
+[[wait]]
+at = 1770
+label = "back in the menu"
+press = "CIRCLE"
+every = 40
+ram = [{ addr = 0x800AB760, size = 4, value = 0x53455453, cmp = "ne" }]
+timeout = 300
+
+[[check]]
+at = 1780
+label = "menu restored"
+ram = [
+    { addr = 0x800AB700, size = 4, value = 1 },
+    { addr = 0x800AB704, size = 4, value = 3 },
+    { addr = 0x800AB74C, size = 4, value = 0 },
+    { via = 0x800ABA34, addr = 0, size = 1, value = 0x16 },
+]
+screenshot = true
+
+[[loadstate]]
+at = 1785
+path = "ingame_settings.state"
+
+[[check]]
+at = 1795
+label = "loaded state: settings open on the second row"
+ram = [
+    { addr = 0x800AB760, size = 4, value = 0x53455453 },
+    { addr = 0x800AB75C, size = 4, value = 1 },
+    { via = 0x800ABA34, addr = 0, size = 1, value = 0x1D },
+]
+screenshot = true
+
+[[wait]]
+at = 1800
+label = "closed again after the load"
+press = "CIRCLE"
+every = 40
+ram = [{ addr = 0x800AB760, size = 4, value = 0x53455453, cmp = "ne" }]
+timeout = 300
+
+# The menu still closes and the game is playable.
+[[wait]]
+at = 1810
+label = "menu closed"
+press = "TRIANGLE"
+every = 60
+ram = [{ addr = 0x800AB700, size = 4, value = 1, cmp = "ne" }]
+timeout = 600
+
+[[walk]]
+at = 1820
+label = "walk after the menu"
+x = { via = 0x8004ADC0, addr = 0x58, size = 4 }
+z = { via = 0x8004ADC0, addr = 0x5C, size = 4 }
+target = [819, 521]
+tolerance = 10
+axes = "x"
+timeout = 900
+guard = [{ addr = 0x800554D4, size = 4, value = 0x1C3 }]

@@ -33,6 +33,7 @@
 #include "dw3/host.h"
 #include "dw3/recomp.h"
 #include "dw3/state.h"
+#include "field_menu.h"
 #include "scenario.h"
 
 namespace {
@@ -395,6 +396,9 @@ int main(int argc, char** argv) {
         }
         if (opt.no_xa) host->machine().cdrom().set_xa_sink(nullptr);
         host->machine().sio().set_pad_source(0, &pad);
+        // The game's settings screen runs as in the app, on default settings that are never written anywhere.
+        dw3app::SettingsController settings_controller(dw3app::Settings{}, dw3app::Settings{}, nullptr, {});
+        dw3app::ingame::FieldMenuSettings settings_screen(host->machine(), settings_controller);
         int64_t base = last_frame;  // real frames before this boot; shifted when a state is loaded
         if (boot == 0 && !scenario.start_state.empty()) {
             std::vector<uint8_t> file;
@@ -420,6 +424,7 @@ int main(int argc, char** argv) {
         const int64_t until = boot < scenario.reboots.size() ? scenario.reboots[boot] : -1;  // script frame
         if (boot) std::printf("  reboot @%lld\n", static_cast<long long>(scenario.reboots[boot - 1]));
         result = host->run([&](uint64_t frame) {
+            settings_screen.apply_pending();
             last_frame = base + static_cast<int64_t>(frame);
             timeline.advance(last_frame, read_ram);
             const int64_t script = timeline.script_frame();

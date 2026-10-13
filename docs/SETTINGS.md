@@ -78,6 +78,17 @@ started from.
 On a gamepad, pressing the right stick (R3) fast-forwards while held and pressing the left stick (L3) latches it;
 the game does not use either.
 
+## Settings screen in the game
+
+With the START menu open in the field, SELECT turns its list into a settings list in the game's own windows (the
+header shows the hint). Up and down move the cursor, left and right change the value, and circle or triangle returns to
+the menu. Every change applies at once and is written to `settings.toml` (nothing is written with `--no-config`).
+
+It lists the options that take effect while playing: the visual preset first, then the graphics options (3D scale,
+true colour, texture filter, precise geometry, output filter, scaling, window size, fullscreen, vsync), mute and
+volume, and the fast-forward speed. The options that need a restart (renderer, memory cards) stay in the file. Five
+rows show at a time (six when the menu has CARD FOLDERS); the list scrolls.
+
 ## Fast-forward
 
 `system.fast_forward_speed` sets the speed for both the hold key and the latch: 2x, 4x or unlimited. While it is on,

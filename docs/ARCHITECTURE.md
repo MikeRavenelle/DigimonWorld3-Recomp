@@ -64,6 +64,22 @@ See `runtime/include/dw3/recomp.h`.
   backward jump. Event checks record the label they are about to jump to in `ctx->cur_pc`. Save states
   resume through these (below). A `jr $ra` whose delay slot writes `$ra` is a recompile error.
 
+## Host overrides
+
+`Machine::override_function(addr, fn)` makes everything that resolves through `Machine::lookup` (indirect calls, `jr`
+targets, task and window method tables) run a host routine instead of the recompiled function at `addr`; the routine
+can call the original through `Machine::lookup_original`. Calls the recompiler resolved statically do not go through
+the lookup, so only functions reached indirectly can be overridden. An override is still ordinary recompiled-style
+code: it reads and writes guest memory, calls recompiled functions with `dw3_call` and returns to its caller, with no
+interpreter involved.
+
+Overrides keep their state in guest memory where they can. A save state then carries it, and loading one never leaves
+a host flag disagreeing with the game. The in-game settings screen (`app/ingame`) is built this way. It overrides the
+per-frame function of the field START menu's list (`0x800126FC`): while the list waits for input, SELECT writes a marker
+into the menu task and the override replaces the list's rows and header text, through the windows' own text method,
+with the settings. The menu's code still runs every frame to draw its panels, with the pad's newly-pressed words
+cleared so that it sees no input. Closing the screen puts the original texts back.
+
 ## Save states
 
 A state is guest state only: RAM, scratchpad, CPU and GTE registers, the scheduler queue and every hardware
