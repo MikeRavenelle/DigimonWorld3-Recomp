@@ -1,7 +1,9 @@
-// texpack: builds a texture pack from a texture dump.
+// texpack: builds a texture pack from texture dumps and from the game's own files.
 //
 //   dw3recomp --dump-textures <dump dir> ...play a while...       records the background images the game draws
 //   texpack generate --dump <dump dir> --out <pack dir>            upscales them with an external program
+//   texpack generate --disc <disc image or folder> --out <pack dir>   the same for every field map on the disc
+//   texpack extract --disc <disc image or folder> --out <dump dir>    only writes the dump of the disc's field maps
 //
 // The upscaler is realesrgan-ncnn-vulkan (https://github.com/xinntao/Real-ESRGAN-ncnn-vulkan); it and its model files
 // are not shipped and are never downloaded by this tool. Point --upscaler and --models at an installation, or put them
@@ -10,11 +12,13 @@
 #include <cstdio>
 #include <cstdlib>
 #include <filesystem>
+#include <memory>
 #include <string>
 #include <vector>
 
 #include "dw3/platform.h"
 #include "dw3/texrep/generate.h"
+#include "dw3/texrep/stage_dump.h"
 
 namespace fs = std::filesystem;
 using namespace dw3::texrep;
@@ -23,8 +27,11 @@ namespace {
 
 void usage() {
     std::fputs(
-        "usage: texpack generate --dump DIR [--dump DIR ...] --out PACK_DIR [options]\n"
+        "usage: texpack generate [--disc PATH] [--dump DIR ...] --out PACK_DIR [options]\n"
+        "       texpack extract --disc PATH --out DUMP_DIR [--map S226 ...]\n"
         "\n"
+        "  --disc PATH        the disc image (.cue or .bin) or an extracted copy of the disc: every field map on it is added\n"
+        "  --map NAME         only these maps of the disc, such as S226 (repeatable)\n"
         "  --dump DIR         a directory written by dw3recomp --dump-textures (repeatable)\n"
         "  --out PACK_DIR     the pack to write; an existing pack of the same scale is extended\n"
         "  --name NAME        pack name stored in the manifest (default: the output folder name)\n"
@@ -68,10 +75,38 @@ int run(const std::vector<std::string>& args) {
 
 struct Config {
     std::vector<fs::path> dumps;
+    std::vector<std::string> maps;
+    fs::path disc;
     fs::path out, upscaler, models, work;
     std::string name, model = "RealESRGAN_General_x4_v3", gpu;
     int scale = 4, model_scale = 4, pad = 16;
 };
+
+// Writes the dump of the field maps found on the disc (or the chosen ones) to `dir`.
+bool extract_disc(const fs::path& disc, const fs::path& dir, const std::vector<std::string>& only, std::string& error) {
+    std::unique_ptr<StageSource> source = StageSource::open(disc, error);
+    if (!source) return false;
+    StageDumpWriter writer(dir);
+    std::vector<uint8_t> data;
+    std::size_t index = 0;
+    for (const std::string& map : source->maps()) {
+        ++index;
+        if (!only.empty() && std::find(only.begin(), only.end(), map) == only.end()) continue;
+        StagePack pack;
+        std::string detail;
+        if (!source->read(map, data, detail) || !parse_stage_pack(data, pack, detail)) {
+            error = map + ": " + detail;
+            return false;
+        }
+        if (!writer.add_map(map, pack, error)) return false;
+        if (index % 20 == 0) std::fprintf(stderr, "texpack: read %zu / %zu maps\n", index, source->maps().size());
+    }
+    if (!writer.finish(error)) return false;
+    const StageDumpStats& st = writer.stats();
+    std::fprintf(stderr, "texpack: %zu maps, %zu pictures, %zu distinct images (%zu not trackable, %zu empty) -> %s\n", st.maps, st.cells,
+                 st.images, st.untracked, st.transparent, dw3::platform::path_to_utf8(dir).c_str());
+    return true;
+}
 
 }  // namespace
 
@@ -81,10 +116,11 @@ int main(int argc, char** argv) {
         usage();
         return args.size() < 2 ? 2 : 0;
     }
-    if (args[1] != "generate") {
+    if (args[1] != "generate" && args[1] != "extract") {
         usage();
         return 2;
     }
+    const bool extract_only = args[1] == "extract";
     Config c;
     for (std::size_t i = 2; i < args.size(); ++i) {
         const std::string& a = args[i];
@@ -96,6 +132,8 @@ int main(int argc, char** argv) {
             return args[++i];
         };
         if (a == "--dump") c.dumps.push_back(dw3::platform::path_from_utf8(value()));
+        else if (a == "--disc") c.disc = dw3::platform::path_from_utf8(value());
+        else if (a == "--map") c.maps.push_back(value());
         else if (a == "--out") c.out = dw3::platform::path_from_utf8(value());
         else if (a == "--name") c.name = value();
         else if (a == "--scale") c.scale = std::atoi(value().c_str());
@@ -112,7 +150,19 @@ int main(int argc, char** argv) {
             return 2;
         }
     }
-    if (c.dumps.empty() || c.out.empty()) {
+    if (extract_only) {
+        if (c.disc.empty() || c.out.empty()) {
+            usage();
+            return 2;
+        }
+        std::string error;
+        if (!extract_disc(c.disc, c.out, c.maps, error)) {
+            std::fprintf(stderr, "texpack: %s\n", error.c_str());
+            return 1;
+        }
+        return 0;
+    }
+    if ((c.dumps.empty() && c.disc.empty()) || c.out.empty()) {
         usage();
         return 2;
     }
@@ -137,6 +187,15 @@ int main(int argc, char** argv) {
     const bool own_work = c.work.empty();
     if (own_work) c.work = fs::temp_directory_path(ec) / ("dw3texpack-" + std::to_string(std::rand()));
     fs::create_directories(c.work / "in", ec);
+    if (!c.disc.empty()) {
+        std::string error;
+        if (!extract_disc(c.disc, c.work / "disc-dump", c.maps, error)) {
+            std::fprintf(stderr, "texpack: %s\n", error.c_str());
+            if (own_work) fs::remove_all(c.work, ec);
+            return 1;
+        }
+        c.dumps.insert(c.dumps.begin(), c.work / "disc-dump");
+    }
 
     GenerateOptions options;
     options.name = c.name.empty() ? dw3::platform::path_to_utf8(c.out.filename()) : c.name;
