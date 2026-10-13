@@ -209,6 +209,7 @@ struct HwRenderer::Impl {
     // ---- setup -------------------------------------------------------------------------------------
 
     bool init(const NativeWindow* window, int internal_scale, const HwOptions& options, std::string& error);
+    bool create_targets(std::string& error);
     bool create_pipelines();
     bool create_swapchain(const NativeWindow& window);
     void create_swap_framebuffers();
@@ -327,6 +328,37 @@ bool HwRenderer::Impl::init(const NativeWindow* window, int internal_scale, cons
     }
     bind_slot();
 
+    if (!create_targets(error)) return false;
+
+    readback_buf = device->createBuffer(RenderBufferDesc::ReadbackBuffer(kReadbackBytes));
+    if (!readback_buf) {
+        error = "buffer creation failed";
+        return false;
+    }
+
+    if (!create_pipelines()) {
+        error = "pipeline creation failed";
+        return false;
+    }
+    if (window && !create_swapchain(*window)) {
+        error = "swap chain creation failed";
+        return false;
+    }
+    clear_vram();
+    pending.reserve(kMaxPendingVertices + 8192);
+    return true;
+}
+
+bool HwRenderer::Impl::create_targets(std::string& error) {
+    rt.reset();
+    tex.reset();
+    nat.reset();
+    hi.reset();
+    hi_tex.reset();
+    rt_fb.reset();
+    nat_fb.reset();
+    draw_fb.reset();
+    rt_layout = tex_layout = nat_layout = hi_layout = hi_tex_layout = RenderTextureLayout::UNKNOWN;
     rt = device->createTexture(RenderTextureDesc::ColorTarget(1024 * scale, 512 * scale, kVramFormat));
     tex = device->createTexture(RenderTextureDesc::Texture2D(1024 * scale, 512 * scale, 1, kVramFormat));
     if (scale > 1) nat = device->createTexture(RenderTextureDesc::ColorTarget(1024, 512, kVramFormat));
@@ -361,23 +393,10 @@ bool HwRenderer::Impl::init(const NativeWindow* window, int internal_scale, cons
         fbd.colorAttachments = &nat_attachment;
         nat_fb = device->createFramebuffer(fbd);
     }
-
-    readback_buf = device->createBuffer(RenderBufferDesc::ReadbackBuffer(kReadbackBytes));
-    if (!readback_buf || !rt_fb || (nat && !nat_fb)) {
-        error = "buffer creation failed";
+    if (!rt_fb || (nat && !nat_fb)) {
+        error = "framebuffer creation failed";
         return false;
     }
-
-    if (!create_pipelines()) {
-        error = "pipeline creation failed";
-        return false;
-    }
-    if (window && !create_swapchain(*window)) {
-        error = "swap chain creation failed";
-        return false;
-    }
-    clear_vram();
-    pending.reserve(kMaxPendingVertices + 8192);
     return true;
 }
 
@@ -1232,6 +1251,50 @@ bool HwRenderer::present(const DisplayState& display, ScaleMode mode, bool linea
         if (capture_w) *capture_w = static_cast<int>(w);
         if (capture_h) *capture_h = static_cast<int>(h);
     }
+    return true;
+}
+
+bool HwRenderer::reconfigure(int internal_scale, const HwOptions& options, std::span<uint16_t> vram, std::string& error) {
+    Impl& m = *impl_;
+    const int new_scale = std::clamp(internal_scale, 1, 8);
+    const bool new_layer = options.true_color || options.filter != TextureFilter::Nearest;
+    const uint32_t new_mode = (new_layer ? 1u : 0u) | (options.true_color ? 2u : 0u) | (static_cast<uint32_t>(options.filter) << 2);
+    m.record_draws();
+    if (new_scale == m.scale && new_layer == m.layer) {
+        // Only the draw shader's mode word and the vertex path change: nothing to rebuild.
+        m.precise = options.precise_geometry;
+        m.draw_mode = new_mode;
+        return true;
+    }
+    // Bring the CPU copy of VRAM up to date, then rebuild the render targets and pipelines and put the image back.
+    m.readback({kWholeVram}, vram);
+    m.dirty.clear();
+    m.wait_all();
+    const int old_scale = m.scale;
+    const bool old_layer = m.layer;
+    auto rebuild = [&](int s, bool l, std::string& err) {
+        m.scale = s;
+        m.layer = l;
+        if (!m.create_targets(err) || !m.create_pipelines()) {
+            if (err.empty()) err = "pipeline creation failed";
+            return false;
+        }
+        m.pending.clear();
+        m.ranges.clear();
+        m.dirty.clear();
+        m.stale.clear();
+        m.clear_vram();
+        m.upload(vram, kWholeVram);
+        return true;
+    };
+    if (!rebuild(new_scale, new_layer, error)) {
+        std::string ignored;
+        m.wait_all();
+        rebuild(old_scale, old_layer, ignored);
+        return false;
+    }
+    m.precise = options.precise_geometry;
+    m.draw_mode = new_mode;
     return true;
 }
 

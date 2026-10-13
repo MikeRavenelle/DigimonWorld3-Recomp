@@ -47,6 +47,31 @@ void HwPresenter::set_vsync(bool on) {
     renderer_->set_vsync(on);
 }
 
+bool HwPresenter::update_options(const PresentOptions& options, dw3::Gpu& gpu) {
+    bool ok = true;
+    if (options.internal_res != options_.internal_res || options.true_color != options_.true_color ||
+        options.texture_filter != options_.texture_filter || options.precise_geometry != options_.precise_geometry) {
+        dw3::HwOptions hw;
+        hw.true_color = options.true_color;
+        hw.filter = static_cast<dw3::TextureFilter>(options.texture_filter);
+        hw.precise_geometry = options.precise_geometry;
+        std::string error;
+        if (renderer_->reconfigure(options.internal_res, hw, gpu.vram(), error)) {
+            options_.internal_res = renderer_->internal_scale();
+            options_.true_color = options.true_color;
+            options_.texture_filter = options.texture_filter;
+            options_.precise_geometry = options.precise_geometry;
+        } else {
+            SDL_Log("renderer reconfiguration failed: %s", error.c_str());
+            ok = false;
+        }
+    }
+    options_.scale = options.scale;
+    options_.linear = options.linear;
+    if (options.vsync != options_.vsync) set_vsync(options.vsync);
+    return ok;
+}
+
 void HwPresenter::attach(dw3::Gpu& gpu) { gpu.set_rasterizer(renderer_.get()); }
 
 bool HwPresenter::present(dw3::Gpu& gpu, Capture* capture) {

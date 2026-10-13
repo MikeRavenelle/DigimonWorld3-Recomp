@@ -119,6 +119,12 @@ public:
                  int* capture_w = nullptr, int* capture_h = nullptr, const HwOverlay* overlay = nullptr);
     void set_vsync(bool enabled);
 
+    // Changes the internal resolution and the display options of a running renderer. `vram` is the machine's VRAM
+    // (1024x512 words): it is refreshed from the GPU side first and uploaded again afterwards, so the picture
+    // carries over at native detail until the game redraws it. Returns false and sets `error` if the new
+    // configuration could not be created; the previous one is then restored. The `api` field is ignored.
+    bool reconfigure(int internal_scale, const HwOptions& options, std::span<uint16_t> vram, std::string& error);
+
     // Reads the whole GPU-side VRAM into `out` (1024x512 words). For tests and diagnostics.
     void read_vram(std::span<uint16_t> out);
 

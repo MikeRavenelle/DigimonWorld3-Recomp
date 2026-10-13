@@ -30,6 +30,14 @@ void SoftwarePresenter::set_vsync(bool on) {
     SDL_SetRenderVSync(renderer_, on ? 1 : 0);
 }
 
+bool SoftwarePresenter::update_options(const PresentOptions& options, dw3::Gpu&) {
+    // The CPU rasterizer has no internal resolution, true colour or texture filtering: only the output side applies.
+    options_.scale = options.scale;
+    options_.linear = options.linear;
+    if (options.vsync != options_.vsync) set_vsync(options.vsync);
+    return true;
+}
+
 // Blends the notification over the window; called after the capture is read so it never ends up in one.
 void SoftwarePresenter::draw_osd() {
     int ww = 0, wh = 0;
