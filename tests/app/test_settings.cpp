@@ -8,6 +8,7 @@
 
 #include "controller.h"
 #include "fastforward.h"
+#include "gameplay_scaling.h"
 #include "timestretch.h"
 
 using namespace dw3app;
@@ -383,6 +384,7 @@ TEST(GameplaySettings, DefaultsAreTheOriginalGame) {
     EXPECT_EQ(get_text(s, *find_setting("gameplay.encounters")), "normal");
     EXPECT_EQ(get_text(s, *find_setting("gameplay.game_speed")), "1x");
     EXPECT_EQ(get_text(s, *find_setting("gameplay.god_mode")), "false");
+    EXPECT_EQ(get_text(s, *find_setting("gameplay.xp_multiplier")), "1x");
 }
 
 TEST(GameplaySettings, ValuesRoundTripThroughToml) {
@@ -390,9 +392,30 @@ TEST(GameplaySettings, ValuesRoundTripThroughToml) {
     EXPECT_TRUE(set(s, "gameplay.encounters", "off"));
     EXPECT_TRUE(set(s, "gameplay.game_speed", "3x"));
     EXPECT_TRUE(set(s, "gameplay.god_mode", "true"));
+    EXPECT_TRUE(set(s, "gameplay.xp_multiplier", "5x"));
     EXPECT_FALSE(set(s, "gameplay.game_speed", "9x"));
+    EXPECT_FALSE(set(s, "gameplay.xp_multiplier", "4x"));
     LoadReport report;
     EXPECT_EQ(settings_from_toml(settings_to_toml(s), report), s);
+}
+
+TEST(Experience, MultiplierFollowsTheChoice) {
+    EXPECT_EQ(xp_multiplier(0), 1);
+    EXPECT_EQ(xp_multiplier(1), 2);
+    EXPECT_EQ(xp_multiplier(2), 3);
+    EXPECT_EQ(xp_multiplier(3), 5);
+    EXPECT_EQ(xp_multiplier(4), 10);
+    EXPECT_EQ(xp_multiplier(-1), 1);
+    EXPECT_EQ(xp_multiplier(9), 10);
+}
+
+TEST(Experience, AwardScalesAndStopsAtTheFieldMaximum) {
+    EXPECT_EQ(scaled_experience(6, 1), 6u);
+    EXPECT_EQ(scaled_experience(6, 2), 12u);
+    EXPECT_EQ(scaled_experience(0, 10), 0u);
+    EXPECT_EQ(scaled_experience(100000, 10), kMaxExperience);
+    EXPECT_EQ(scaled_experience(0xFFFFFFFFu, 10), kMaxExperience);
+    EXPECT_EQ(scaled_experience(6, 0), 6u);
 }
 
 TEST(GameSpeed, MultiplierFollowsTheChoice) {

@@ -32,6 +32,7 @@ constexpr std::string_view kScaleModes[] = {"fit", "integer", "stretch"};
 constexpr std::string_view kSpeeds[] = {"2x", "4x", "unlimited"};
 constexpr std::string_view kEncounters[] = {"normal", "half", "off", "double"};
 constexpr std::string_view kGameSpeeds[] = {"1x", "2x", "3x", "4x"};
+constexpr std::string_view kXpMultipliers[] = {"1x", "2x", "3x", "5x", "10x"};
 constexpr std::string_view kPads[] = {"auto", "1", "2", "3", "4"};
 constexpr std::string_view kPrompts[] = {"auto", "xbox", "playstation", "nintendo"};
 
@@ -171,6 +172,8 @@ const SettingInfo kSettings[] = {
      Group::Gameplay, Type::Choice, Apply::Live, 0, 0, kGameSpeeds, false, DW3_FIELD(gameplay.game_speed)},
     {"gameplay.god_mode", "God mode", "The party takes no damage and its attacks defeat enemies in one hit.",
      Group::Gameplay, Type::Bool, Apply::Live, 0, 0, {}, false, DW3_FIELD(gameplay.god_mode)},
+    {"gameplay.xp_multiplier", "XP multiplier", "Multiplies the experience each Digimon gets from a won battle.",
+     Group::Gameplay, Type::Choice, Apply::Live, 0, 0, kXpMultipliers, false, DW3_FIELD(gameplay.xp_multiplier)},
 };
 
 #undef DW3_FIELD

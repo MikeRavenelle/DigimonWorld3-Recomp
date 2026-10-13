@@ -78,6 +78,7 @@ struct Settings {
         int encounters = 0;          // choice: normal, half, off, double
         int game_speed = 0;          // choice: 1x, 2x, 3x, 4x
         bool god_mode = false;       // the party takes no damage and defeats enemies in one hit
+        int xp_multiplier = 0;       // choice: 1x, 2x, 3x, 5x, 10x (experience from won battles)
         bool operator==(const Gameplay&) const = default;
     } gameplay;
 

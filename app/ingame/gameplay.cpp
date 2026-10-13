@@ -1,6 +1,7 @@
 #include "gameplay.h"
 
 #include "dw3/recomp.h"
+#include "gameplay_scaling.h"
 
 namespace dw3app::ingame {
 namespace {
@@ -19,6 +20,14 @@ constexpr uint32_t kRecords = 0x800A31F8, kActive = 0x800A31F0;
 constexpr uint32_t kRecordSize = 32, kSideStride = 96, kHp = 8;
 constexpr uint32_t kPartySide = 0, kEnemySide = 1;
 constexpr uint16_t kLift = 0x4000;
+
+// STFGTREP (the battle results screen, game mode 0x14): gives one party member experience and runs the level-ups it
+// causes. a0 is the member's index, a1 the amount; the member's total (at +24 of its record) is capped at 999999.
+// The overlay's code overlaps other mode overlays at this address, so the override only acts in the results mode and
+// when the function's first instructions are the ones of this overlay.
+constexpr uint32_t kGrantExperience = 0x80085870;
+constexpr uint32_t kGrantExperienceSignature = 0x8c42ac2c, kGrantExperienceSignatureAt = 0x80085888;
+constexpr uint32_t kGameMode = 0x800554D0, kResultsMode = 0x14;
 
 enum Encounters { kNormal, kHalf, kOff, kDouble };
 
@@ -46,6 +55,13 @@ struct GameplayHook {
         const bool defeated = target_side == kEnemySide && static_cast<int16_t>(after) <= 0;
         if (!defeated) dw3_write16(ctx, record + kHp, before);
     }
+    static void grant_experience(RecompContext* ctx) {
+        GameplayHooks& self = *instance;
+        const bool in_results = dw3_read32(ctx, kGameMode) == kResultsMode &&
+                                dw3_read32(ctx, kGrantExperienceSignatureAt) == kGrantExperienceSignature;
+        if (in_results) ctx->r[5] = scaled_experience(ctx->r[5], xp_multiplier(self.controller_.active().gameplay.xp_multiplier));
+        self.machine_.lookup_original(kGrantExperience)(ctx);
+    }
     static void encounter_tick(RecompContext* ctx) {
         GameplayHooks& self = *instance;
         const int mode = self.controller_.active().gameplay.encounters;
@@ -67,11 +83,13 @@ GameplayHooks::GameplayHooks(dw3::Machine& machine, SettingsController& controll
     GameplayHook::instance = this;
     machine_.override_function(kEncounterTick, &GameplayHook::encounter_tick);
     machine_.override_function(kAttackTask, &GameplayHook::attack_task);
+    machine_.override_function(kGrantExperience, &GameplayHook::grant_experience);
 }
 
 GameplayHooks::~GameplayHooks() {
     machine_.override_function(kEncounterTick, nullptr);
     machine_.override_function(kAttackTask, nullptr);
+    machine_.override_function(kGrantExperience, nullptr);
     GameplayHook::instance = nullptr;
 }
 

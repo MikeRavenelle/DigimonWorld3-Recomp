@@ -46,6 +46,7 @@ constexpr Labels kLabels[] = {
     {"gameplay.encounters", "Encounters", 1},
     {"gameplay.game_speed", "Game Speed", 1},
     {"gameplay.god_mode", "God Mode", 1},
+    {"gameplay.xp_multiplier", "XP", 1},
 };
 
 std::string capitalised(std::string_view name) {

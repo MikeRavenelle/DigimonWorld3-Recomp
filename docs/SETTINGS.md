@@ -64,6 +64,7 @@ everything else applies immediately.
 | `gameplay.encounters` | `normal`, `half`, `off`, `double` | `--encounters` |
 | `gameplay.game_speed` | `1x`, `2x`, `3x`, `4x` | `--game-speed` |
 | `gameplay.god_mode` | bool | `--god-mode` |
+| `gameplay.xp_multiplier` | `1x`, `2x`, `3x`, `5x`, `10x` | `--xp-multiplier` |
 
 ## Gameplay options
 
@@ -77,6 +78,8 @@ All of these default to the original game and apply immediately; they also appea
   The fast-forward keys below still override it while active (and, unlike game speed, silence the sound).
 - **God mode** makes the party take no damage and defeat enemies with the first hit that lands, in every battle. Items
   and status effects are untouched. It is off by default and not meant for a first playthrough.
+- **XP multiplier** (1x, 2x, 3x, 5x, 10x) scales the experience each Digimon receives when a won battle's results are
+  applied; the total stays capped at the game's 999,999. The results screen still lists the unscaled award.
 
 ## Visual presets
 
