@@ -88,6 +88,12 @@ std::string select_name_of(const ScreenModel& model) {
                               model.controls && model.controls->pad_connected());
 }
 
+std::string close_name_of(const ScreenModel& model) {
+    const auto bindings = input::bindings_from_text(model.controller.active().controls.bindings);
+    return input::close_hint(bindings[input::index_of(input::Action::Triangle)], style_of(model),
+                             model.controls && model.controls->pad_connected());
+}
+
 namespace {
 
 void move_cursor(Guest& g, uint32_t cursor, uint32_t x, uint32_t row) {

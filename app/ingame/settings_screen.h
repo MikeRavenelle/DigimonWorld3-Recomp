@@ -100,6 +100,8 @@ input::PromptStyle style_of(const ScreenModel& model);
 RowContext context_of(const ScreenModel& model);
 // "SELECT" or the name of the button the player bound to it.
 std::string select_name_of(const ScreenModel& model);
+// The close button's name for the hint line; empty means the game's triangle glyph.
+std::string close_name_of(const ScreenModel& model);
 
 // Draws the page the row `selected` belongs to into the windows.
 void draw_screen(Guest& g, const ScreenWindows& windows, uint32_t selected, const ScreenModel& model);
