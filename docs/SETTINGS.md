@@ -262,9 +262,11 @@ before. Options that only matter in the field, such as the encounter rate, can b
 
 ## HDR output
 
-- Needs the GPU renderer on Direct3D 12 or Vulkan, with the display in HDR mode (Windows: Settings > Display > HDR;
-  Linux: a compositor with HDR support, for example KDE Plasma 6.x on Wayland). The in-game rows read `N/A` until the
-  display reports HDR; they also stay `N/A` on macOS, where HDR output is not implemented yet.
+- Needs the GPU renderer on Direct3D 12, Vulkan or Metal, with the display in HDR mode (Windows: Settings > Display
+  > HDR; Linux: a compositor with HDR support, for example KDE Plasma 6.x on Wayland; macOS: an XDR or other EDR
+  display, nothing to switch on). The in-game rows read `N/A` until the display reports HDR.
+- On macOS the picture is placed relative to the system's SDR white (the brightness slider), so the paper white
+  setting only matters for the ratio of peak to paper white; the peak is also limited to what the display grants.
 - The picture is converted to scRGB (linear Rec. 709 half floats): SDR white is placed at the paper white level
   (`graphics.hdr_paper_white`, default 203 nits) and only the brightest part is lifted, smoothly, towards the peak
   (`graphics.hdr_peak_nits`, default 1000). Colours keep their hue and saturation; there is no gamut expansion.

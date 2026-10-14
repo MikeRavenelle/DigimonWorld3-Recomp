@@ -66,6 +66,13 @@ toolchain from Xcode. The renderer tests (`test_render`) compare Metal against t
 resolution and option, as they do for Vulkan and Direct3D 12. plume is not built with MoltenVK, so `--renderer vulkan`
 is unavailable on macOS, and without a usable Metal device `auto` falls back to the software path.
 
+The window is high pixel density: window sizes in the settings are points, and the swap chain and the present
+rectangle use the pixel size. Fullscreen borderless is macOS's own fullscreen (a separate Space); exclusive switches the
+display mode.
+
+Packaging: `packaging/macos` builds the `.app`, signs it, makes the disk image and notarizes it (see its README). For
+a package, configure with `-DDW3_FETCH_SDL=ON` so that SDL is linked statically.
+
 Exceptions thrown through the recompiled C (the stop request, a restored save state) rely on the C sources being built
 with `-fexceptions`, which `dw3_generated` does; the save-state scenarios exercise it.
 

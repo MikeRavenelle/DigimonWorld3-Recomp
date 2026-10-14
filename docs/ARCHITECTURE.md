@@ -242,9 +242,10 @@ The picture is then always post-processed, and the last pass (scale, RCAS or CRT
 `render/shaders/post/hdr.glsl`, which repeats `runtime/include/dw3/hdr.h`: sRGB to linear, SDR white placed at the
 paper white level, and only the part above a knee lifted smoothly towards the peak for white, with the same gain on
 all channels so hue is kept. The intermediate images are half floats too in that case, and window captures are not
-available. Without an HDR swap chain the option does nothing. Metal has no HDR path yet (it would need
-`wantsExtendedDynamicRangeContent` and an extended linear colour space on the layer, set from `plume_apple.mm`), and
-HDR10 (PQ, Rec. 2020) is implemented in the shader and the maths but not offered, because plume has no 10-bit
+available. Without an HDR swap chain the option does nothing. On Metal the swap chain is an extended-range layer
+(`wantsExtendedDynamicRangeContent`, extended linear sRGB, set from `plume_apple.mm` by the second HDR patch): values
+are relative to SDR white (`HdrMode::Edr`, 1.0 = paper white, whatever the system brightness is), and the peak is cut
+to the headroom the screen grants at that moment (`edr_limited`, read from the swap chain every frame). HDR10 (PQ, Rec. 2020) is implemented in the shader and the maths but not offered, because plume has no 10-bit
 RGB10A2 format to create such a swap chain with.
 
 ## Platforms

@@ -85,6 +85,13 @@ if(DW3_BUILD_APP)
         set(CPACK_GENERATOR TGZ)
         set(CPACK_PACKAGE_FILE_NAME "DW3Recomp-${PROJECT_VERSION}-${DW3_OS}-${DW3_ARCH}")
     endif()
+    if(APPLE)
+        # The .app bundle (see packaging/macos/README.md): cmake --build <dir> --target macos_app
+        add_custom_target(macos_app
+            COMMAND bash "${CMAKE_CURRENT_SOURCE_DIR}/packaging/macos/make_app.sh" "${CMAKE_BINARY_DIR}"
+            DEPENDS dw3recomp
+            USES_TERMINAL)
+    endif()
     set(CPACK_PACKAGE_NAME "DW3Recomp")
     set(CPACK_PACKAGE_VERSION "${PROJECT_VERSION}")
     set(CPACK_PACKAGE_VENDOR "DW3Recomp")
