@@ -643,6 +643,7 @@ int main(int argc, char** argv) {
                               presenter->notify("Visual preset: " + mode);
                           }};
     dw3app::Pacer pacer;
+    dw3app::PresentCadence present_cadence;
     bool pacer_started = false, fast_forwarding = false, display_changed = false, fps_shown = false;
     uint64_t fps_window_start = SDL_GetTicksNS();
     int fps_frames = 0;
@@ -709,11 +710,23 @@ int main(int argc, char** argv) {
         presenter->set_wide_mode(settings.active().graphics.widescreen != 0
                                      ? dw3::wide_mode_for_game_mode(dw3_read32(&machine.ctx(), kGameMode))
                                      : dw3::WideMode::Off);
-        presenter->present(machine.gpu(), want_shot ? &capture : nullptr);
-        // On a display that runs at a multiple of 60 Hz, each frame is shown for the same whole number of refreshes.
         const auto& shown = settings.active().graphics;
-        if (shown.frame_pacing == 1 && shown.vsync != 0 && !unpaced && !fast_forward.active() && settings.active().gameplay.game_speed == 0)
-            for (int again = dw3app::refreshes_per_frame(refresh_hz); again > 1; --again) presenter->present(machine.gpu(), nullptr);
+        // Frame pacing "even" repeats presents only while the measured gap between back-to-back presents says the
+        // display really runs at a multiple of 60 Hz; the reported refresh rate is just the hint to try.
+        present_cadence.set_enabled(shown.frame_pacing == 1 && shown.vsync != 0 && !unpaced && !fast_forward.active() &&
+                                    settings.active().gameplay.game_speed == 0);
+        present_cadence.set_reported_hz(refresh_hz);
+        const int presents = present_cadence.plan_frame();
+        presenter->present(machine.gpu(), want_shot ? &capture : nullptr);
+        uint64_t last_present_ns = presents > 1 ? SDL_GetTicksNS() : 0;
+        for (int again = 1; again < presents; ++again) {
+            presenter->present(machine.gpu(), nullptr);
+            const uint64_t done_ns = SDL_GetTicksNS();
+            present_cadence.on_present_gap(static_cast<int64_t>(done_ns - last_present_ns));
+            last_present_ns = done_ns;
+        }
+        if (present_cadence.end_frame(pacer_started && !pacing_reset ? pacer.lag_ns(SDL_GetTicksNS(), machine.ctx().cycles) : 0))
+            pacing_reset = true;
         ++fps_frames;
         if (const uint64_t now = SDL_GetTicksNS(); now - fps_window_start >= kFpsWindowNs) {
             if (shown.show_fps) {

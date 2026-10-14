@@ -83,6 +83,13 @@
 //   is pending and resumes when its condition holds (or fails the run on timeout). Buttons held at the wait's
 //   script frame by a [[press]] stay held during the wait. Checks at the wait's own frame run before it ends.
 //
+//   [[margin_watch]]           # needs `gpu = true` (or a widescreen setting); see MarginWatch below
+//   from = 1486
+//   to = 1486
+//   label = "map load"
+//   lit_changes_max = 3
+//   strip = true
+//
 //   [[check]]                  # all fields optional except `at`
 //   at = 2000
 //   label = "field scene"
@@ -197,6 +204,17 @@ struct Check {
     bool wav = false;
 };
 
+// [[margin_watch]]: every video frame whose script frame lies in [from, to] (a wait holds the script frame, so one wait
+// is covered by `from = to = its at`), the GPU renderer's picture is rendered and its outer columns looked at: the
+// number of times they switch between black and lit from one frame to the next must not exceed `lit_changes_max`.
+// `strip` writes a contact sheet of up to 48 consecutive frames around the first switch next to the check screenshots.
+struct MarginWatch {
+    int64_t from = 0, to = 0;
+    std::string label;
+    int lit_changes_max = 0;
+    bool strip = false;
+};
+
 // [[savestate]] / [[loadstate]]
 struct StateOp {
     int64_t at = 0;
@@ -219,6 +237,7 @@ struct Scenario {
     int64_t start_frame = 0;
     std::vector<Wait> waits;  // sorted by `at`
     std::vector<Check> checks;  // sorted by `at`
+    std::vector<MarginWatch> margin_watches;
 };
 
 constexpr int64_t kIntroSkipFrame = 300;

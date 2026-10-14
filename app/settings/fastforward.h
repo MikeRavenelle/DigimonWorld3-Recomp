@@ -44,6 +44,13 @@ public:
     }
     double speed() const { return multiplier_; }
 
+    // How far emulated time is behind the clock at `now_ns` (zero or negative when ahead).
+    int64_t lag_ns(uint64_t now_ns, int64_t cycles) const {
+        if (multiplier_ == 0.0) return 0;
+        const double elapsed = static_cast<double>(cycles - anchor_cycles_) * 1e9 / (kCpuHz * multiplier_);
+        return static_cast<int64_t>(now_ns) - static_cast<int64_t>(anchor_ns_ + static_cast<uint64_t>(elapsed));
+    }
+
     // How long to wait from `now_ns` before the frame that ended at `cycles` is due (0: not at all).
     uint64_t delay_ns(uint64_t now_ns, int64_t cycles) {
         if (multiplier_ == 0.0) return 0;

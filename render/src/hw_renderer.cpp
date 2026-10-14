@@ -82,6 +82,8 @@ constexpr std::size_t kVertexBufferBytes = 48u << 20;
 constexpr std::size_t kStagingBytes = 16u << 20;
 constexpr std::size_t kReadbackBytes = 8u << 20;
 constexpr std::size_t kMaxPendingVertices = 200000;
+constexpr int kFrameBufferRows = 256;  // the two frame buffers sit at y = 0 and y = 256
+constexpr int kWideEnterFrames = 4;   // trusted frames in a row before the wide picture is shown again
 // Frames the CPU may run ahead of the GPU: each slot has its own command buffer, fence and upload buffers.
 constexpr int kFramesInFlight = 2;
 
@@ -223,6 +225,8 @@ struct HwRenderer::Impl {
     // Field mode shows the copy only when the frame's map was resolved (wide_known), and the frame buffer last drawn into
     // is the one the next flip finishes.
     bool wide_known[2] = {false, false};
+    int wide_trusted_frames = 0;  // consecutive finished frames whose map was resolved from enough sprites
+    bool wide_shown = false;
     int drawing_buffer = 0;
     bool seamless_inside = true;  // the pieces the game left out are also drawn inside the 4:3 area
     int target_width() const { return kVramWidth + (wide.enabled() ? wide.width() : 0); }
@@ -1551,7 +1555,7 @@ void HwRenderer::triangle(std::span<uint16_t>, const DrawState& s, const Primiti
     if (m.mirrors(s)) {
         // World geometry (drawn with a screen-centre offset) keeps its position relative to the centre; flat 2D
         // shapes that touch the frame edge stretch to the edge of the wide frame.
-        const bool world = s.off_x != 0 || s.off_y != 0;
+        const bool world = s.off_x != 0 || s.off_y != (s.area_y1 >= kFrameBufferRows ? kFrameBufferRows : 0);
         const bool stretch = !world && !uses_texture(s, f);
         GpuVertex t[3] = {v[0], v[1], v[2]};
         for (GpuVertex& g : t) {
@@ -1649,8 +1653,13 @@ void HwRenderer::display_flipped() {
     Impl& m = *impl_;
     if (!m.library) return;
     m.flush_backdrop();
-    m.wide_known[m.drawing_buffer] = m.backdrop.resolve();
-    if (m.wide_mode == WideMode::Field) ++(m.wide_known[m.drawing_buffer] ? m.stats.wide_field_frames : m.stats.wide_field_fallbacks);
+    // A load or transition shrinks the picture and leaves few background sprites to go by: those frames, and the
+    // frames around a switch, stay at 4:3, so the margins never alternate between map, stale content and black.
+    const bool trusted = m.backdrop.resolve();
+    m.wide_trusted_frames = trusted ? m.wide_trusted_frames + 1 : 0;
+    m.wide_shown = m.wide_trusted_frames >= (m.wide_shown ? 1 : kWideEnterFrames);
+    m.wide_known[0] = m.wide_known[1] = m.wide_shown;
+    if (m.wide_mode == WideMode::Field) ++(m.wide_shown ? m.stats.wide_field_frames : m.stats.wide_field_fallbacks);
     m.backdrop.begin_frame();
 }
 
@@ -1975,6 +1984,8 @@ void HwRenderer::set_wide_mode(WideMode mode) {
     m.mirror = mode != WideMode::Off;
     m.wide_ready[0] = m.wide_ready[1] = false;
     m.wide_known[0] = m.wide_known[1] = false;
+    m.wide_trusted_frames = 0;
+    m.wide_shown = false;
 }
 
 void HwRenderer::set_texture_dump(const std::string& directory) {

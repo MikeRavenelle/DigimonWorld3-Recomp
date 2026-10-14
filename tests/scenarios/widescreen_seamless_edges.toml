@@ -1,0 +1,170 @@
+name = "widescreen_seamless_edges"
+description = "16:9 widescreen fields with seamless backgrounds at the highest internal resolution along the street, the bridge and the park of Asuka City: the outermost columns of the wide picture show the map, never the placeholder squares or stale content."
+start_state = "new_game.state"   # written by new_game_state.toml
+start_frame = 1473
+frames = 2120
+memcard = "blank"
+settings = ["graphics.widescreen=16:9", "graphics.seamless_bg=true", "graphics.internal_res=4"]
+
+# The start state is New Game up to Asuka City Central Sector (new_game_state.toml plays the shared prefix
+# common/new_game.toml, which documents the RAM words used below). From there the script is driven by RAM:
+#
+#   map id    0x800554D4 (word): 0x1C3 Asuka City Central Sector, 0x1C4 Asuka Bridge (gate chamber), 0x1D2
+#                                Central Park (field), 0x1FA battle arena
+#   game mode 0x800554D0 (word): 2 field, 5/0xE scene transition, 6 battle, 0x14 battle results
+#   enemy HP  0x800A3260 (half): current HP of the first enemy (max HP at 0x800A325E); 0 once it is defeated
+#
+# Walking onto the red exit arrow of a map edge needs CROSS to take the exit.
+
+# Central Sector: along the street (same legs as save_load_roundtrip.toml) to the exit arrow at the city gate.
+[[walk]]
+at = 1474
+label = "to the gate 1"
+x = { via = 0x8004ADC0, addr = 0x58, size = 4 }
+z = { via = 0x8004ADC0, addr = 0x5C, size = 4 }
+target = [819, 521]
+tolerance = 10
+axes = "x"
+timeout = 900
+guard = [{ addr = 0x800554D4, size = 4, value = 0x1C3 }]
+
+[[walk]]
+at = 1475
+label = "to the gate 2"
+x = { via = 0x8004ADC0, addr = 0x58, size = 4 }
+z = { via = 0x8004ADC0, addr = 0x5C, size = 4 }
+target = [801, 482]
+tolerance = 10
+axes = "z"
+timeout = 900
+guard = [{ addr = 0x800554D4, size = 4, value = 0x1C3 }]
+
+[[walk]]
+at = 1476
+label = "to the gate 3"
+x = { via = 0x8004ADC0, addr = 0x58, size = 4 }
+z = { via = 0x8004ADC0, addr = 0x5C, size = 4 }
+target = [577, 610]
+tolerance = 10
+timeout = 900
+guard = [{ addr = 0x800554D4, size = 4, value = 0x1C3 }]
+
+[[walk]]
+at = 1477
+label = "to the gate 4"
+x = { via = 0x8004ADC0, addr = 0x58, size = 4 }
+z = { via = 0x8004ADC0, addr = 0x5C, size = 4 }
+target = [173, 595]
+tolerance = 10
+axes = "x"
+timeout = 900
+guard = [{ addr = 0x800554D4, size = 4, value = 0x1C3 }]
+
+[[walk]]
+at = 1478
+label = "to the gate 5"
+x = { via = 0x8004ADC0, addr = 0x58, size = 4 }
+z = { via = 0x8004ADC0, addr = 0x5C, size = 4 }
+target = [253, 531]
+tolerance = 10
+axes = "z"
+timeout = 900
+guard = [{ addr = 0x800554D4, size = 4, value = 0x1C3 }]
+
+[[walk]]
+at = 1479
+label = "to the gate 6"
+x = { via = 0x8004ADC0, addr = 0x58, size = 4 }
+z = { via = 0x8004ADC0, addr = 0x5C, size = 4 }
+target = [257, 749]
+tolerance = 10
+axes = "z"
+timeout = 900
+guard = [{ addr = 0x800554D4, size = 4, value = 0x1C3 }]
+
+[[walk]]
+at = 1480
+label = "to the gate 7"
+x = { via = 0x8004ADC0, addr = 0x58, size = 4 }
+z = { via = 0x8004ADC0, addr = 0x5C, size = 4 }
+target = [67, 799]
+tolerance = 10
+axes = "x"
+timeout = 900
+guard = [{ addr = 0x800554D4, size = 4, value = 0x1C3 }]
+
+[[check]]
+at = 1482
+label = "Central Sector gate bridge"
+display_enabled = true
+margin_colors_min = 16
+screenshot = true
+
+# CROSS on the exit arrow leads to the Asuka Bridge (0x1C4), where a second arrow at the far end leads on.
+[[wait]]
+at = 1486
+label = "Asuka Bridge"
+ram = [{ addr = 0x800554D4, size = 4, value = 0x1C4 }, { addr = 0x800554D0, size = 4, value = 2 }]
+timeout = 1500
+press = "CROSS"
+every = 10
+press_hold = 3
+
+[[walk]]
+at = 1488
+label = "to the Central Park arrow"
+x = { via = 0x8004ADC0, addr = 0x58, size = 4 }
+z = { via = 0x8004ADC0, addr = 0x5C, size = 4 }
+target = [226, 494]
+tolerance = 5
+timeout = 900
+guard = [{ addr = 0x800554D4, size = 4, value = 0x1C4 }]
+
+[[check]]
+at = 1490
+label = "Asuka Bridge"
+display_enabled = true
+margin_colors_min = 16
+screenshot = true
+
+[[wait]]
+at = 1494
+label = "Central Park"
+ram = [{ addr = 0x800554D4, size = 4, value = 0x1D2 }, { addr = 0x800554D0, size = 4, value = 2 }]
+timeout = 1500
+press = "CROSS"
+every = 10
+press_hold = 3
+
+[[check]]
+at = 1744
+label = "Central Park"
+display_enabled = true
+margin_colors_min = 16
+screenshot = true
+
+# The encounter, as in field_battle.toml. With widescreen on, the headless GPU renderer keeps a wider copy of the battle's
+# frame buffers; the check renders it at 1280x720, where the outer tenth of the columns lies beside the 4:3 area
+# (a black pillarbox at 4:3, see widescreen_battle_4x3.toml) and must now show the arena.
+[[wait]]
+at = 1804
+label = "random encounter"
+ram = [{ addr = 0x800554D0, size = 4, value = 6 }]
+timeout = 4000
+hold = ["LEFT"]
+
+[[check]]
+at = 2104
+label = "battle menu"
+display_enabled = true
+ram = [{ addr = 0x800554D0, size = 4, value = 6 }, { addr = 0x800A3260, size = 2, value = 0, cmp = "gt" }]
+margin_colors_min = 16
+screenshot = true
+
+# The battle menu is the fixture for widescreen_battle_4x3.toml.
+[[check]]
+at = 2118
+label = "still drawing"
+margin_colors_min = 16
+screenshot = true
+

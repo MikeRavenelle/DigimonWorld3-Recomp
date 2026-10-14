@@ -2,8 +2,11 @@
 
 #include <algorithm>
 #include <cmath>
+#include <functional>
+#include <vector>
 
 #include "display.h"
+#include "fastforward.h"
 
 using namespace dw3app;
 
@@ -144,4 +147,117 @@ TEST(GammaMaths, SettingsPercentConvertToTheShaderValues) {
     EXPECT_FLOAT_EQ(gamma_from_percent(140), 1.4f);
     EXPECT_FLOAT_EQ(brightness_from_percent(50), 0.25f);
     EXPECT_FLOAT_EQ(brightness_from_percent(-50), -0.25f);
+}
+
+namespace {
+
+constexpr int64_t kFrameNs = 16683000;  // one 59.94 Hz frame
+
+// Plays frames against a display that completes a present every `gap_for_frame(f)` ns while it reports
+// `reported_hz`. Emulation falls behind real time when a frame's presents last longer than a real-time frame.
+struct CadenceRun {
+    PresentCadence cadence;
+    std::vector<int> repeats;
+    int64_t lag_ns = 0;
+
+    void play(int frames, double reported_hz, const std::function<int64_t(int)>& gap_for_frame) {
+        cadence.set_enabled(true);
+        cadence.set_reported_hz(reported_hz);
+        for (int f = 0; f < frames; ++f) {
+            const int presents = cadence.plan_frame();
+            const int64_t gap = gap_for_frame(f);
+            for (int i = 1; i < presents; ++i) cadence.on_present_gap(gap);
+            lag_ns = std::max<int64_t>(0, lag_ns + presents * gap - kFrameNs);
+            if (cadence.end_frame(lag_ns)) lag_ns = 0;
+            repeats.push_back(presents);
+        }
+    }
+};
+
+}  // namespace
+
+TEST(PresentCadence, RepeatsForMeasuredGaps) {
+    EXPECT_EQ(PresentCadence::repeats_for_gap(8333000), 2);
+    EXPECT_EQ(PresentCadence::repeats_for_gap(5555000), 3);
+    EXPECT_EQ(PresentCadence::repeats_for_gap(4167000), 4);
+    EXPECT_EQ(PresentCadence::repeats_for_gap(16667000), 1);
+    EXPECT_EQ(PresentCadence::repeats_for_gap(6944000), 1);  // 144 Hz
+    EXPECT_EQ(PresentCadence::repeats_for_gap(0), 1);
+}
+
+TEST(PresentCadence, RealOneTwentyDoublesEveryFrame) {
+    CadenceRun run;
+    run.play(300, 120.0, [](int) { return 8333000LL; });
+    EXPECT_EQ(run.repeats.back(), 2);
+    EXPECT_EQ(run.cadence.repeats(), 2);
+}
+
+TEST(PresentCadence, ReportedOneTwentyDeliveredSixtyStaysSingle) {
+    CadenceRun run;
+    run.play(2000, 119.93, [](int) { return 16683000LL; });
+    EXPECT_EQ(run.cadence.repeats(), 1);
+    EXPECT_LE(std::count(run.repeats.begin(), run.repeats.end(), 2), 8);  // probes back off
+    EXPECT_EQ(run.repeats.back(), 1);
+}
+
+TEST(PresentCadence, ReportedSixtyNeverRepeats) {
+    CadenceRun run;
+    run.play(500, 59.94, [](int) { return 8333000LL; });
+    EXPECT_EQ(std::count(run.repeats.begin(), run.repeats.end(), 1), 500);
+}
+
+TEST(PresentCadence, VariableRefreshJitterKeepsTheRepeats) {
+    CadenceRun run;
+    run.play(400, 120.0, [](int f) { return (7600 + (f * 37) % 1100) * 1000LL; });
+    EXPECT_EQ(run.cadence.repeats(), 2);
+}
+
+TEST(PresentCadence, RefreshChangeMidRunFallsBackAndComesBack) {
+    CadenceRun run;
+    run.play(300, 120.0, [](int) { return 8333000LL; });
+    ASSERT_EQ(run.cadence.repeats(), 2);
+    // A frame limiter turns on: presents take 16.7 ms although 120 Hz is still reported.
+    run.play(40, 120.0, [](int) { return 16683000LL; });
+    EXPECT_EQ(run.cadence.repeats(), 1);
+    // The limiter turns off; a later probe finds 120 Hz again.
+    run.play(1000, 120.0, [](int) { return 8333000LL; });
+    EXPECT_EQ(run.cadence.repeats(), 2);
+}
+
+TEST(PresentCadence, FallsBackAtOnceWhenEmulationFallsBehind) {
+    PresentCadence cadence;
+    cadence.set_enabled(true);
+    cadence.set_reported_hz(120.0);
+    for (int i = 0; i < PresentCadence::kFirstWaitFrames; ++i) cadence.plan_frame();
+    cadence.on_present_gap(8333000);
+    cadence.end_frame(0);
+    ASSERT_EQ(cadence.repeats(), 2);
+    EXPECT_TRUE(cadence.end_frame(PresentCadence::kMaxLagNs + 1));
+    EXPECT_EQ(cadence.repeats(), 1);
+    EXPECT_EQ(cadence.plan_frame(), 1);
+}
+
+TEST(PresentCadence, DisabledPacingNeverRepeats) {
+    PresentCadence cadence;
+    cadence.set_reported_hz(120.0);
+    for (int i = 0; i < 500; ++i) EXPECT_EQ(cadence.plan_frame(), 1);
+    cadence.set_enabled(true);
+    for (int i = 0; i < 200; ++i) cadence.plan_frame();
+    cadence.set_enabled(false);
+    EXPECT_EQ(cadence.plan_frame(), 1);
+    EXPECT_EQ(cadence.repeats(), 1);
+}
+
+TEST(Pacer, KeepsRealTimeWhenTheDisplayIsAtLeastAsFast) {
+    Pacer pacer;
+    pacer.reset(0, 0);
+    uint64_t now = 0;
+    int64_t cycles = 0;
+    constexpr int64_t kFrameCycles = 564480;  // one 59.94 Hz frame
+    for (int f = 0; f < 3600; ++f) {
+        cycles += kFrameCycles;
+        now += 16667000;  // a 60.00 Hz display with vsync on delivers the present
+        now += pacer.delay_ns(now, cycles);
+    }
+    EXPECT_NEAR(static_cast<double>(cycles) / Pacer::kCpuHz, static_cast<double>(now) / 1e9, 0.01);
 }

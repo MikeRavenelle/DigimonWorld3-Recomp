@@ -306,8 +306,12 @@ before. Options that only matter in the field, such as the encounter rate, can b
 - Vertical sync `adaptive` needs a presenter that supports it (the software path through SDL, where the driver
   allows); the GPU renderer treats it as `on`, and the in-game row does not offer it there.
 - Frame pacing `even` (with vertical sync on) shows each emulated frame for the same whole number of refreshes when the
-  display runs at a multiple of 60 Hz (120, 180, 240); other rates, such as 144 Hz, cannot be paced evenly and keep
-  the plain behaviour. There is no frame interpolation.
+  display really delivers 120, 180 or 240 Hz. The refresh rate the system reports is only a hint: the game measures the
+  time between back-to-back presents (a rolling median) and repeats presents only while that interval is about 1/120,
+  1/180 or 1/240 s. It checks again every few seconds and at once drops back to a single present when the interval is
+  longer (a compositor frame limiter such as the one in Steam's Game Mode, a variable refresh rate display) or when
+  emulation would fall behind real time, so the game always runs at 59.94 Hz. Other rates, such as 144 Hz, keep the
+  plain behaviour. There is no frame interpolation.
 - Show FPS draws the emulated frame rate small in the top-right corner (not part of screenshots).
 - Gamma and brightness are applied in the colour-grading pass of the GPU renderer, after the colour grade. They are
   not part of any visual preset, like the display options.

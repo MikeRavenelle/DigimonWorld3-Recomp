@@ -4,6 +4,7 @@
 #pragma once
 
 #include <cstddef>
+#include <cstdint>
 #include <span>
 #include <string>
 #include <vector>
@@ -57,6 +58,49 @@ std::string mode_label(ScreenMode mode);   // "1920x1080 144"
 // How many monitor refreshes each emulated frame is shown for so that every frame lasts the same time: 1 at 60 Hz,
 // 2 at 120 Hz, and so on. 0 when the refresh rate is no whole multiple of the console's 60 Hz (144 Hz, 75 Hz).
 int refreshes_per_frame(double refresh_hz);
+
+// Decides how many times each emulated frame is presented, from the measured time between back-to-back presents
+// instead of the refresh rate the system reports (a compositor such as gamescope can report 120 Hz and still deliver
+// 60). The reported rate only says whether a probe is worth trying. A probe presents one frame several times; the
+// gaps between those presents are the real vblank interval. Repeats are used only while the median gap really is
+// about 1/120, 1/180 or 1/240 s, and are dropped at once when it is not or when emulation falls behind real time.
+class PresentCadence {
+public:
+    static constexpr int kWindow = 5;                // gaps in the rolling median
+    static constexpr int kMinSamples = 3;            // gaps needed before an active verdict can change
+    static constexpr int kFirstWaitFrames = 120;     // frames to wait before probing again after a failure
+    static constexpr int kMaxWaitFrames = 3600;
+    static constexpr int64_t kMaxLagNs = 25000000;   // emulation this far behind real time ends the repeats
+
+    // False whenever frames are not paced to the display (vsync off, pacing off, fast-forward, uncapped).
+    void set_enabled(bool enabled);
+    void set_reported_hz(double hz);
+
+    // Presents for the next frame, at least 1.
+    int plan_frame();
+    // Time between two back-to-back presents of one frame completing.
+    void on_present_gap(int64_t gap_ns);
+    // After the frame: how far emulated time is behind real time (negative or zero when ahead). Returns true when
+    // repeats were just dropped, so the caller restarts its real-time pacing instead of chasing the lag.
+    bool end_frame(int64_t lag_ns);
+
+    int repeats() const { return state_ == State::Active ? repeats_ : 1; }
+    // The repeat count a median gap stands for: 2..4 when it is about 1/120, 1/180 or 1/240 s, otherwise 1.
+    static int repeats_for_gap(int64_t gap_ns);
+
+private:
+    enum class State { Single, Probe, Active };
+    int64_t median_gap() const;
+    void fall_back();
+
+    State state_ = State::Single;
+    bool enabled_ = false;
+    int candidate_ = 1;  // repeats the reported refresh suggests
+    int repeats_ = 1;
+    int wait_frames_ = kFirstWaitFrames, frames_waited_ = 0;
+    int64_t gaps_[kWindow] = {};
+    int gap_count_ = 0, gap_next_ = 0;
+};
 
 // The picture's gamma and brightness from the settings (percent values), and the curve the grading pass applies to
 // one colour channel in 0..1. Gamma above 1 brightens the midtones; brightness is added afterwards.
