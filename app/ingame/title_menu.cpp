@@ -32,10 +32,10 @@ constexpr uint32_t kObjectState = 0x0C, kObjectTick = 0x48, kObjectCleanupAt = 0
 constexpr uint32_t kFadeLevel = 0x5C, kFadeHeld = 2;  // the fade stays at its level in state 2; level 0xFF00 is black
 constexpr uint32_t kFadeDimmed = 0x8800;
 constexpr uint32_t kLayer = 0x1000, kStyleText = 1;  // the only layer the title has
-constexpr uint32_t kWindowShow = 0x148;  // (window, 1) lays the box out
 constexpr uint32_t kCursorShow = 0x80;  // (cursor, 1) shows it; 0 hides it
-// Centred on the 320-pixel screen: the field menu sits right of the party panels, the title has nothing beside it.
-constexpr uint32_t kHeaderX = 126, kHeaderY = 19, kRowX = 104, kTitleCursorX = kRowX - (189 - kCursorX);
+// Centred on the 320-pixel screen (the field menu sits right of the party panels, the title has nothing beside it):
+// these are where the windows start, the first draw moves them to the centre of their text.
+constexpr uint32_t kHeaderX = 126, kHeaderY = 19, kRowX = 104, kTitleCursorX = cursor_x_for(kRowX);
 constexpr uint32_t kHintX = 100, kHintY = 8;
 constexpr uint32_t kRows = 5;
 
@@ -68,6 +68,7 @@ struct TitleHook {
         ScreenWindows& w = self.windows_;
         w.header = make_window(g, kHeaderX, kHeaderY);
         w.row_count = kRows;
+        w.centred = true;
         for (uint32_t i = 0; i < kRows; ++i) w.rows[i] = make_window(g, kRowX, kFirstRowY + kRowPitch * i);
         w.cursor = g.call(kCreateCursor, kLayer, 0, kTitleCursorX, kFirstRowY);
         w.cursor_x = kTitleCursorX;

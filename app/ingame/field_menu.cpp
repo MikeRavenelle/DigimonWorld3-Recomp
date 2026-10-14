@@ -91,7 +91,10 @@ struct MenuHook {
         ctx->r[4] = task;
         ctx->r[5] = windows;
         self.machine_.lookup_original(kListTaskFunction)(ctx);
-        if (!close) draw_screen(g, windows_of(g, windows, rows), selected, self.model_);
+        if (!close) {
+            ScreenWindows screen = windows_of(g, windows, rows);
+            draw_screen(g, screen, selected, self.model_);
+        }
     }
 
     static void list_task(RecompContext* ctx) {
@@ -116,7 +119,8 @@ struct MenuHook {
             g.w32(task + kScreenCursor, 0);
             g.w32(task + kScreenMarker, kScreenOpen);
             g.play(kSoundConfirm);
-            draw_screen(g, windows_of(g, windows, g.r32(task + kRowCount)), 0, self->model_);
+            ScreenWindows screen = windows_of(g, windows, g.r32(task + kRowCount));
+            draw_screen(g, screen, 0, self->model_);
         }
     }
 };

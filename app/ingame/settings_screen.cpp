@@ -23,8 +23,8 @@ bool Guest::shows(uint32_t window, const std::vector<uint8_t>& text) const {
     return true;
 }
 
-void Guest::show(uint32_t window, const std::vector<uint8_t>& text) {
-    if (shows(window, text)) return;
+bool Guest::show(uint32_t window, const std::vector<uint8_t>& text) {
+    if (shows(window, text)) return false;
     // The game copies the string while it is called; a frame below the stack pointer keeps it clear of the callee's
     // own frames.
     const uint32_t sp = ctx_->r[29];
@@ -34,6 +34,14 @@ void Guest::show(uint32_t window, const std::vector<uint8_t>& text) {
     ctx_->r[29] = frame;
     call(r32(window + kWindowSetText), window, frame + kStringOffset, 0xFFFFFFFFu);
     ctx_->r[29] = sp;
+    return true;
+}
+
+uint32_t Guest::text_width(uint32_t window) {
+    call(r32(window + kWindowShow), window, 1);
+    const uint32_t width = r16(window + kWindowTextWidth);
+    w16(window + kWindowTextWidth, 0);  // a width there aligns the text to the right of its x
+    return width;
 }
 
 bool Guest::pressed(Button b, bool with_repeat) const {
@@ -96,14 +104,14 @@ std::string close_name_of(const ScreenModel& model) {
 
 namespace {
 
-void move_cursor(Guest& g, uint32_t cursor, uint32_t x, uint32_t row) {
+void move_cursor(Guest& g, uint32_t cursor, uint32_t x, uint32_t row, bool check_x) {
     const uint32_t y = kFirstRowY + kRowPitch * row;
-    if (g.r32(cursor + kCursorTargetY) != y) g.call(g.r32(cursor + kCursorMoveTo), cursor, x, y);
+    if (g.r32(cursor + kCursorTargetY) != y || (check_x && g.r32(cursor + kCursorTargetX) != x)) g.call(g.r32(cursor + kCursorMoveTo), cursor, x, y);
 }
 
 }  // namespace
 
-void draw_screen(Guest& g, const ScreenWindows& windows, uint32_t selected, const ScreenModel& model) {
+void draw_screen(Guest& g, ScreenWindows& windows, uint32_t selected, const ScreenModel& model) {
     const auto& list = entries();
     const uint32_t count = static_cast<uint32_t>(list.size());
     const uint32_t rows = windows.row_count;
@@ -111,15 +119,25 @@ void draw_screen(Guest& g, const ScreenWindows& windows, uint32_t selected, cons
     const Settings view = view_of(model);
     const uint32_t top = std::min(selected > 2 ? selected - 2 : 0u, count > rows ? count - rows : 0u);
     const auto [page_first, page_count] = page_range(selected);
-    g.show(windows.header,
-           context.capturing ? text_of({"Press key - Esc cancels"})
-                             : text_of({page_name(list[selected].page), "  ", std::to_string(selected - page_first + 1),
-                                        " of ", std::to_string(page_count)}));
+    const bool header_changed = g.show(
+        windows.header, context.capturing
+                            ? text_of({"Press key - Esc cancels"})
+                            : text_of({page_name(list[selected].page), "  ", std::to_string(selected - page_first + 1),
+                                       " of ", std::to_string(page_count)}));
+    if (windows.centred && header_changed) g.set_window_x(windows.header, centred_x(g.text_width(windows.header)));
+    bool rows_changed = windows.top != top;
     for (uint32_t i = 0; i < rows; ++i) {
         const uint32_t at = top + i;
-        g.show(windows.rows[i], at < count ? text_of({row_text(view, list[at], context)}) : text_of({""}));
+        rows_changed |= g.show(windows.rows[i], at < count ? text_of({row_text(view, list[at], context)}) : text_of({""}));
     }
-    move_cursor(g, windows.cursor, windows.cursor_x, selected - top);
+    if (windows.centred && rows_changed) {
+        uint32_t widest = 0;
+        for (uint32_t i = 0; i < rows; ++i) widest = std::max(widest, g.text_width(windows.rows[i]));
+        for (uint32_t i = 0; i < rows; ++i) g.set_window_x(windows.rows[i], column_x(widest));
+        windows.cursor_x = cursor_x_for(column_x(widest));
+    }
+    windows.top = top;
+    move_cursor(g, windows.cursor, windows.cursor_x, selected - top, windows.centred);
 }
 
 bool step_screen(Guest& g, ScreenModel& model, uint32_t& selected) {
