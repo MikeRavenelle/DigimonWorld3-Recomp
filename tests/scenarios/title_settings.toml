@@ -7,6 +7,9 @@ frames = 3000
 #   +0x74 marker 0x53455453 while the settings screen is open (the screen's own windows draw, the menu task stands
 #   still), +0x78 settings cursor. The screen's first row window is at 0x800D9368 and keeps a pointer to its text at
 #   +0x5C; the text is in the game's own encoding (P = 0x1D, E = 0x12).
+#   The header window is at 0x800D91E8 and the row windows follow; a window's left edge is the halfword at +0xB0
+#   (header 0x800D9298, first row 0x800D9418); a width in the halfword at +0xBC would right-align the text, so it stays 0.
+#   on the 320-pixel screen whenever its text changes and the rows as a column on the widest of them.
 #   game mode 0x800554D0: 0xE title, 2 field and scenes.
 
 [[press]]
@@ -41,6 +44,7 @@ ram = [
     { addr = 0x800554D0, size = 4, value = 0xE },
     { addr = 0x800D9008, size = 4, value = 0 },
     { via = 0x800D93C4, addr = 0, size = 1, value = 0x1D },
+    { addr = 0x800D9298, size = 2, value = 109 },
 ]
 screenshot = true
 
@@ -64,8 +68,9 @@ timeout = 300
 
 [[check]]
 at = 1020
-label = "gameplay page shown"
+label = "gameplay page, header centred on its text"
 display_enabled = true
+ram = [{ addr = 0x800D9298, size = 2, value = 111 }, { addr = 0x800D9418, size = 2, value = 106 }]
 screenshot = true
 
 # The screen stays open for as long as it is left alone (the menu task would time out on its own).

@@ -45,12 +45,25 @@ constexpr uint32_t kSoundCancel = 0x800450BD;
 
 // Window object methods (through the window's own table) and fields.
 constexpr uint32_t kWindowSetText = 0x114;  // (window, string pointer, -1) copies the string into the window
+constexpr uint32_t kWindowShow = 0x148;    // (window, 1) lays the text out
 constexpr uint32_t kWindowText = 0x5C;      // pointer to the window's current text
+constexpr uint32_t kWindowX = 0xB0;         // halfword: the left edge of the text
+constexpr uint32_t kWindowTextWidth = 0xBC; // halfword: the width of the laid-out text in pixels, set by the show method; the text then ends at x
 constexpr uint32_t kCursorMoveTo = 0x84;    // (cursor, x, y)
+constexpr uint32_t kCursorTargetX = 0x58;
 constexpr uint32_t kCursorTargetY = 0x5C;
 constexpr uint32_t kCursorX = 176;
 constexpr uint32_t kFirstRowY = 49, kRowPitch = 14;
 constexpr uint32_t kMaxRows = 6;
+
+constexpr uint32_t kScreenWidth = 320;
+constexpr uint32_t kCursorGap = 13;  // pixels between the cursor and the left edge of the rows
+
+// The left edge that centres something `width` pixels wide on the screen.
+constexpr uint32_t centred_x(uint32_t width) { return width >= kScreenWidth ? 0 : (kScreenWidth - width) / 2; }
+// The left edge of a column of rows whose widest is `widest` pixels, centred on the screen.
+constexpr uint32_t column_x(uint32_t widest) { return centred_x(widest); }
+constexpr uint32_t cursor_x_for(uint32_t column) { return column > kCursorGap ? column - kCursorGap : 0; }
 
 constexpr uint32_t kScratchFrame = 0x100;  // guest stack taken for a string handed to the game
 constexpr uint32_t kStringOffset = 0x20;
@@ -73,7 +86,12 @@ public:
     }
     // The window's text equals `text` (an encoded, zero-terminated string).
     bool shows(uint32_t window, const std::vector<uint8_t>& text) const;
-    void show(uint32_t window, const std::vector<uint8_t>& text);
+    // Sets the window's text; true when it changed.
+    bool show(uint32_t window, const std::vector<uint8_t>& text);
+    // Measures the window's text with the game's own layout and returns its width in pixels. The window keeps drawing
+    // from its left edge.
+    uint32_t text_width(uint32_t window);
+    void set_window_x(uint32_t window, uint32_t x) { w16(window + kWindowX, x); }
     void play(uint32_t cue) { call(r32(kPlaySound), cue); }
     bool pressed(Button b, bool with_repeat) const;
     void consume_input();
@@ -92,6 +110,10 @@ struct ScreenWindows {
     uint32_t cursor = 0;
     uint32_t cursor_x = kCursorX;
     uint32_t row_count = 0;
+    // The title's screen has the whole width: the header and the column of rows are centred on it. The field menu's
+    // windows sit where the game puts them.
+    bool centred = false;
+    uint32_t top = ~0u;  // first entry shown, to tell when the rows scroll
 };
 
 // The settings with the changes made on the screen applied.
@@ -104,7 +126,7 @@ std::string select_name_of(const ScreenModel& model);
 std::string close_name_of(const ScreenModel& model);
 
 // Draws the page the row `selected` belongs to into the windows.
-void draw_screen(Guest& g, const ScreenWindows& windows, uint32_t selected, const ScreenModel& model);
+void draw_screen(Guest& g, ScreenWindows& windows, uint32_t selected, const ScreenModel& model);
 
 // Follows the pad for one frame: moves the cursor (`selected`), changes values, waits for key captures. The pad is
 // consumed. Returns true when the player closed the screen.

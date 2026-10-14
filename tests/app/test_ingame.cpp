@@ -6,6 +6,7 @@
 
 #include "game_text.h"
 #include "settings_list.h"
+#include "settings_screen.h"
 
 using namespace dw3app;
 using namespace dw3app::ingame;
@@ -381,4 +382,21 @@ TEST(IngameList, WidescreenRowCyclesTheAspects) {
     apply(s, e, "21:9");
     apply(s, e, stepped_value(s, e, 1));
     EXPECT_EQ(value_label(s, e), "Off");
+}
+
+TEST(ScreenLayout, CentresWidthOnTheScreen) {
+    EXPECT_EQ(dw3app::ingame::centred_x(100), 110u);
+    EXPECT_EQ(dw3app::ingame::centred_x(101), 109u);
+    EXPECT_EQ(dw3app::ingame::centred_x(0), 160u);
+}
+
+TEST(ScreenLayout, WideTextStartsAtTheLeftEdge) {
+    EXPECT_EQ(dw3app::ingame::centred_x(320), 0u);
+    EXPECT_EQ(dw3app::ingame::centred_x(400), 0u);
+}
+
+TEST(ScreenLayout, CursorSitsLeftOfTheColumn) {
+    EXPECT_EQ(dw3app::ingame::cursor_x_for(104), 91u);
+    EXPECT_EQ(dw3app::ingame::cursor_x_for(5), 0u);
+    EXPECT_EQ(dw3app::ingame::cursor_x_for(dw3app::ingame::column_x(200)), 47u);
 }
