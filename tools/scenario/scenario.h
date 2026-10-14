@@ -89,6 +89,12 @@
 //   is pending and resumes when its condition holds (or fails the run on timeout). Buttons held at the wait's
 //   script frame by a [[press]] stay held during the wait. Checks at the wait's own frame run before it ends.
 //
+//   [[flicker_watch]]          # needs `gpu = true`; see FlickerWatch below
+//   from = 3905
+//   to = 3990
+//   label = "battle menu"
+//   flicker_blocks_max = 40
+//
 //   [[margin_watch]]           # needs `gpu = true` (or a widescreen setting); see MarginWatch below
 //   from = 1486
 //   to = 1486
@@ -221,6 +227,19 @@ struct MarginWatch {
     bool strip = false;
 };
 
+// [[flicker_watch]]: every video frame whose script frame lies in [from, to] is rendered by the GPU renderer and compared
+// with the two different frames before it (a frame equal to the one before is the game showing a picture twice). A
+// pixel flickers when the middle picture differs from both neighbours although those two agree. The picture is cut into
+// 16x16 blocks (of its 640x360 grey version); a block flickers when a quarter of its pixels do. For every triple of
+// different pictures the number of flickering blocks must stay at or below `flicker_blocks_max`. Characters moving and
+// fine texture noise do not flicker whole blocks; a background that jumps for a frame and back (vertices falling back
+// to integer positions, wrong depths) does.
+struct FlickerWatch {
+    int64_t from = 0, to = 0;
+    std::string label;
+    int flicker_blocks_max = 40;
+};
+
 // [[poke]]
 struct Poke {
     int64_t at = 0;
@@ -253,6 +272,7 @@ struct Scenario {
     std::vector<Wait> waits;  // sorted by `at`
     std::vector<Check> checks;  // sorted by `at`
     std::vector<MarginWatch> margin_watches;
+    std::vector<FlickerWatch> flicker_watches;
 };
 
 constexpr int64_t kIntroSkipFrame = 300;

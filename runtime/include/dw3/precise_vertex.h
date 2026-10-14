@@ -10,7 +10,7 @@
 // Nothing in the generated code is involved: the words travel through RAM and DMA untouched, so a vertex that
 // still carries the word the GTE produced is found by value. A word the game changed (offsets, clipping, software
 // projection) simply misses and the vertex stays integer. A hit is only used when the integer word equals the
-// truncated precise position, and entries older than a couple of frames are ignored, so a stale or colliding
+// truncated precise position, and entries older than a few frames are ignored, so a stale or colliding
 // entry can shift a vertex by less than a pixel but never replaces it with an unrelated position.
 
 #include <cstdint>
@@ -28,8 +28,12 @@ struct PreciseVertex {
 
 class PreciseVertexCache {
 public:
-    // Entries older than this many frames are not returned.
-    static constexpr uint64_t kMaxAge = 2;
+    // Entries older than this many frames are not returned. The game draws a frame's polygons one to three video
+    // frames after the GTE projected them (it runs at 30 frames per second or less), so an entry has to outlive that.
+    static constexpr uint64_t kMaxAge = 4;
+
+    // Relative change of depth between two projections to one pixel above which they are taken for different vertices.
+    static constexpr double kMaxDepthStep = 0.25;
 
     PreciseVertexCache();
 
@@ -43,7 +47,8 @@ public:
     // the precise position (the GTE truncates) and the depth is positive.
     void record(int32_t sx, int32_t sy, double x, double y, double w);
 
-    // Looks up a GP0 vertex word. Returns false on a miss, a stale entry or a mismatch with the integer word.
+    // Looks up a GP0 vertex word. Returns false on a miss, a stale entry, a mismatch with the integer word, or a pixel
+    // that unrelated vertices share (their depths differ too much for one entry to be right for both).
     bool find(uint32_t word, PreciseVertex& out) const;
 
     // Drops every entry. The cache is transient (entries expire after kMaxAge frames) and is not part of a save
@@ -58,12 +63,13 @@ private:
         uint32_t key = 0;
         uint64_t frame = 0;
         bool valid = false;
+        uint64_t contested = 0;  // frame + 1 when another vertex with a very different depth last projected to this pixel
         PreciseVertex v;
     };
-    static constexpr std::size_t kSets = 4096;  // two ways each
+    static constexpr std::size_t kSets = 16384;  // two ways each
 
     uint64_t now() const { return clock_ ? clock_() : 0; }
-    static std::size_t set_of(uint32_t key) { return static_cast<std::size_t>((key * 0x9E3779B1u) >> 20); }  // top 12 bits
+    static std::size_t set_of(uint32_t key) { return static_cast<std::size_t>((key * 0x9E3779B1u) >> 18); }  // top 14 bits
 
     std::vector<Entry> entries_;
     std::function<uint64_t()> clock_;
