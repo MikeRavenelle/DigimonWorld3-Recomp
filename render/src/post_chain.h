@@ -8,6 +8,8 @@
 #include <functional>
 #include <initializer_list>
 #include <memory>
+#include <utility>
+#include <vector>
 
 #include "dw3/postfx.h"
 #include "plume_render_interface.h"
@@ -80,6 +82,22 @@ private:
                         const float b[4]);
     bool upload_lookups(plume::RenderCommandList* cmd);
     void build_smaa_sets();
+
+    // The picture's size changes during play (4:3 and widescreen frames, the console's other video modes, the window's
+    // picture rectangle). Targets of a size that is left are kept and put back when it returns, so switching never
+    // creates a texture or waits for the GPU after the first time a size is seen.
+    struct SourceTargets {
+        Target a, b, edges, weights;
+        std::unique_ptr<plume::RenderDescriptorSet> weights_set, blend_set;
+    };
+    struct WindowTargets {
+        Target a, b;
+    };
+    void select_source_size(uint32_t w, uint32_t h, const std::function<void()>& wait_idle);
+    void select_window_size(uint32_t w, uint32_t h, const std::function<void()>& wait_idle);
+    static constexpr std::size_t kSizesKept = 6;
+    std::vector<std::pair<std::pair<uint32_t, uint32_t>, SourceTargets>> spare_sources_;  // oldest first
+    std::vector<std::pair<std::pair<uint32_t, uint32_t>, WindowTargets>> spare_windows_;
 
     plume::RenderDevice* device_;
     plume::RenderShaderFormat format_;

@@ -5,9 +5,12 @@
 #include <algorithm>
 #include <array>
 #include <cassert>
+#include <chrono>
 #include <cstdio>
 #include <cstring>
+#include <limits>
 #include <map>
+#include <optional>
 #include <set>
 #include <tuple>
 
@@ -15,6 +18,7 @@
 #include "dw3/texrep/blocks.h"
 #include "dw3/texrep/dump.h"
 #include "dw3/texrep/field_backdrop.h"
+#include "dw3/texrep/image_loader.h"
 #include "dw3/texrep/pack.h"
 #include "dw3/vertex_builder.h"
 #include "dw3/vram_regions.h"
@@ -80,6 +84,14 @@ constexpr RenderFormat kSwapFormat = RenderFormat::B8G8R8A8_UNORM;
 
 constexpr std::size_t kVertexBufferBytes = 48u << 20;
 constexpr std::size_t kStagingBytes = 16u << 20;
+
+uint64_t elapsed_ns(std::chrono::steady_clock::time_point since) {
+    return static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - since).count());
+}
+
+// Pixels of decoded replacement images that are moved into the atlas per frame: bounds the copy work a frame does.
+constexpr std::size_t kInstallBytesPerFrame = 6u << 20;
+
 constexpr std::size_t kReadbackBytes = 8u << 20;
 constexpr std::size_t kMaxPendingVertices = 200000;
 constexpr int kFrameBufferRows = 256;  // the two frame buffers sit at y = 0 and y = 256
@@ -195,6 +207,25 @@ struct HwRenderer::Impl {
     std::map<ResidentKey, Resident> resident;  // (block, palette, kind) -> place in the atlas
     std::set<ResidentKey> unusable;            // entries whose image could not be loaded
     int atlas_epoch = 0;  // incremented whenever the atlas is cleared
+    // Pack images are decoded on worker threads: the first draw that wants one queues it and draws the original picture,
+    // a later frame installs the result (install_loaded_images).
+    std::unique_ptr<texrep::ImageLoader> loader;
+    std::map<ResidentKey, uint64_t> inflight;  // queued or decoded, not installed yet
+    std::map<uint64_t, ResidentKey> ticket_keys;
+    int prefetch_map = -1, prefetch_cell_x = 0, prefetch_cell_y = 0;
+    bool synchronous_replacements = false;  // HwOptions::synchronous_replacements
+    void install_loaded_images(std::size_t byte_budget = kInstallBytesPerFrame);
+    void prefetch_map_images();
+    // Forgets every replacement image: those in the atlas and those on their way.
+    void drop_replacements() {
+        resident.clear();
+        unusable.clear();
+        inflight.clear();
+        ticket_keys.clear();
+        atlas_alloc.reset();
+        ++atlas_epoch;
+        prefetch_map = -1;
+    }
     bool tracking() const { return pack || dump || library; }
     bool uses_atlas() const { return pack || library; }
 
@@ -320,8 +351,10 @@ struct HwRenderer::Impl {
     }
     void wait_slot(Slot& s) {
         if (!s.pending) return;
+        const auto started = std::chrono::steady_clock::now();
         queue->waitForCommandFence(s.fence.get());
         s.pending = false;
+        stats.gpu_wait_ns += elapsed_ns(started);
     }
     void wait_all() {
         for (Slot& s : slots) wait_slot(s);
@@ -385,6 +418,7 @@ bool HwRenderer::Impl::init(const NativeWindow* window, int internal_scale, cons
     precise = options.precise_geometry;
     wide = options.wide_frame;
     seamless_inside = options.seamless_inside;
+    synchronous_replacements = options.synchronous_replacements;
     pack = options.texture_pack;
     reset_backdrop(options.stage_library);
     layer = options.true_color || options.filter != TextureFilter::Nearest || pack || library;
@@ -473,10 +507,7 @@ bool HwRenderer::Impl::create_targets(std::string& error) {
     draw_fb.reset();
     atlas.reset();
     atlas_layout = RenderTextureLayout::UNKNOWN;
-    resident.clear();
-    unusable.clear();
-    atlas_alloc.reset();
-    ++atlas_epoch;
+    drop_replacements();
     rt_layout = tex_layout = nat_layout = hi_layout = hi_tex_layout = RenderTextureLayout::UNKNOWN;
     rt = device->createTexture(RenderTextureDesc::ColorTarget(target_width() * scale, 512 * scale, kVramFormat));
     tex = device->createTexture(RenderTextureDesc::Texture2D(target_width() * scale, 512 * scale, 1, kVramFormat));
@@ -777,6 +808,7 @@ void HwRenderer::Impl::clear_vram() {
 
 void HwRenderer::Impl::submit(RenderCommandSemaphore* wait, RenderCommandSemaphore* signal) {
     ensure_recording();
+    const auto started = std::chrono::steady_clock::now();
     cmd->end();
     recording = false;
     const RenderCommandList* list = cmd;
@@ -793,6 +825,7 @@ void HwRenderer::Impl::submit(RenderCommandSemaphore* wait, RenderCommandSemapho
     vertex_used = 0;
     staging_used = 0;
     ++stats.submits;
+    stats.submit_ns += elapsed_ns(started);
 }
 
 std::size_t HwRenderer::Impl::staging_alloc(std::size_t bytes) {
@@ -1080,29 +1113,84 @@ const HwRenderer::Impl::Resident* HwRenderer::Impl::place_image(const ResidentKe
     return &(resident[key] = Resident{place->first, place->second, image_scale});
 }
 
+// The place of a pack image in the atlas. A new image is queued for a worker thread and null is returned until a frame
+// boundary has installed it, so the caller draws the original picture meanwhile.
 const HwRenderer::Impl::Resident* HwRenderer::Impl::make_resident(const texrep::PackEntry& e, ImageKind kind,
                                                                   const texrep::Image* alpha_from) {
     const ResidentKey key{e.block, e.clut, kind};
     if (auto it = resident.find(key); it != resident.end()) return &it->second;
-    if (unusable.count(key)) return nullptr;
-    texrep::Image img;
-    std::string err;
-    if (!pack->load_image(e, img, err)) {
-        std::fprintf(stderr, "texture pack: %s\n", err.c_str());
-        unusable.insert(key);
-        return nullptr;
+    if (unusable.count(key) || inflight.count(key)) return nullptr;
+    texrep::ImageLoader::Job job = [pack = pack, e, original = alpha_from ? std::optional<texrep::Image>(*alpha_from) : std::nullopt](
+                                       texrep::Image& img, std::string& err) {
+        if (!pack->load_image(e, img, err)) return false;
+        if (original) {
+            // The pack image gives the colour, the original picture says which texels are there at all.
+            const int rs = pack->scale();
+            for (int y = 0; y < img.h; ++y)
+                for (int x = 0; x < img.w; ++x) {
+                    uint32_t& px = img.rgba[static_cast<std::size_t>(y) * img.w + x];
+                    const uint32_t src = original->rgba[static_cast<std::size_t>(y / rs) * original->w + x / rs];
+                    px = (px & 0x00FFFFFFu) | (src & 0xFF000000u);
+                }
+        }
+        return true;
+    };
+    if (synchronous_replacements) {  // tests and tools that want the same picture on every run
+        texrep::Image img;
+        std::string err;
+        if (!job(img, err)) {
+            std::fprintf(stderr, "texture pack: %s\n", err.c_str());
+            unusable.insert(key);
+            return nullptr;
+        }
+        return place_image(key, img, pack->scale());
     }
-    if (alpha_from) {
-        // The pack image gives the colour, the original picture says which texels are there at all.
-        const int rs = pack->scale();
-        for (int y = 0; y < img.h; ++y)
-            for (int x = 0; x < img.w; ++x) {
-                uint32_t& px = img.rgba[static_cast<std::size_t>(y) * img.w + x];
-                const uint32_t src = alpha_from->rgba[static_cast<std::size_t>(y / rs) * alpha_from->w + x / rs];
-                px = (px & 0x00FFFFFFu) | (src & 0xFF000000u);
-            }
+    if (!loader) loader = std::make_unique<texrep::ImageLoader>(texrep::ImageLoader::default_worker_count());
+    const uint64_t ticket = loader->submit(std::move(job));
+    inflight[key] = ticket;
+    ticket_keys[ticket] = key;
+    return nullptr;
+}
+
+// Moves the images the workers have finished into the atlas, a bounded amount per frame.
+void HwRenderer::Impl::install_loaded_images(std::size_t byte_budget) {
+    if (!loader || ticket_keys.empty()) return;
+    const auto started = std::chrono::steady_clock::now();
+    for (texrep::ImageLoader::Result& r : loader->take(byte_budget)) {
+        const auto it = ticket_keys.find(r.ticket);
+        if (it == ticket_keys.end()) continue;  // dropped with a pack change
+        const ResidentKey key = it->second;
+        ticket_keys.erase(it);
+        inflight.erase(key);
+        if (!r.ok) {
+            std::fprintf(stderr, "texture pack: %s\n", r.error.c_str());
+            unusable.insert(key);
+            continue;
+        }
+        place_image(key, r.image, pack->scale());
+        ++stats.replacement_loads;
     }
-    return place_image(key, img, pack->scale());
+    stats.replacement_ns += elapsed_ns(started);
+}
+
+// Queues the pack images of the map cells around the view, nearest first, so they are decoded before the game draws them.
+void HwRenderer::Impl::prefetch_map_images() {
+    if (!pack || !library || !library->ready()) return;
+    const int map = backdrop.map();
+    if (map < 0 || map >= static_cast<int>(library->map_count())) return;
+    const int cell_x = texrep::floor_div(backdrop.scroll_x(), texrep::kStageCell);
+    const int cell_y = texrep::floor_div(backdrop.scroll_y(), texrep::kStageCell);
+    if (map == prefetch_map && cell_x == prefetch_cell_x && cell_y == prefetch_cell_y) return;
+    prefetch_map = map;
+    prefetch_cell_x = cell_x;
+    prefetch_cell_y = cell_y;
+    const texrep::StageLibrary::Map& m = library->map(static_cast<uint32_t>(map));
+    const texrep::BackdropRect view{0, 0, 320, 240};
+    for (const uint32_t t : texrep::tiles_to_prefetch(m, backdrop.scroll_x(), backdrop.scroll_y(), texrep::widened_view(view, wide.margin))) {
+        const texrep::StageLibrary::Tile& tile = m.tiles[t];
+        const texrep::PackEntry* e = pack->find(tile.block_hash, tile.clut_hash);
+        if (e && e->width == tile.width && e->height == tile.height) make_resident(*e);
+    }
 }
 
 // The image to draw a map cell's picture from: the pack's when there is one for it, otherwise the picture as the game
@@ -1116,7 +1204,7 @@ const HwRenderer::Impl::Resident* HwRenderer::Impl::make_tile_resident(const tex
         if (e && e->width == tile.width && e->height == tile.height) {
             const ResidentKey key{tile.block_hash, tile.clut_hash, ImageKind::PackOpaque};
             if (auto it = resident.find(key); it != resident.end()) return &it->second;
-            if (!unusable.count(key) && have_original()) {
+            if (!unusable.count(key) && !inflight.count(key) && have_original()) {
                 if (const Resident* r = make_resident(*e, ImageKind::PackOpaque, &original)) return r;
             }
         }
@@ -1124,11 +1212,15 @@ const HwRenderer::Impl::Resident* HwRenderer::Impl::make_tile_resident(const tex
     const ResidentKey key{tile.block_hash, tile.clut_hash, ImageKind::Original};
     if (auto it = resident.find(key); it != resident.end()) return &it->second;
     if (unusable.count(key)) return nullptr;
+    const auto started = std::chrono::steady_clock::now();
     if (!have_original()) {
         unusable.insert(key);
         return nullptr;
     }
-    return place_image(key, original, 1);
+    const Resident* placed = place_image(key, original, 1);
+    ++stats.replacement_loads;
+    stats.replacement_ns += elapsed_ns(started);
+    return placed;
 }
 
 // Handles a sprite that samples 8-bit texels: reports what it draws to the dump, and draws the parts that show a
@@ -1651,6 +1743,7 @@ void HwRenderer::line(std::span<uint16_t>, const DrawState& s, const PrimitiveFl
 
 void HwRenderer::display_flipped() {
     Impl& m = *impl_;
+    m.install_loaded_images();
     if (!m.library) return;
     m.flush_backdrop();
     // A load or transition shrinks the picture and leaves few background sprites to go by: those frames, and the
@@ -1658,6 +1751,7 @@ void HwRenderer::display_flipped() {
     const bool trusted = m.backdrop.resolve();
     m.wide_trusted_frames = trusted ? m.wide_trusted_frames + 1 : 0;
     m.wide_shown = m.wide_trusted_frames >= (m.wide_shown ? 1 : kWideEnterFrames);
+    if (trusted) m.prefetch_map_images();
     m.wide_known[0] = m.wide_known[1] = m.wide_shown;
     if (m.wide_mode == WideMode::Field) ++(m.wide_shown ? m.stats.wide_field_frames : m.stats.wide_field_fallbacks);
     m.backdrop.begin_frame();
@@ -1898,6 +1992,7 @@ bool HwRenderer::render_to_image(const DisplayState& shown, ScaleMode mode, bool
 bool HwRenderer::reconfigure(int internal_scale, const HwOptions& options, std::span<uint16_t> vram, std::string& error) {
     Impl& m = *impl_;
     m.seamless_inside = options.seamless_inside;
+    m.synchronous_replacements = options.synchronous_replacements;
     const int new_scale = std::clamp(internal_scale, 1, 8);
     const bool new_layer = options.true_color || options.filter != TextureFilter::Nearest || options.texture_pack || options.stage_library;
     const uint32_t new_mode = (new_layer ? 1u : 0u) | (options.true_color ? 2u : 0u) | (static_cast<uint32_t>(options.filter) << 2);
@@ -1919,10 +2014,7 @@ bool HwRenderer::reconfigure(int internal_scale, const HwOptions& options, std::
         // the atlas, which the new pack's images will fill again.
         if (options.texture_pack != m.pack || options.stage_library != m.library) {
             m.record_draws();
-            m.resident.clear();
-            m.unusable.clear();
-            m.atlas_alloc.reset();
-            ++m.atlas_epoch;
+            m.drop_replacements();
             m.pack = options.texture_pack;
             m.reset_backdrop(options.stage_library);
         }
@@ -1974,6 +2066,13 @@ bool HwRenderer::reconfigure(int internal_scale, const HwOptions& options, std::
 }
 
 bool HwRenderer::hdr_active() const { return impl_->hdr_active; }
+
+void HwRenderer::wait_for_replacements() {
+    Impl& m = *impl_;
+    if (!m.loader) return;
+    m.loader->wait_idle();
+    m.install_loaded_images(std::numeric_limits<std::size_t>::max());
+}
 
 void HwRenderer::set_wide_mode(WideMode mode) {
     Impl& m = *impl_;

@@ -46,6 +46,8 @@
 //   --scale M          fit (default, 4:3 letterbox), integer or stretch
 //   --widescreen A     off (default), 16:9, 16:10 or 21:9: wider battles and fields (GPU renderer)
 //   --filter F         nearest (default), linear or fsr
+//   --frame-stats      at exit, log percentiles of the host time per frame: emulation, present (includes any wait for
+//                      the display), pacing sleep, and their sum without the sleep (p50/p95/p99/max, frames over 16.7 and 33 ms)
 //   --no-vsync         present without waiting for the display refresh (always on with --uncapped/--frames)
 //   --mute             no audio output (the SPU still runs; audio is also off for --frames audit runs)
 //   --audio            with --frames: play audio and pace to real time (logs buffer underruns and drops at exit)
@@ -90,6 +92,7 @@
 #include "ingame/field_menu.h"
 #include "ingame/audio_groups.h"
 #include "ingame/gameplay.h"
+#include "frame_stats.h"
 #include "present/monitors.h"
 #include "present/native_window.h"
 #include "settings/controller.h"
@@ -116,6 +119,7 @@ struct Options {
     std::string dump_textures;
     uint32_t trace_lo = 0, trace_hi = 0;
     bool uncapped = false;
+    bool frame_stats = false;
     bool audio = false;
     struct WindowAction {
         int64_t frame;
@@ -176,6 +180,7 @@ Options parse(int argc, char** argv) {
         else if (a == "--memcard2" && i + 1 < argc) set("system.memcard2", argv[++i]);
         else if (a == "--no-memcard") set("system.memcards", "false");
         else if (a == "--uncapped") o.uncapped = true;
+        else if (a == "--frame-stats") o.frame_stats = true;
         else if (a == "--mute") set("audio.mute", "true");
         else if (a == "--audio") o.audio = true;
         else if (a == "--window-size" && i + 1 < argc) {
@@ -648,7 +653,25 @@ int main(int argc, char** argv) {
     uint64_t fps_window_start = SDL_GetTicksNS();
     int fps_frames = 0;
     constexpr uint64_t kFpsWindowNs = 500'000'000;
+    dw3app::FrameStats frame_stats;
+    uint64_t callback_returned_ns = 0;
+    int64_t present_total_ns = 0;
     auto on_frame = [&](uint64_t frame) {
+        const uint64_t callback_began_ns = SDL_GetTicksNS();
+        const int64_t emulation_ns = callback_returned_ns ? static_cast<int64_t>(callback_began_ns - callback_returned_ns) : -1;
+        int64_t sleep_ns = 0;
+        struct StatsGuard {
+            std::function<void()> finish;
+            ~StatsGuard() { finish(); }
+        } stats_guard{[&] {
+            if (opt.frame_stats && emulation_ns >= 0) {
+                frame_stats.series("emu").add(emulation_ns);
+                frame_stats.series("present").add(present_total_ns);
+                frame_stats.series("sleep").add(sleep_ns);
+                frame_stats.series("host").add(emulation_ns + static_cast<int64_t>(SDL_GetTicksNS() - callback_began_ns) - sleep_ns);
+            }
+            callback_returned_ns = SDL_GetTicksNS();
+        }};
         host_input.frame = static_cast<int64_t>(frame);
         settings_screen.apply_pending();
         settings_screen.set_hdr_available(display_hdr && presenter->supports_hdr());
@@ -717,6 +740,7 @@ int main(int argc, char** argv) {
                                     settings.active().gameplay.game_speed == 0);
         present_cadence.set_reported_hz(refresh_hz);
         const int presents = present_cadence.plan_frame();
+        const uint64_t present_began_ns = SDL_GetTicksNS();
         presenter->present(machine.gpu(), want_shot ? &capture : nullptr);
         uint64_t last_present_ns = presents > 1 ? SDL_GetTicksNS() : 0;
         for (int again = 1; again < presents; ++again) {
@@ -725,6 +749,7 @@ int main(int argc, char** argv) {
             present_cadence.on_present_gap(static_cast<int64_t>(done_ns - last_present_ns));
             last_present_ns = done_ns;
         }
+        present_total_ns = static_cast<int64_t>(SDL_GetTicksNS() - present_began_ns);
         if (present_cadence.end_frame(pacer_started && !pacing_reset ? pacer.lag_ns(SDL_GetTicksNS(), machine.ctx().cycles) : 0))
             pacing_reset = true;
         ++fps_frames;
@@ -770,12 +795,14 @@ int main(int argc, char** argv) {
             if (opt.uncapped) return;
             const uint64_t wait = pacer.delay_ns(now, machine.ctx().cycles);
             if (wait) SDL_DelayPrecise(wait);
+            sleep_ns = static_cast<int64_t>(SDL_GetTicksNS() - now);
         }
     };
 
     host->prepare_save_states();
     SDL_Log("booting SLUS_014.36");
     auto result = host->run(on_frame);
+    if (opt.frame_stats) SDL_Log("frame stats:\n%s", frame_stats.report().c_str());
     if (result.end == dw3::host::RunResult::End::Fatal) {
         SDL_Log("FATAL: %s", result.fatal_message.c_str());
         return shutdown(2);

@@ -20,6 +20,24 @@ unsigned group_of(int layer) { return layer == 1 ? layers::kFront : layers::kBac
 
 BackdropRect widened_view(const BackdropRect& view, int margin) { return {view.x0 - margin, view.y0, view.x1 + margin, view.y1}; }
 
+std::vector<uint32_t> tiles_to_prefetch(const StageLibrary::Map& map, int scroll_x, int scroll_y, const BackdropRect& view) {
+    const BackdropRect reach{view.x0 - kCell, view.y0 - kCell, view.x1 + kCell, view.y1 + kCell};
+    const int centre_x = (view.x0 + view.x1) / 2, centre_y = (view.y0 + view.y1) / 2;
+    std::vector<std::pair<int64_t, uint32_t>> wanted;
+    for (uint32_t t = 0; t < map.tiles.size(); ++t) {
+        const StageLibrary::Tile& tile = map.tiles[t];
+        const int x = tile.col * kCell - scroll_x, y = tile.row * kCell - scroll_y;
+        if (!reach.intersects({x, y, x + kCell, y + kCell})) continue;
+        const int64_t dx = x + kCell / 2 - centre_x, dy = y + kCell / 2 - centre_y;
+        wanted.emplace_back(dx * dx + dy * dy, t);
+    }
+    std::sort(wanted.begin(), wanted.end());
+    std::vector<uint32_t> out;
+    out.reserve(wanted.size());
+    for (const auto& [distance, t] : wanted) out.push_back(t);
+    return out;
+}
+
 WideBackdropPlan plan_wide_backdrop(const std::vector<BackdropFill>& listed, const BackdropRect& view, bool seamless) {
     WideBackdropPlan plan;
     for (const BackdropFill& f : listed) {
