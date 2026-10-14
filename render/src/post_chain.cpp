@@ -175,9 +175,55 @@ bool PostChain::upload_lookups(RenderCommandList* cmd) {
     return true;
 }
 
+void PostChain::select_source_size(uint32_t w, uint32_t h, const std::function<void()>& wait_idle) {
+    if (!a_.tex || (a_.w == w && a_.h == h)) return;
+    SourceTargets leaving{std::move(a_), std::move(b_), std::move(edges_), std::move(weights_), std::move(weights_set_),
+                          std::move(blend_set_)};
+    a_ = Target();
+    b_ = Target();
+    edges_ = Target();
+    weights_ = Target();
+    spare_sources_.emplace_back(std::make_pair(leaving.a.w, leaving.a.h), std::move(leaving));
+    for (auto it = spare_sources_.begin(); it != spare_sources_.end(); ++it) {
+        if (it->first != std::make_pair(w, h)) continue;
+        a_ = std::move(it->second.a);
+        b_ = std::move(it->second.b);
+        edges_ = std::move(it->second.edges);
+        weights_ = std::move(it->second.weights);
+        weights_set_ = std::move(it->second.weights_set);
+        blend_set_ = std::move(it->second.blend_set);
+        spare_sources_.erase(it);
+        break;
+    }
+    if (spare_sources_.size() > kSizesKept) {
+        wait_idle();  // the oldest may still be read by frames in flight
+        spare_sources_.erase(spare_sources_.begin());
+    }
+}
+
+void PostChain::select_window_size(uint32_t w, uint32_t h, const std::function<void()>& wait_idle) {
+    if (!win_a_.tex || (win_a_.w == w && win_a_.h == h)) return;
+    WindowTargets leaving{std::move(win_a_), std::move(win_b_)};
+    win_a_ = Target();
+    win_b_ = Target();
+    spare_windows_.emplace_back(std::make_pair(leaving.a.w, leaving.a.h), std::move(leaving));
+    for (auto it = spare_windows_.begin(); it != spare_windows_.end(); ++it) {
+        if (it->first != std::make_pair(w, h)) continue;
+        win_a_ = std::move(it->second.a);
+        win_b_ = std::move(it->second.b);
+        spare_windows_.erase(it);
+        break;
+    }
+    if (spare_windows_.size() > kSizesKept) {
+        wait_idle();
+        spare_windows_.erase(spare_windows_.begin());
+    }
+}
+
 bool PostChain::prepare(RenderCommandList* cmd, const PostFx& fx, uint32_t src_w, uint32_t src_h, uint32_t pic_w,
                         uint32_t pic_h, const std::function<void()>& wait_idle) {
     bool ok = true;
+    select_source_size(src_w, src_h, wait_idle);
     ensure_target(a_, src_w, src_h, wait_idle, ok);
     const bool fsr = fx.scaler == OutputScaler::Fsr && (pic_w > src_w || pic_h > src_h);
     const bool cas = fx.sharpness > 0.0f && !fsr;
@@ -194,6 +240,7 @@ bool PostChain::prepare(RenderCommandList* cmd, const PostFx& fx, uint32_t src_w
         blend_set_.reset();
     }
     if (fsr) {
+        select_window_size(pic_w, pic_h, wait_idle);
         ensure_target(win_a_, pic_w, pic_h, wait_idle, ok);
         if (fx.sharpness > 0.0f && fx.crt.enabled()) ensure_target(win_b_, pic_w, pic_h, wait_idle, ok);
     }

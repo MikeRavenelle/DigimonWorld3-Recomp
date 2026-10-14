@@ -1414,6 +1414,7 @@ protected:
     HwOptions options() const override {
         HwOptions o;
         o.texture_pack = ReplacementScene::pack();
+        o.synchronous_replacements = true;
         return o;
     }
     void upload_scene() {
@@ -1594,6 +1595,44 @@ TEST_P(HwReplacementOff, NoPackShowsTheOriginal) {
 
 INSTANTIATE_TEST_SUITE_P(InternalRes, HwReplacementOff, ::testing::ValuesIn(gpu_params({1, 2})), gpu_param_name);
 
+// Replacement images decode on worker threads: until one is installed the sprite shows the original picture, afterwards
+// the replacement.
+TEST(HwReplacementAsync, OriginalIsShownUntilTheImageIsInstalled) {
+    for (GraphicsApi api : {GraphicsApi::Vulkan, GraphicsApi::D3D12, GraphicsApi::Metal}) {
+        if (!HwRenderer::api_compiled_in(api)) continue;
+        std::string error;
+        HwOptions o;
+        o.api = api;
+        o.texture_pack = ReplacementScene::pack();
+        auto hw = HwRenderer::create(nullptr, {}, error, 2, o);
+        if (!hw) GTEST_SKIP() << "no GPU device: " << error;
+        std::vector<uint16_t> vram(kPixels, 0);
+        ReplacementScene::fill(vram);
+        hw->vram_written(vram, {ReplacementScene::kBlockX, ReplacementScene::kBlockY, ReplacementScene::kBlockWords, ReplacementScene::kBlockRows});
+        hw->vram_written(vram, {0, 480, 256, 1});
+        DrawState s;
+        s.area_x2 = 319;
+        s.area_y2 = 239;
+        s.tex_base_x = 640;
+        s.depth = TexDepth::Bit8;
+        PrimitiveFlags f;
+        f.textured = true;
+        f.clut = static_cast<uint16_t>(480 << 6);
+        std::vector<uint32_t> img;
+        hw->wait_for_replacements();
+        hw->rect(vram, s, f, gv(20, 20, 128, 128, 128, 0, 0), 32, 16);
+        ASSERT_TRUE(hw->read_display({20, 20, 32, 16}, img));
+        EXPECT_EQ(hw->stats().replacement_loads, 0u) << "nothing is installed before a frame boundary or a wait";
+        const uint32_t original = img[0] & 0xFFFFFF;
+        EXPECT_NE(original, ReplacementScene::pixel(0, 0) & 0xFFFFFF);
+        hw->wait_for_replacements();
+        EXPECT_EQ(hw->stats().replacement_loads, 1u);
+        hw->rect(vram, s, f, gv(20, 20, 128, 128, 128, 0, 0), 32, 16);
+        ASSERT_TRUE(hw->read_display({20, 20, 32, 16}, img));
+        EXPECT_EQ(img[0] & 0xFFFFFF, ReplacementScene::pixel(0, 0) & 0xFFFFFF);
+    }
+}
+
 // A texture pack can be switched on and off on a running renderer.
 TEST(HwReplacementReconfigure, PackCanBeEnabledAndDisabled) {
     for (GraphicsApi api : {GraphicsApi::Vulkan, GraphicsApi::D3D12, GraphicsApi::Metal}) {
@@ -1607,6 +1646,7 @@ TEST(HwReplacementReconfigure, PackCanBeEnabledAndDisabled) {
         ReplacementScene::fill(vram);
         hw->vram_written(vram, {});
         o.texture_pack = ReplacementScene::pack();
+        o.synchronous_replacements = true;
         ASSERT_TRUE(hw->reconfigure(2, o, vram, error)) << error;
         hw->vram_written(vram, {ReplacementScene::kBlockX, ReplacementScene::kBlockY, ReplacementScene::kBlockWords, ReplacementScene::kBlockRows});
         DrawState s;

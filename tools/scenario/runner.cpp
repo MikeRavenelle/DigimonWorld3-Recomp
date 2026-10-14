@@ -24,6 +24,7 @@
 #include <cstring>
 #include <filesystem>
 #include <fstream>
+#include <functional>
 #include <iterator>
 #include <map>
 #include <memory>
@@ -42,6 +43,8 @@
 #include "audio_groups.h"
 #include "gameplay.h"
 #include "scenario.h"
+#include "frame_stats.h"
+#include "present/post_options.h"
 
 namespace {
 
@@ -58,6 +61,11 @@ struct Options {
     std::vector<sc::RamCheck> watches;  // --watch (value/mask unused)
     std::vector<std::pair<int64_t, std::string>> dumps;  // --dump, sorted by frame
     std::string texture_pack;  // --texture-pack: a texture pack directory for the GPU renderer
+    std::vector<std::string> settings;  // --setting id=value, applied after the scenario's own
+    bool sync_replacements = false;  // --sync-replacements: decode replacement images on the render thread (the old behaviour)
+    bool gpu = false;  // --gpu: use the GPU renderer whatever the scenario says
+    bool frame_stats = false;  // --frame-stats: per-frame host timing, printed at the end (adds a window-sized render each frame)
+    int stats_width = 1920, stats_height = 1080;  // --frame-stats-size WxH: the output size drawn for the stats
     bool no_xa = false;  // --no-xa: drop XA-ADPCM sectors (isolates SPU voice output when auditing)
 };
 
@@ -343,6 +351,16 @@ int main(int argc, char** argv) {
         else if (a == "--record") opt.record = true;
         else if (a == "--wav" && i + 1 < argc) opt.wav = argv[++i];
         else if (a == "--no-xa") opt.no_xa = true;
+        else if (a == "--setting" && i + 1 < argc) opt.settings.push_back(argv[++i]);
+        else if (a == "--gpu") opt.gpu = true;
+        else if (a == "--sync-replacements") opt.sync_replacements = true;
+        else if (a == "--frame-stats") opt.frame_stats = true;
+        else if (a == "--frame-stats-size" && i + 1 < argc) {
+            if (std::sscanf(argv[++i], "%dx%d", &opt.stats_width, &opt.stats_height) != 2) {
+                std::fprintf(stderr, "--frame-stats-size wants WxH\n");
+                return 2;
+            }
+        }
         else if (a == "--dump" && i + 1 < argc) {
             std::string v = argv[++i];
             auto colon = v.find(':');
@@ -377,7 +395,7 @@ int main(int argc, char** argv) {
         }
         else if (!a.empty() && a[0] != '-' && opt.file.empty()) opt.file = a;
         else {
-            std::fprintf(stderr, "usage: dw3scenario <file.toml> [--disc PATH] [--game-dir DIR] [--state-dir DIR] [--record] [--out DIR] [--wav PATH] [--no-xa] [--watch ADDR[:SIZE]] [--dump FRAME:PATH]\n");
+            std::fprintf(stderr, "usage: dw3scenario <file.toml> [--setting ID=VALUE] [--gpu] [--frame-stats] [--frame-stats-size WxH] [--sync-replacements] [--disc PATH] [--game-dir DIR] [--state-dir DIR] [--record] [--out DIR] [--wav PATH] [--no-xa] [--watch ADDR[:SIZE]] [--dump FRAME:PATH]\n");
             return 2;
         }
     }
@@ -519,6 +537,16 @@ int main(int argc, char** argv) {
     int64_t last_frame = 0;
     auto t0 = std::chrono::steady_clock::now();
     dw3::host::RunResult result;
+    // --frame-stats: host time per frame. "cpu" is the emulation and the renderer's recording between two callbacks,
+    // "present" a window-sized render with the output filters (the app's present without the swap chain), "host" their
+    // sum. The renderer's own counters (GPU waits, submits, replacement image loads) are recorded per frame too.
+    using StatsClock = std::chrono::steady_clock;
+    dw3app::FrameStats frame_stats;
+    StatsClock::time_point stats_last_end{};
+    dw3::HwStats stats_before;
+    auto stats_ns = [](StatsClock::time_point a, StatsClock::time_point b) {
+        return static_cast<int64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(b - a).count());
+    };
     // One boot per [[reboot]]: each gets a fresh machine; the memory card image carries over.
     for (std::size_t boot = 0; boot <= scenario.reboots.size(); ++boot) {
         if (host) cfg.blank_card = host->card_image(0);
@@ -537,7 +565,9 @@ int main(int argc, char** argv) {
         }
         // The game's settings screen runs as in the app, on default settings that are never written anywhere.
         dw3app::Settings scenario_settings;
-        for (const std::string& entry : scenario.settings) {
+        std::vector<std::string> entries = scenario.settings;
+        entries.insert(entries.end(), opt.settings.begin(), opt.settings.end());
+        for (const std::string& entry : entries) {
             const std::size_t eq = entry.find('=');
             const dw3app::SettingInfo* info = dw3app::find_setting(entry.substr(0, eq));
             std::string error;
@@ -546,8 +576,12 @@ int main(int argc, char** argv) {
                 return 2;
             }
         }
-        if (scenario.gpu || scenario_settings.graphics.widescreen != 0 || scenario_settings.graphics.seamless_bg) {
+        if (scenario.gpu || opt.gpu || scenario_settings.graphics.widescreen != 0 || scenario_settings.graphics.seamless_bg) {
             dw3::HwOptions hw_options;
+            hw_options.true_color = scenario_settings.graphics.true_color;
+            hw_options.filter = static_cast<dw3::TextureFilter>(scenario_settings.graphics.texture_filter);
+            hw_options.precise_geometry = scenario_settings.graphics.precise_geometry;
+            hw_options.synchronous_replacements = !opt.frame_stats || opt.sync_replacements;
 #if defined(__APPLE__)
             hw_options.api = dw3::GraphicsApi::Metal;
 #endif
@@ -606,7 +640,36 @@ int main(int argc, char** argv) {
         }
         const int64_t until = boot < scenario.reboots.size() ? scenario.reboots[boot] : -1;  // script frame
         if (boot) std::printf("  reboot @%lld\n", static_cast<long long>(scenario.reboots[boot - 1]));
+        const dw3::PostFx stats_post = dw3app::post_fx_from(scenario_settings.graphics);
         result = host->run([&](uint64_t frame) {
+            int64_t stats_cpu = -1;
+            if (opt.frame_stats && hw && stats_last_end != StatsClock::time_point{}) {
+                stats_cpu = stats_ns(stats_last_end, StatsClock::now());
+                frame_stats.series("cpu").add(stats_cpu);
+                const dw3::HwStats& now_stats = hw->stats();
+                frame_stats.series("gpu_wait").add(static_cast<int64_t>(now_stats.gpu_wait_ns - stats_before.gpu_wait_ns));
+                frame_stats.series("submit").add(static_cast<int64_t>(now_stats.submit_ns - stats_before.submit_ns));
+                frame_stats.series("replace").add(static_cast<int64_t>(now_stats.replacement_ns - stats_before.replacement_ns));
+            }
+            const std::size_t checks_at_start = next;
+            struct StatsGuard {
+                std::function<void()> finish;
+                ~StatsGuard() { finish(); }
+            } stats_guard{[&] {
+                if (!opt.frame_stats || !hw) return;
+                const auto began = StatsClock::now();
+                std::vector<uint32_t> shown;
+                hw->render_to_image(host->machine().gpu().display(), dw3::ScaleMode::Fit, scenario_settings.graphics.output_filter >= 1,
+                                    &stats_post, opt.stats_width, opt.stats_height, shown);
+                const int64_t present = stats_ns(began, StatsClock::now());
+                // A check renders at its own size, so this frame's render had to resize the capture target: not a frame cost.
+                if (stats_cpu >= 0 && next == checks_at_start) {
+                    frame_stats.series("present").add(present);
+                    frame_stats.series("host").add(stats_cpu + present);
+                }
+                stats_last_end = StatsClock::now();
+                stats_before = hw->stats();
+            }};
             settings_screen.apply_pending();
             if (hw) hw->set_wide_mode(dw3::wide_mode_for_game_mode(read_ram(0x800554D0, 4)));
             last_frame = base + static_cast<int64_t>(frame);
@@ -820,6 +883,11 @@ int main(int argc, char** argv) {
         }
     }
     bool ok = !broken && total.fail == 0;
+    if (opt.frame_stats) std::fputs(frame_stats.report().c_str(), stdout);
+    if (opt.frame_stats && hw)
+        std::printf("  frame-stats replacement images loaded %llu, %.1f ms total on the render thread, GPU waits %.1f ms, submits %.1f ms\n",
+                    static_cast<unsigned long long>(hw->stats().replacement_loads), static_cast<double>(hw->stats().replacement_ns) / 1e6,
+                    static_cast<double>(hw->stats().gpu_wait_ns) / 1e6, static_cast<double>(hw->stats().submit_ns) / 1e6);
     std::printf("%s %s: %d passed, %d failed, %lld frames in %.1fs\n", ok ? "PASS" : "FAIL", scenario.name.c_str(),
                 total.pass, total.fail, static_cast<long long>(last_frame), secs);
     return ok ? 0 : 1;

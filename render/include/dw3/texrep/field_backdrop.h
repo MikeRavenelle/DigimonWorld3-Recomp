@@ -66,6 +66,13 @@ struct WideBackdropPlan {
 BackdropRect widened_view(const BackdropRect& view, int margin);
 WideBackdropPlan plan_wide_backdrop(const std::vector<BackdropFill>& listed, const BackdropRect& view, bool seamless);
 
+// Floor division, for scroll positions that can be negative.
+constexpr int floor_div(int a, int b) { return a / b - ((a % b != 0) && ((a < 0) != (b < 0)) ? 1 : 0); }
+
+// The cells of a map whose picture is likely to be wanted soon: those within one cell of `view` (screen pixels, with the
+// map scrolled by `scroll_x`, `scroll_y`), nearest to the middle of the view first.
+std::vector<uint32_t> tiles_to_prefetch(const StageLibrary::Map& map, int scroll_x, int scroll_y, const BackdropRect& view);
+
 class FieldBackdrop {
 public:
     explicit FieldBackdrop(std::shared_ptr<const StageLibrary> library) : library_(std::move(library)) {}

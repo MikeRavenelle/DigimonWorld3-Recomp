@@ -103,6 +103,10 @@ struct HwOptions {
     // Replacement images for background blocks (texrep/blocks.h). When set, the display layer shows them in place of
     // the matching original images; the exact picture underneath is unchanged. Implies the display layer.
     std::shared_ptr<const texrep::TexturePack> texture_pack;
+    // Load replacement images on the calling thread the moment a draw wants them, instead of decoding them on worker
+    // threads while the original picture is drawn. For tests and tools that need the same picture on every run; a
+    // running game stutters with it.
+    bool synchronous_replacements = false;
     // Seamless field backgrounds (texrep/field_backdrop.h): the maps of the game, as indexed from the disc. When set, the
     // renderer draws the pieces of a field map's background that the game has not drawn yet. Implies the display layer.
     std::shared_ptr<texrep::StageLibrary> stage_library;
@@ -135,6 +139,9 @@ struct HwStats {
     // Textured polygons (the game's characters and objects) that were drawn into the margins of the wide copy.
     uint64_t wide_margin_polygons = 0;
     uint64_t draw_calls = 0, vertices = 0, uploads = 0, readbacks = 0, copy_syncs = 0, submits = 0, fills = 0, copies = 0;
+    // Host time spent (monotonic, nanoseconds) waiting for the GPU, submitting command lists, and loading replacement
+    // images (PNG decode, atlas upload recording), with the number of images loaded.
+    uint64_t gpu_wait_ns = 0, submit_ns = 0, replacement_ns = 0, replacement_loads = 0;
 };
 
 class HwRenderer final : public Rasterizer {
@@ -182,6 +189,9 @@ public:
     // runs, present() shows the copy, at its own aspect, whenever the displayed buffer has one.
     void set_wide_mirror(bool active) { set_wide_mode(active ? WideMode::Battle : WideMode::Off); }
     void set_wide_mode(WideMode mode);
+    // Blocks until every replacement image that was queued has been decoded and moved into the atlas (they normally
+    // arrive a few per frame). For tests and tools.
+    void wait_for_replacements();
 
     // Starts recording the background images the game draws (empty directory stops it). write_texture_dump() saves
     // what was seen so far (see texrep/dump.h); the pack generator takes it from there.

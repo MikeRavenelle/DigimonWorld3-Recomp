@@ -77,7 +77,7 @@ target_include_directories(test_emitter PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/psxr
     ${PROJECT_SOURCE_DIR}/tools/psxrecomp/include)  # header-only use of CodeSegment via mips_asm.h
 
 dw3_add_test(test_render
-    SOURCES render/test_vram_regions.cpp render/test_vertex_builder.cpp render/test_hw_renderer.cpp render/test_postfx.cpp render/test_texrep.cpp render/test_stage_pack.cpp render/test_field_backdrop.cpp
+    SOURCES render/test_vram_regions.cpp render/test_vertex_builder.cpp render/test_hw_renderer.cpp render/test_postfx.cpp render/test_texrep.cpp render/test_stage_pack.cpp render/test_field_backdrop.cpp render/test_image_loader.cpp
     LIBS dw3render)
 
 dw3_add_test(test_scenario_format
@@ -125,7 +125,7 @@ target_include_directories(test_osd PRIVATE ${PROJECT_SOURCE_DIR}/app)
 
 # Settings model, presets, settings.toml and fast-forward pacing.
 dw3_add_test(test_settings
-    SOURCES app/test_settings.cpp app/test_controls_settings.cpp app/test_display.cpp
+    SOURCES app/test_settings.cpp app/test_controls_settings.cpp app/test_display.cpp app/test_frame_stats.cpp
     LIBS dw3settings)
 
 # Bindings, stick maths, pad selection and button prompts.
