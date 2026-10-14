@@ -120,6 +120,30 @@ TEST(HdrEncode, EdrIsRelativeToPaperWhite) {
     EXPECT_NEAR(hdr_encode_pixel(1, 1, 1, p)[0], 4.0f, 1e-4f);
 }
 
+TEST(HdrEdr, SwapChainModeFollowsTheLayerKind) {
+    EXPECT_EQ(swap_chain_hdr_mode(true), HdrMode::Edr);
+    EXPECT_EQ(swap_chain_hdr_mode(false), HdrMode::ScRgb);
+}
+
+TEST(HdrEdr, OutputScaleOfFlatContent) {
+    EXPECT_FLOAT_EQ(hdr_output_scale({HdrMode::ScRgb, 1000.0f, 200.0f}), 2.5f);
+    EXPECT_FLOAT_EQ(hdr_output_scale({HdrMode::Edr, 1000.0f, 200.0f}), 1.0f);
+    EXPECT_FLOAT_EQ(hdr_output_scale({HdrMode::Off, 1000.0f, 200.0f}), 0.0f);
+}
+
+TEST(HdrEdr, PeakIsCutToTheDisplayHeadroom) {
+    const HdrParams p{HdrMode::Edr, 1000.0f, 200.0f};
+    EXPECT_FLOAT_EQ(edr_limited(p, 2.0f).peak_nits, 400.0f);
+    EXPECT_FLOAT_EQ(edr_limited(p, 16.0f).peak_nits, 1000.0f);
+    EXPECT_FLOAT_EQ(edr_limited(p, 0.5f).peak_nits, 200.0f);  // never below SDR white
+    EXPECT_EQ(edr_limited(p, 2.0f).paper_white_nits, 200.0f);
+}
+
+TEST(HdrEdr, LimitedPeakKeepsWhiteInsideTheHeadroom) {
+    const HdrParams p = edr_limited({HdrMode::Edr, 1000.0f, 200.0f}, 2.0f);
+    EXPECT_NEAR(hdr_encode_pixel(1, 1, 1, p)[0], 2.0f, 1e-4f);
+}
+
 TEST(HdrEncode, OffPassesTheSdrValuesThrough) {
     const auto out = hdr_encode_pixel(0.25f, 0.5f, 0.75f, HdrParams{});
     EXPECT_FLOAT_EQ(out[0], 0.25f);

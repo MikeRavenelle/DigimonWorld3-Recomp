@@ -279,6 +279,7 @@ struct HwRenderer::Impl {
     RenderFormat swap_format = kSwapFormat;
     bool hdr_wanted = false;
     bool hdr_active = false;
+    bool api_is_metal = false;  // its HDR swap chain is an extended-range layer, not scRGB
     HdrParams hdr_params;  // the nits of the most recent post-processing request (for the overlay)
     NativeWindow native_window;
     bool has_window = false;
@@ -385,6 +386,7 @@ bool HwRenderer::Impl::init(const NativeWindow* window, int internal_scale, cons
     layer = options.true_color || options.filter != TextureFilter::Nearest || pack || library;
     draw_mode = (layer ? 1u : 0u) | (options.true_color ? 2u : 0u) | (static_cast<uint32_t>(options.filter) << 2);
     const char* api_name = "Vulkan";
+    api_is_metal = options.api == GraphicsApi::Metal;
     if (options.api == GraphicsApi::Metal) {
         api_name = "Metal";
 #ifdef DW3_HAVE_METAL
@@ -1287,7 +1289,8 @@ const PostFx* HwRenderer::Impl::effective_post(const PostFx* in, PostFx& storage
     if (hdr_active) {
         storage = in ? *in : PostFx{};
         if (storage.hdr.mode == HdrMode::Off) storage.hdr = hdr_params;
-        storage.hdr.mode = HdrMode::ScRgb;
+        storage.hdr.mode = swap_chain_hdr_mode(api_is_metal);
+        if (api_is_metal) storage.hdr = edr_limited(storage.hdr, swap->getHdrHeadroom());
         hdr_params = storage.hdr;
         return &storage;
     }
@@ -1424,7 +1427,7 @@ void HwRenderer::Impl::draw_overlay(uint32_t w, uint32_t h, const HwOverlay& o) 
     p.window[0] = static_cast<float>(w);
     p.window[1] = static_cast<float>(h);
     p.opacity = o.opacity;
-    p.hdr_scale = hdr_active ? hdr_params.paper_white_nits / kScRgbWhiteNits : 0.0f;
+    p.hdr_scale = hdr_active ? hdr_output_scale(hdr_params) : 0.0f;
     cmd->setGraphicsPipelineLayout(osd_layout.get());
     cmd->setPipeline(osd_pipeline.get());
     cmd->setGraphicsDescriptorSet(osd_set.get(), 0);

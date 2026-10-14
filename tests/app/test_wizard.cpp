@@ -8,6 +8,7 @@
 #include <atomic>
 #include <fstream>
 #include <map>
+#include <random>
 
 #include "assets.h"
 #include "commands.h"
@@ -33,8 +34,7 @@ class TempDir {
 public:
     TempDir() {
         static int counter = 0;
-        path_ = fs::temp_directory_path() / ("dw3wizard-test-" + std::to_string(::testing::UnitTest::GetInstance()->random_seed()) + "-" +
-                                              std::to_string(++counter));
+        path_ = fs::temp_directory_path() / ("dw3wizard-test-" + std::to_string(std::random_device{}()) + "-" + std::to_string(++counter));
         fs::remove_all(path_);
         fs::create_directories(path_);
     }

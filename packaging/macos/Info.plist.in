@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>CFBundleDevelopmentRegion</key><string>en</string>
+    <key>CFBundleExecutable</key><string>dw3recomp</string>
+    <key>CFBundleIconFile</key><string>AppIcon</string>
+    <key>CFBundleIdentifier</key><string>io.github.mikeravenelle.dw3recomp</string>
+    <key>CFBundleInfoDictionaryVersion</key><string>6.0</string>
+    <key>CFBundleName</key><string>Digimon World 3 Recomp</string>
+    <key>CFBundleDisplayName</key><string>Digimon World 3 Recomp</string>
+    <key>CFBundlePackageType</key><string>APPL</string>
+    <key>CFBundleShortVersionString</key><string>@VERSION@</string>
+    <key>CFBundleVersion</key><string>@VERSION@</string>
+    <key>LSApplicationCategoryType</key><string>public.app-category.games</string>
+    <key>LSMinimumSystemVersion</key><string>@MIN_OS@</string>
+    <key>LSSupportsGameMode</key><true/>
+    <key>NSHighResolutionCapable</key><true/>
+    <key>NSPrincipalClass</key><string>NSApplication</string>
+    <key>NSSupportsAutomaticGraphicsSwitching</key><true/>
+    <key>NSHumanReadableCopyright</key><string>GPL-3.0. Contains no game data.</string>
+    <key>NSDocumentsFolderUsageDescription</key><string>Digimon World 3 Recomp reads the game disc image you choose.</string>
+    <key>NSDownloadsFolderUsageDescription</key><string>Digimon World 3 Recomp reads the game disc image you choose.</string>
+    <key>NSDesktopFolderUsageDescription</key><string>Digimon World 3 Recomp reads the game disc image you choose.</string>
+    <key>NSRemovableVolumesUsageDescription</key><string>Digimon World 3 Recomp reads the game disc image you choose.</string>
+</dict>
+</plist>

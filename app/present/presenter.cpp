@@ -36,7 +36,7 @@ std::unique_ptr<Presenter> create_presenter(const char* title, int width, int he
         // A window that has had a swap chain of one API cannot get one of another, so every attempt has its own.
         SDL_WindowFlags flags = SDL_WINDOW_RESIZABLE;
 #if defined(__APPLE__)
-        flags |= SDL_WINDOW_METAL;
+        flags |= SDL_WINDOW_METAL | SDL_WINDOW_HIGH_PIXEL_DENSITY;
 #elif !defined(_WIN32)
         flags |= SDL_WINDOW_VULKAN;
 #endif
@@ -53,7 +53,11 @@ std::unique_ptr<Presenter> create_presenter(const char* title, int width, int he
     }
     if (choice != RendererChoice::Auto && choice != RendererChoice::Software) return nullptr;
     if (!software_only) log("falling back to the software presentation path");
-    window = SDL_CreateWindow(title, width, height, SDL_WINDOW_RESIZABLE);
+    SDL_WindowFlags software_flags = SDL_WINDOW_RESIZABLE;
+#if defined(__APPLE__)
+    software_flags |= SDL_WINDOW_HIGH_PIXEL_DENSITY;
+#endif
+    window = SDL_CreateWindow(title, width, height, software_flags);
     if (!window) {
         log(std::string("window creation failed: ") + SDL_GetError());
         return nullptr;

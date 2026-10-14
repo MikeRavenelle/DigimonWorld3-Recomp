@@ -1,0 +1,100 @@
+--- a/plume_metal.cpp
++++ b/plume_metal.cpp
+@@ -1922,6 +1922,7 @@
+         this->layer = static_cast<CA::MetalLayer*>(desc.renderWindow.view);
+         layer->setDevice(commandQueue->device->mtl);
+         layer->setPixelFormat(mapPixelFormat(desc.format));
++        hdrActive = setLayerExtendedRange(layer, desc.renderWindow.window, desc.hdr && desc.format == RenderFormat::R16G16B16A16_FLOAT);
+ 
+         this->commandQueue = commandQueue;
+         this->desc = desc;
+@@ -2106,6 +2107,10 @@
+         return layer == nullptr || width == 0 || height == 0;
+     }
+ 
++    float MetalSwapChain::getHdrHeadroom() const {
++        return hdrActive ? getExtendedRangeHeadroom(desc.renderWindow.window) : 1.0f;
++    }
++
+     uint32_t MetalSwapChain::getRefreshRate() const {
+         MetalAutoreleasePool releasePool;
+         return windowWrapper->getRefreshRate();
+--- a/plume_metal.h
++++ b/plume_metal.h
+@@ -261,6 +261,7 @@
+         bool acquireTexture(RenderCommandSemaphore *signalSemaphore, uint32_t *textureIndex) override;
+         RenderWindow getWindow() const override;
+         bool isEmpty() const override;
++        float getHdrHeadroom() const override;
+         uint32_t getRefreshRate() const override;
+         void getWindowSize(uint32_t &dstWidth, uint32_t &dstHeight) const;
+     };
+--- a/plume_render_interface.h
++++ b/plume_render_interface.h
+@@ -107,6 +107,10 @@
+ 
+         // Only valid if displayTiming is enabled in capabilities.
+         virtual uint32_t getRefreshRate() const = 0;
++
++        // How many times SDR white an HDR swap chain can show right now, where the system grants that in varying
++        // amounts (Apple extended dynamic range); 1 otherwise.
++        virtual float getHdrHeadroom() const { return 1.0f; }
+     };
+ 
+     struct RenderFramebuffer {
+--- a/plume_apple.h
++++ b/plume_apple.h
+@@ -14,6 +14,14 @@
+ namespace plume {
+     RenderDeviceVendor getRenderDeviceVendor(uint64_t registryID);
+ 
++    // Switches a CAMetalLayer to extended dynamic range output (extended linear sRGB, values above 1.0 are brighter than
++    // SDR white) or back to plain output. Returns true when extended range was asked for and the window's screen can
++    // show it.
++    bool setLayerExtendedRange(void* metalLayer, void* window, bool enable);
++
++    // How many times SDR white the window's screen can show at this moment.
++    float getExtendedRangeHeadroom(void* window);
++
+     struct CocoaWindowAttributes {
+         int x, y;
+         int width, height;
+--- a/plume_apple.mm
++++ b/plume_apple.mm
+@@ -9,6 +9,7 @@
+ 
+ #import <AppKit/AppKit.h>
+ #import <Foundation/Foundation.h>
++#import <QuartzCore/CAMetalLayer.h>
+ #import <IOKit/IOKitLib.h>
+ 
+ static uint32_t plumeGetEntryProperty(io_registry_entry_t entry, CFStringRef propertyName) {
+@@ -46,6 +47,28 @@
+         return RenderDeviceVendor::UNKNOWN;
+     }
+ 
++    bool setLayerExtendedRange(void* metalLayer, void* window, bool enable) {
++        CAMetalLayer *layer = (__bridge CAMetalLayer *)metalLayer;
++        NSWindow *nsWindow = (__bridge NSWindow *)window;
++        layer.wantsExtendedDynamicRangeContent = enable;
++        CGColorSpaceRef colorSpace = enable ? CGColorSpaceCreateWithName(kCGColorSpaceExtendedLinearSRGB) : nullptr;
++        layer.colorspace = colorSpace;
++        if (colorSpace != nullptr) {
++            CGColorSpaceRelease(colorSpace);
++        }
++        if (!enable) {
++            return false;
++        }
++        NSScreen *screen = [nsWindow screen] ?: [NSScreen mainScreen];
++        return screen != nil && [screen maximumPotentialExtendedDynamicRangeColorComponentValue] > 1.0;
++    }
++
++    float getExtendedRangeHeadroom(void* window) {
++        NSWindow *nsWindow = (__bridge NSWindow *)window;
++        NSScreen *screen = [nsWindow screen] ?: [NSScreen mainScreen];
++        return screen != nil ? (float)[screen maximumExtendedDynamicRangeColorComponentValue] : 1.0f;
++    }
++
+     CGFloat getScaleFactor(NSWindow *nsWindow) {
+ #ifdef PLUME_APPLE_RETINA_ENABLED
+         return [nsWindow backingScaleFactor];
