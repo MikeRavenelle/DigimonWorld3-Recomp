@@ -65,6 +65,30 @@ inline float hdr_gain(float y, float peak_nits, float paper_nits) {
     return 1.0f + (headroom - 1.0f) * t * t;
 }
 
+// The mode that drives a swap chain that reported HDR: Apple's extended-range layers take linear values relative to SDR
+// white, the Vulkan and Direct3D 12 swap chains scRGB.
+constexpr HdrMode swap_chain_hdr_mode(bool extended_range_layer) { return extended_range_layer ? HdrMode::Edr : HdrMode::ScRgb; }
+
+// What a linear SDR value (SDR white = 1.0) is multiplied by to land on the swap chain, for content that is not
+// expanded (the on-screen display).
+inline float hdr_output_scale(const HdrParams& p) {
+    switch (p.mode) {
+        case HdrMode::ScRgb: return p.paper_white_nits / kScRgbWhiteNits;
+        case HdrMode::Edr: return 1.0f;
+        case HdrMode::Pq:
+        case HdrMode::Off: break;
+    }
+    return 0.0f;
+}
+
+// An EDR layer can show `display_headroom` times SDR white (what the system grants right now), which paper white and
+// the system brightness already fix; the requested peak is cut to what is reachable so the expansion never asks for
+// values the display clips.
+inline HdrParams edr_limited(HdrParams p, float display_headroom) {
+    p.peak_nits = std::min(p.peak_nits, p.paper_white_nits * std::max(display_headroom, 1.0f));
+    return p;
+}
+
 // Linear Rec. 709 to linear Rec. 2020 (ITU-R BT.2087).
 inline std::array<float, 3> rec709_to_rec2020(float r, float g, float b) {
     return {0.6274040f * r + 0.3292820f * g + 0.0433136f * b, 0.0690970f * r + 0.9195400f * g + 0.0113612f * b,

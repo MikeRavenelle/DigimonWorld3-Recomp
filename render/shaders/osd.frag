@@ -8,7 +8,7 @@ layout(push_constant) uniform Params {
     vec4 dest;
     vec2 window;
     float opacity;
-    float hdrScale;  // 0 for an SDR swap chain; otherwise paper white / 80 nits, for scRGB
+    float hdrScale;  // 0 for an SDR swap chain; otherwise the multiplier of linear SDR white (paper white / 80 nits for scRGB, 1 for EDR)
 } params;
 
 layout(location = 0) in vec2 vFrac;

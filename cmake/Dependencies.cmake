@@ -48,8 +48,10 @@ if(DW3_BUILD_TESTS OR NOT DEFINED DW3_BUILD_TESTS)
 endif()
 
 # SDL3: windowing, input, audio output. Prefer the system package on Linux and macOS; on Windows it is built from
-# source and linked statically, so there is no DLL to ship.
-if(NOT WIN32)
+# source and linked statically, so there is no DLL to ship. DW3_FETCH_SDL does the same elsewhere (the macOS app
+# bundle, which should not depend on a package manager's library or its deployment target).
+option(DW3_FETCH_SDL "Build SDL3 from source and link it statically instead of using the system package" OFF)
+if(NOT WIN32 AND NOT DW3_FETCH_SDL)
     find_package(SDL3 QUIET CONFIG)
 endif()
 if(NOT SDL3_FOUND)
@@ -57,7 +59,7 @@ if(NOT SDL3_FOUND)
         GIT_REPOSITORY https://github.com/libsdl-org/SDL.git
         GIT_TAG release-3.2.24
         GIT_SHALLOW TRUE)
-    if(WIN32)
+    if(WIN32 OR DW3_FETCH_SDL)
         set(SDL_SHARED OFF CACHE BOOL "" FORCE)
         set(SDL_STATIC ON CACHE BOOL "" FORCE)
         set(SDL_TEST_LIBRARY OFF CACHE BOOL "" FORCE)
@@ -88,7 +90,8 @@ if(DW3_HW_RENDERER)
             # backend lacks (used to read VRAM back to the CPU), and lets a window be described by callbacks so that SDL
             # can supply the surface (X11 and Wayland alike). The Direct3D 12 and Metal patches make that readback work
             # there too; the Metal one also lets a shader be given as source text, compiled when the device loads it. The HDR patch
-            # lets a swap chain ask for scRGB (extended sRGB on Vulkan, G10_NONE_P709 on Direct3D 12).
+            # lets a swap chain ask for scRGB (extended sRGB on Vulkan, G10_NONE_P709 on Direct3D 12); its Metal part switches
+            # the layer to extended-range output (EDR).
             set(DW3_PLUME_SUBMODULES contrib/volk contrib/VulkanMemoryAllocator contrib/Vulkan-Headers)
             if(DW3_RENDER_D3D12)
                 list(APPEND DW3_PLUME_SUBMODULES contrib/D3D12MemoryAllocator)
@@ -107,6 +110,8 @@ if(DW3_HW_RENDERER)
                       COMMAND ${CMAKE_COMMAND} -DPATCH=${CMAKE_CURRENT_LIST_DIR}/patches/plume-metal.patch
                               -P ${CMAKE_CURRENT_LIST_DIR}/ApplyPatch.cmake
                       COMMAND ${CMAKE_COMMAND} -DPATCH=${CMAKE_CURRENT_LIST_DIR}/patches/plume-hdr.patch
+                              -P ${CMAKE_CURRENT_LIST_DIR}/ApplyPatch.cmake
+                      COMMAND ${CMAKE_COMMAND} -DPATCH=${CMAKE_CURRENT_LIST_DIR}/patches/plume-hdr-metal.patch
                               -P ${CMAKE_CURRENT_LIST_DIR}/ApplyPatch.cmake)
             FetchContent_MakeAvailable(plume)
             # Third-party code: build quietly and treat its headers as system headers.

@@ -94,7 +94,7 @@ bool HwPresenter::update_options(const PresentOptions& options, dw3::Gpu& gpu) {
     return ok;
 }
 
-bool HwPresenter::supports_hdr() const { return api_ != dw3::GraphicsApi::Metal; }  // the Metal swap chain has no EDR path yet
+bool HwPresenter::supports_hdr() const { return true; }
 
 void HwPresenter::set_wide_mode(dw3::WideMode mode) { renderer_->set_wide_mode(mode); }
 
