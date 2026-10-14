@@ -508,6 +508,9 @@ int main(int argc, char** argv) {
         }
         if (scenario.gpu || scenario_settings.graphics.widescreen != 0 || scenario_settings.graphics.seamless_bg) {
             dw3::HwOptions hw_options;
+#if defined(__APPLE__)
+            hw_options.api = dw3::GraphicsApi::Metal;
+#endif
             hw_options.seamless_inside = scenario_settings.graphics.seamless_bg;
             if (scenario_settings.graphics.seamless_bg || scenario_settings.graphics.widescreen != 0) {
                 std::string library_error;
