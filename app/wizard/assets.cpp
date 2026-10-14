@@ -13,7 +13,7 @@ constexpr const char* kUpscalerReleaseUrl = "https://github.com/xinntao/Real-ESR
 
 // Owner: upload the converted model files (tools/models/convert_realesrgan.py prints their hashes) to a release of this
 // project, then set the base URL and the four values below.
-constexpr const char* kModelReleaseUrl = "https://github.com/MikeRavenelle/DigimonWorld3-Recomp/releases/tag/models-v1/";
+constexpr const char* kModelReleaseUrl = "https://github.com/MikeRavenelle/DigimonWorld3-Recomp/releases/download/models-v1/";
 constexpr const char* kModelBinSha256  = "8fdd6052f8931091164a570ee7b5c5b2d1dcd991112d464eb9ae1a5b52ece553";
 constexpr const char* kModelParamSha256 = "8a0c4b4fd1c57c945ef24477edbdbeba8a509ca9c9adf8f63f51c265ea1bcc89";
 
