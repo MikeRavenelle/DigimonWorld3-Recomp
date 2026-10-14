@@ -298,6 +298,19 @@ Scenario parse(const std::string& text, const std::string& src) {
         }
     }
     std::stable_sort(s.waits.begin(), s.waits.end(), [](const Wait& a, const Wait& b) { return a.at < b.at; });
+    if (auto* arr = root["margin_watch"].as_array()) {
+        for (auto& n : *arr) {
+            auto& t = *n.as_table();
+            MarginWatch w;
+            w.from = t["from"].value_or(int64_t{-1});
+            w.to = t["to"].value_or(int64_t{-1});
+            if (w.from < 0 || w.to < w.from || w.to > s.frames) fail(src, "[[margin_watch]] needs 0 <= from <= to <= frames");
+            w.label = t["label"].value_or(std::string());
+            w.lit_changes_max = static_cast<int>(t["lit_changes_max"].value_or(int64_t{0}));
+            w.strip = t["strip"].value_or(false);
+            s.margin_watches.push_back(std::move(w));
+        }
+    }
     if (auto* arr = root["check"].as_array()) {
         for (auto& n : *arr) {
             auto& t = *n.as_table();

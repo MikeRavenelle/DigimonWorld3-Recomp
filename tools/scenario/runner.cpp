@@ -445,6 +445,46 @@ int main(int argc, char** argv) {
     std::vector<uint32_t> watch_last(opt.watches.size(), 0);
     std::vector<bool> watch_seen(opt.watches.size(), false);
     std::size_t waits_seen = 0, dumps_done = 0;
+    // [[margin_watch]]: per window, the lit state of the outer columns of each rendered frame and the frames kept for a strip.
+    struct MarginTrace {
+        int changes = 0, frames = 0;
+        int lit = -1;
+        std::vector<std::vector<uint32_t>> kept;
+        std::vector<char> kept_lit;
+    };
+    std::vector<MarginTrace> margin_traces(scenario.margin_watches.size());
+    auto trace_margins = [&](int64_t script) {
+        if (!hw) return;
+        std::vector<uint32_t> px;
+        constexpr int kW = 1280, kH = 720, kOuter = kW / 25;
+        bool rendered = false;
+        for (std::size_t i = 0; i < scenario.margin_watches.size(); ++i) {
+            const auto& w = scenario.margin_watches[i];
+            if (script < w.from || script > w.to) continue;
+            if (!rendered) rendered = hw->render_to_image(host->machine().gpu().display(), dw3::ScaleMode::Fit, false, nullptr, kW, kH, px);
+            if (!rendered) return;
+            bool lit = false;
+            for (int y = 0; y < kH && !lit; ++y)
+                for (int x = 0; x < kW && !lit; ++x) {
+                    if (x == kOuter) x = kW - kOuter;
+                    const uint32_t p = px[static_cast<std::size_t>(y) * kW + static_cast<std::size_t>(x)];
+                    lit = ((p & 0xFF) | ((p >> 8) & 0xFF) | ((p >> 16) & 0xFF)) > 8;
+                }
+            MarginTrace& t = margin_traces[i];
+            if (t.lit >= 0 && t.lit != (lit ? 1 : 0)) ++t.changes;
+            t.lit = lit ? 1 : 0;
+            ++t.frames;
+            if (w.strip && t.kept.size() < 48) {
+                // The few frames before the first switch, then the frames after it.
+                t.kept.push_back(px);
+                t.kept_lit.push_back(lit ? 1 : 0);
+                if (t.changes == 0 && t.kept.size() > 6) {
+                    t.kept.erase(t.kept.begin());
+                    t.kept_lit.erase(t.kept_lit.begin());
+                }
+            }
+        }
+    };
     bool wait_timeout = false;
 
     bool want_wav = !opt.wav.empty();
@@ -572,6 +612,7 @@ int main(int argc, char** argv) {
             last_frame = base + static_cast<int64_t>(frame);
             timeline.advance(last_frame, read_ram);
             const int64_t script = timeline.script_frame();
+            trace_margins(script);
             while (dumps_done < opt.dumps.size() && script >= opt.dumps[dumps_done].first) {
                 const auto& d = opt.dumps[dumps_done++];
                 if (std::filesystem::path(d.second).extension() == ".bmp") {
@@ -746,6 +787,31 @@ int main(int argc, char** argv) {
     } else if (next < scenario.checks.size()) {
         std::printf("  FAIL %zu check(s) never reached\n", scenario.checks.size() - next);
         broken = true;
+    }
+    for (std::size_t i = 0; i < scenario.margin_watches.size(); ++i) {
+        const auto& w = scenario.margin_watches[i];
+        const MarginTrace& t = margin_traces[i];
+        const bool pass = t.frames > 0 && t.changes <= w.lit_changes_max;
+        std::printf("  %s margin_watch \"%s\" [%lld, %lld]: %d frames, margins switched %d times, allowed <= %d\n", pass ? "PASS" : "FAIL",
+                    w.label.c_str(), static_cast<long long>(w.from), static_cast<long long>(w.to), t.frames, t.changes, w.lit_changes_max);
+        ++(pass ? total.pass : total.fail);
+        if (!t.kept.empty()) {
+            // Contact sheet: consecutive frames around the first switch at 1/8 size, eight to a row, a frame whose margins are lit marked by a red bar on top.
+            constexpr int kTileW = 160, kTileH = 90, kCols = 8, kStep = 8;
+            const std::size_t count = std::min<std::size_t>(t.kept.size(), 48);
+            const int rows = static_cast<int>((count + kCols - 1) / kCols);
+            std::vector<uint32_t> sheet(static_cast<std::size_t>(kCols * kTileW) * static_cast<std::size_t>(rows * kTileH), 0);
+            for (std::size_t n = 0; n < count; ++n) {
+                const std::size_t index = n;
+                const int ox = static_cast<int>(n % kCols) * kTileW, oy = static_cast<int>(n / kCols) * kTileH;
+                for (int y = 0; y < kTileH; ++y)
+                    for (int x = 0; x < kTileW; ++x)
+                        sheet[static_cast<std::size_t>(oy + y) * static_cast<std::size_t>(kCols * kTileW) + static_cast<std::size_t>(ox + x)] =
+                            y < 3 && t.kept_lit[index] ? 0xFF0000FFu : t.kept[index][static_cast<std::size_t>(y * kStep) * 1280 + static_cast<std::size_t>(x * kStep)];
+            }
+            auto path = std::filesystem::path(opt.out) / scenario.name / ("margin_watch_" + slug(w.label) + ".bmp");
+            if (write_bmp(path, sheet, kCols * kTileW, rows * kTileH)) std::printf("    strip %s\n", path.string().c_str());
+        }
     }
     bool ok = !broken && total.fail == 0;
     std::printf("%s %s: %d passed, %d failed, %lld frames in %.1fs\n", ok ? "PASS" : "FAIL", scenario.name.c_str(),
