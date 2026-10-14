@@ -373,9 +373,9 @@ TEST(IngameList, HdrRowsWorkOnAnHdrDisplay) {
 TEST(IngameList, WidescreenRowCyclesTheAspects) {
     Settings s = defaults();
     const Entry& e = entry("graphics.widescreen");
-    EXPECT_EQ(row_text(s, e), "Wide Battle: Off");
+    EXPECT_EQ(row_text(s, e), "Widescreen: Off");
     apply(s, e, stepped_value(s, e, 1));
-    EXPECT_EQ(row_text(s, e), "Wide Battle: 16:9");
+    EXPECT_EQ(row_text(s, e), "Widescreen: 16:9");
     apply(s, e, stepped_value(s, e, 1));
     EXPECT_EQ(value_label(s, e), "16:10");
     apply(s, e, "21:9");

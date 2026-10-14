@@ -1,0 +1,52 @@
+name = "widescreen_field_dialogue"
+description = "Widescreen fields at 16:9 from a cold boot: the title screen and the name card of a map that is loading stay 4:3 with borders, and the first field dialogue in Kusanagi City is drawn in the 4:3 area with the street continuing in the margins."
+frames = 1700
+memcard = "none"
+settings = ["graphics.widescreen=16:9"]
+
+# Title -> New Game -> the opening scenes (CROSS clicks through them) up to the first field dialogue on the street corner in
+# Kusanagi City; the CROSS taps stop before that box so that it prints on its own. Its window object is at 0x800CD6A0:
+#   +0x0C state (1 printing, 2 waiting for the button)   +0xA4 characters printed so far (45 once it has printed itself, 55 when a button skipped it)
+# The window prints one character every 7 frames (normal), three per frame (fast) or the whole box at once (instant).
+
+[[press]]
+button = "START"
+at = 900
+
+[[press]]
+button = "UP"
+at = 960
+
+[[press]]
+button = "CROSS"
+at = 1020
+
+[[repeat]]
+button = "CROSS"
+from = 1100
+to = 1630
+every = 45
+hold = 3
+
+# Screens whose map is not known are shown at 4:3: the title screen and, while the map loads, its name card (the margins show
+# nothing but the black of the borders: one colour).
+[[check]]
+at = 1000
+label = "title screen"
+margin_colors_max = 1
+screenshot = true
+
+[[check]]
+at = 1200
+label = "name card of a loading map"
+margin_colors_max = 1
+screenshot = true
+
+# The dialogue window object is at 0x800CD6A0 (+0x0C state 1 while it prints). The street is wide behind it.
+[[check]]
+at = 1660
+label = "dialogue"
+ram = [{ addr = 0x800CD6AC, size = 4, value = 1 }, { addr = 0x800554D0, size = 4, value = 2 }]
+margin_colors_min = 16
+wide_field_frames_min = 100
+screenshot = true

@@ -44,7 +44,7 @@
 //   --fullscreen-at F  toggle fullscreen at frame F (repeatable)
 //   --compare-at F     press the Original/enhanced comparison hotkey at frame F (repeatable; for audit runs)
 //   --scale M          fit (default, 4:3 letterbox), integer or stretch
-//   --widescreen A     off (default), 16:9, 16:10 or 21:9: a wider arena in battles (GPU renderer)
+//   --widescreen A     off (default), 16:9, 16:10 or 21:9: wider battles and fields (GPU renderer)
 //   --filter F         nearest (default), linear or fsr
 //   --no-vsync         present without waiting for the display refresh (always on with --uncapped/--frames)
 //   --mute             no audio output (the SPU still runs; audio is also off for --frames audit runs)
@@ -382,6 +382,7 @@ int main(int argc, char** argv) {
         po.widescreen = static_cast<dw3::WideAspect>(g.widescreen);
         po.texture_pack = texture_packs.get(g);
         po.stage_library = stage_libraries.get(g, *disc);
+        po.seamless_bg = g.seamless_bg;
         const char* modes[] = {"fit", "integer", "stretch"};
         dw3::parse_scale_mode(modes[g.scale_mode], po.scale);
         return po;
@@ -704,9 +705,10 @@ int main(int argc, char** argv) {
         const bool last = opt.max_frames >= 0 && static_cast<int64_t>(frame) >= opt.max_frames;
         const bool periodic = opt.shot_every > 0 && frame % static_cast<uint64_t>(opt.shot_every) == 0;
         const bool want_shot = periodic || (last && !opt.screenshot.empty());
-        constexpr uint32_t kGameMode = 0x800554D0, kBattleMode = 6;
-        presenter->set_wide_active(settings.active().graphics.widescreen != 0 &&
-                                   dw3_read32(&machine.ctx(), kGameMode) == kBattleMode);
+        constexpr uint32_t kGameMode = 0x800554D0;
+        presenter->set_wide_mode(settings.active().graphics.widescreen != 0
+                                     ? dw3::wide_mode_for_game_mode(dw3_read32(&machine.ctx(), kGameMode))
+                                     : dw3::WideMode::Off);
         presenter->present(machine.gpu(), want_shot ? &capture : nullptr);
         // On a display that runs at a multiple of 60 Hz, each frame is shown for the same whole number of refreshes.
         const auto& shown = settings.active().graphics;

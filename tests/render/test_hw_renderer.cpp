@@ -1687,6 +1687,67 @@ TEST_P(HwWideFrame, MarginsShowTheWorldAndTheHudStaysCentred) {
 
 INSTANTIATE_TEST_SUITE_P(Wide, HwWideFrame, ::testing::ValuesIn(gpu_params({1, 2})), gpu_param_name);
 
+// Wide fields need a map library: without one the field mode is not available, and with one a frame whose map cannot be
+// resolved (no background sprites drawn) is shown at 4:3 with borders, so the margins never show leftovers.
+class HwWideField : public ::testing::TestWithParam<GpuParam> {};
+
+TEST_P(HwWideField, UnresolvedFramesStayFourByThree) {
+    std::string error;
+    HwOptions o;
+    o.wide_frame = make_wide_frame(WideAspect::Ratio16x9);
+    o.stage_library = std::make_shared<texrep::StageLibrary>();
+    o.stage_library->finish();
+    auto hw = create_renderer(GetParam(), error, o);
+    if (!hw) GTEST_SKIP() << "no GPU device: " << error;
+    std::vector<uint16_t> vram(kPixels, 0);
+    hw->vram_written(vram, {});
+    DrawState world;
+    world.area_x2 = 319;
+    world.area_y2 = 239;
+    PrimitiveFlags flat;
+    DisplayState display;
+    display.enabled = true;
+    std::vector<uint32_t> img;
+    auto px = [&](int x, int y) { return img[static_cast<std::size_t>(y) * 424 + x] & 0xFFFFFF; };
+
+    hw->set_wide_mode(WideMode::Field);
+    hw->rect(vram, world, flat, gv(0, 0, 0, 0, 248), 320, 240);  // a full-width fill, no background sprite
+    hw->display_flipped();
+    ASSERT_TRUE(hw->render_to_image(display, ScaleMode::Fit, false, nullptr, 424, 240, img));
+    EXPECT_EQ(px(3, 100), 0u) << "pillarbox: the copy is not shown";
+    EXPECT_EQ(px(212, 100), 0xFF0000u) << "the 4:3 picture is";
+    EXPECT_EQ(hw->stats().wide_field_fallbacks, 1u);
+    EXPECT_EQ(hw->stats().wide_field_frames, 0u);
+
+    // Battles do not need a map: the same draw is shown wide.
+    hw->set_wide_mode(WideMode::Battle);
+    hw->rect(vram, world, flat, gv(0, 0, 0, 0, 248), 320, 240);
+    ASSERT_TRUE(hw->render_to_image(display, ScaleMode::Fit, false, nullptr, 424, 240, img));
+    EXPECT_EQ(px(3, 100), 0xFF0000u) << "the margin is filled";
+}
+
+TEST_P(HwWideField, FieldModeNeedsALibrary) {
+    std::string error;
+    HwOptions o;
+    o.wide_frame = make_wide_frame(WideAspect::Ratio16x9);
+    auto hw = create_renderer(GetParam(), error, o);
+    if (!hw) GTEST_SKIP() << "no GPU device: " << error;
+    std::vector<uint16_t> vram(kPixels, 0);
+    hw->vram_written(vram, {});
+    DrawState world;
+    world.area_x2 = 319;
+    world.area_y2 = 239;
+    DisplayState display;
+    display.enabled = true;
+    hw->set_wide_mode(WideMode::Field);
+    hw->rect(vram, world, PrimitiveFlags{}, gv(0, 0, 0, 0, 248), 320, 240);
+    std::vector<uint32_t> img;
+    ASSERT_TRUE(hw->render_to_image(display, ScaleMode::Fit, false, nullptr, 424, 240, img));
+    EXPECT_EQ(img[100 * 424 + 3] & 0xFFFFFF, 0u);
+}
+
+INSTANTIATE_TEST_SUITE_P(WideField, HwWideField, ::testing::ValuesIn(gpu_params({1})), gpu_param_name);
+
 
 // The HDR output transform of the final post-processing pass against the CPU formulas of hdr.h. A headless renderer
 // has an 8-bit capture target, so the encoded values that fit it are compared: HDR10 PQ, and EDR (relative to paper

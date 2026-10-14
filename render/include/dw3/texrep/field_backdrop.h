@@ -57,6 +57,15 @@ struct BackdropFill {
     uint32_t color = 0x808080;
 };
 
+// Widescreen fields. The wide copy shows the view widened by `margin` columns on each side; the pieces listed for it are
+// split between the frame buffer (what the game's own 4:3 picture is completed with) and the copy.
+struct WideBackdropPlan {
+    std::vector<BackdropFill> frame;  // pieces to draw into the frame buffer: those that touch the 4:3 view, only with `seamless`
+    std::vector<BackdropFill> wide;   // pieces to draw into the copy: all with `seamless`, otherwise those that reach a margin
+};
+BackdropRect widened_view(const BackdropRect& view, int margin);
+WideBackdropPlan plan_wide_backdrop(const std::vector<BackdropFill>& listed, const BackdropRect& view, bool seamless);
+
 class FieldBackdrop {
 public:
     explicit FieldBackdrop(std::shared_ptr<const StageLibrary> library) : library_(std::move(library)) {}

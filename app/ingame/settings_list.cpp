@@ -30,7 +30,7 @@ constexpr Labels kLabels[] = {
     {"graphics.color_grade", "Color", 1},
     {"graphics.crt", "CRT", 1},
     {"graphics.scale_mode", "Scaling", 1},
-    {"graphics.widescreen", "Wide Battle", 1},
+    {"graphics.widescreen", "Widescreen", 1},
     {"graphics.display_mode", "Display", 1},
     {"graphics.monitor", "Monitor", 1},
     {"graphics.vsync", "VSync", 1},

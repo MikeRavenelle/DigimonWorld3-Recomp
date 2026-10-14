@@ -7,11 +7,22 @@
 // copy too, shifted by `shift()`, so 2D elements stay where the game put them (centred) while 3D geometry the game
 // already submits beyond the 4:3 edges fills the margins.
 
+#include <algorithm>
 #include <cstdint>
 
 namespace dw3 {
 
 enum class WideAspect : uint8_t { Off, Ratio16x9, Ratio16x10, Ratio21x9 };
+
+// What the wide frame copy shows (see the renderer). Battle: every draw is mirrored and the copy is always shown.
+// Field: the margins are filled with the pieces of the map, and a frame whose map could not be resolved is shown at 4:3.
+enum class WideMode : uint8_t { Off, Battle, Field };
+
+// The game mode word (0x800554D0) that selects the wide mode: 2 is the field, 6 a battle; everything else (menus,
+// transitions, results, cutscene modes) stays at 4:3.
+constexpr WideMode wide_mode_for_game_mode(uint32_t game_mode) {
+    return game_mode == 6 ? WideMode::Battle : game_mode == 2 ? WideMode::Field : WideMode::Off;
+}
 
 struct AspectRatio {
     int num, den;
@@ -62,6 +73,12 @@ struct WideFrame {
         return false;
     }
     bool covers_width(int x1, int x2) const { return x1 <= 0 && x2 >= frame_w - 1; }
+    // Whether a polygon with these wide-copy x coordinates covers columns in one of the margins.
+    bool reaches_margin(int xa, int xb, int xc) const {
+        const int lo = std::min({xa, xb, xc}), hi = std::max({xa, xb, xc});
+        const int left_end = kOriginX + margin, right_start = kOriginX + margin + frame_w, right_end = kOriginX + width();
+        return (lo < left_end && hi >= kOriginX) || (hi >= right_start && lo < right_end);
+    }
 };
 
 constexpr WideFrame make_wide_frame(WideAspect a, int frame_w = 320, int frame_h = 240) {

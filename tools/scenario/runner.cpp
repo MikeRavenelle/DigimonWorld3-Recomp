@@ -290,6 +290,17 @@ int evaluate(const Options& opt, const sc::Scenario& s, const sc::Check& c, dw3:
             if (c.squares_drawn_max) report(r, st.squares_drawn <= *c.squares_drawn_max, "squares_drawn_max", "drawn " + num(st.squares_drawn) + ", expected <= " + num(*c.squares_drawn_max));
         }
     }
+    if (c.wide_field_frames_min || c.wide_field_fallbacks_max || c.wide_margin_polygons_min || c.wide_margin_polygons_max) {
+        if (!hw) {
+            report(r, false, "wide_field", "no GPU renderer");
+        } else {
+            const dw3::HwStats& st = hw->stats();
+            if (c.wide_field_frames_min) report(r, st.wide_field_frames >= *c.wide_field_frames_min, "wide_field_frames_min", "shown wide " + num(st.wide_field_frames) + ", expected >= " + num(*c.wide_field_frames_min));
+            if (c.wide_field_fallbacks_max) report(r, st.wide_field_fallbacks <= *c.wide_field_fallbacks_max, "wide_field_fallbacks_max", "shown at 4:3 " + num(st.wide_field_fallbacks) + ", expected <= " + num(*c.wide_field_fallbacks_max));
+            if (c.wide_margin_polygons_min) report(r, st.wide_margin_polygons >= *c.wide_margin_polygons_min, "wide_margin_polygons_min", "drawn " + num(st.wide_margin_polygons) + ", expected >= " + num(*c.wide_margin_polygons_min));
+            if (c.wide_margin_polygons_max) report(r, st.wide_margin_polygons <= *c.wide_margin_polygons_max, "wide_margin_polygons_max", "drawn " + num(st.wide_margin_polygons) + ", expected <= " + num(*c.wide_margin_polygons_max));
+        }
+    }
     if (c.margin_colors_min || c.margin_colors_max) {
         if (!gpu_image) {
             report(r, false, "margin_colors", "no GPU renderer frame");
@@ -497,7 +508,8 @@ int main(int argc, char** argv) {
         }
         if (scenario.gpu || scenario_settings.graphics.widescreen != 0 || scenario_settings.graphics.seamless_bg) {
             dw3::HwOptions hw_options;
-            if (scenario_settings.graphics.seamless_bg) {
+            hw_options.seamless_inside = scenario_settings.graphics.seamless_bg;
+            if (scenario_settings.graphics.seamless_bg || scenario_settings.graphics.widescreen != 0) {
                 std::string library_error;
                 hw_options.stage_library = dw3::texrep::StageLibrary::open_async(opt.disc, library_error);
                 if (!hw_options.stage_library) {
@@ -553,7 +565,7 @@ int main(int argc, char** argv) {
         if (boot) std::printf("  reboot @%lld\n", static_cast<long long>(scenario.reboots[boot - 1]));
         result = host->run([&](uint64_t frame) {
             settings_screen.apply_pending();
-            if (hw) hw->set_wide_mirror(read_ram(0x800554D0, 4) == 6);
+            if (hw) hw->set_wide_mode(dw3::wide_mode_for_game_mode(read_ram(0x800554D0, 4)));
             last_frame = base + static_cast<int64_t>(frame);
             timeline.advance(last_frame, read_ram);
             const int64_t script = timeline.script_frame();

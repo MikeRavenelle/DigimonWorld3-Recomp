@@ -62,7 +62,7 @@ const SettingInfo kSettings[] = {
      Group::Graphics, Type::Choice, Apply::Live, 0, 0, kOutputFilters, false, DW3_FIELD(graphics.output_filter)},
     {"graphics.scale_mode", "Scaling", "fit keeps 4:3 with borders, integer uses whole multiples only, stretch fills the window.",
      Group::Graphics, Type::Choice, Apply::Live, 0, 0, kScaleModes, false, DW3_FIELD(graphics.scale_mode)},
-    {"graphics.widescreen", "Widescreen battles", "Shows more of the arena to the sides in battles at the chosen aspect ratio, with the menus and status windows kept at their original size in the centre. Fields stay 4:3 with borders (GPU renderer only).",
+    {"graphics.widescreen", "Widescreen", "Shows more of the arena in battles and more of the map in fields to the sides, at the chosen aspect ratio, with the menus and status windows kept at their original size in the centre. A field screen that cannot be widened (cutscenes, maps not on the disc) stays 4:3 with borders (GPU renderer only; the map pieces come from your disc).",
      Group::Graphics, Type::Choice, Apply::Live, 0, 0, kWidescreen, false, DW3_FIELD(graphics.widescreen)},
     {"graphics.display_mode", "Display mode", "windowed, borderless (a desktop-sized window without borders) or exclusive (the monitor switches to the chosen mode). F11 or Alt+Enter toggles between windowed and the last fullscreen mode.",
      Group::Graphics, Type::Choice, Apply::Live, 0, 0, kDisplayModes, false, DW3_FIELD(graphics.display_mode)},

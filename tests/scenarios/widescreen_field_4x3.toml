@@ -1,0 +1,16 @@
+name = "widescreen_field_4x3"
+description = "The same street with widescreen off on a headless GPU renderer: the field stays 4:3 with black borders (the reference for widescreen_field.toml)."
+start_state = "new_game.state"   # written by new_game_state.toml
+start_frame = 1473
+frames = 1560
+memcard = "blank"
+gpu = true
+include = ["common/asuka_street.toml"]
+
+[[check]]
+at = 1480
+label = "street"
+display_enabled = true
+ram = [{ addr = 0x800554D0, size = 4, value = 2 }]
+margin_colors_max = 1
+screenshot = true

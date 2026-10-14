@@ -54,7 +54,7 @@ std::shared_ptr<const dw3::texrep::TexturePack> TexturePackCache::get(const Sett
 }
 
 std::shared_ptr<dw3::texrep::StageLibrary> StageLibraryCache::get(const Settings::Graphics& g, const std::string& disc_path) {
-    if (!g.seamless_bg) return nullptr;
+    if (!g.seamless_bg && g.widescreen == 0) return nullptr;
     if (disc_path != disc_ || !library_) {
         disc_ = disc_path;
         std::string error;

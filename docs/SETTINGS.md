@@ -273,18 +273,25 @@ before. Options that only matter in the field, such as the encounter rate, can b
 - Not verified on real HDR hardware by the author: the maths and the shader are covered by tests against the CPU
   formulas, the swap chain selection is not.
 
-## Widescreen battles
+## Widescreen
 
-- Needs the GPU renderer. While a battle runs, the picture is widened to the chosen aspect (16:9, 16:10 or 21:9) and
-  the arena continues past the sides of the original 4:3 view. Menus, status windows and message boxes keep their
-  original size and place in the centre; flat shapes that touch the frame's edge (fades, backdrops) stretch to the
-  new edges. Everything else (fields, scenes, the results screen, menus) stays 4:3 with borders.
+- Needs the GPU renderer. While a battle or a field runs, the picture is widened to the chosen aspect (16:9, 16:10 or
+  21:9) and the world continues past the sides of the original 4:3 view. Menus, status windows and message boxes keep
+  their original size and place in the centre; flat shapes that touch the frame's edge (fades, backdrops) stretch to
+  the new edges. Everything else (scenes, the results screen, menus) stays 4:3 with borders.
 - The GPU renderer keeps a wider copy of the battle's frame buffers in extra render-target columns and draws each
   battle primitive into it a second time, so the game itself is not changed. The extra columns cost memory only
   while this setting is on: at internal resolution 8x and 21:9 the two VRAM targets grow from about 268 MB to
   about 415 MB.
 - Anything the game itself skips outside its 4:3 view cannot be shown; the arena checked so far submits its ground
-  and sky well past the view. Pre-rendered 2D backgrounds are not widened.
+  and sky well past the view.
+- Fields: the margins are filled with the pieces of the map's pre-rendered background (read from the stage packs on
+  your disc, or from the HD pack where it has them), whether or not `graphics.seamless_bg` is on; that option only
+  decides whether the 4:3 area is completed as well. Characters and objects need nothing special: the field submits
+  every active actor to the GPU every frame whatever its position, so those that stand in a margin are drawn. Beyond
+  the edge of a map the margin is black, as the game paints the void. A field frame whose map cannot be worked out
+  (cutscenes, transitions, a map without a stage pack) is shown at 4:3 with borders, so a margin never shows
+  leftovers.
 
 ## Display
 
