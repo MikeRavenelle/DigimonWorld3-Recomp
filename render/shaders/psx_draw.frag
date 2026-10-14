@@ -271,7 +271,10 @@ void main() {
     uint bit15 = 0u;
     uint t = 0u;
     if (textured) {
-        ivec2 uv = (isPrecise ? ivec2(floor(vUvF)) : ivec2(planeAt(9, p) >> 12, planeAt(12, p) >> 12)) & 255;
+        ivec2 uv = isPrecise ? ivec2(floor(vUvF)) : ivec2(planeAt(9, p) >> 12, planeAt(12, p) >> 12);
+        // A native pixel only partly covered at a higher resolution lies outside the polygon, where the plane runs past
+        // the texels its vertices name; those texels belong to a neighbouring image.
+        uv = clamp(uv, ivec2(int(vUvRect & 255u), int((vUvRect >> 16) & 255u)), ivec2(int((vUvRect >> 8) & 255u), int(vUvRect >> 24))) & 255;
 #ifdef DISPLAY_LAYER
         t = (s0 & 65536u) != 0u ? directTexel(uv) : fetchTexel(uv);
 #else

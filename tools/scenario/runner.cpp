@@ -66,6 +66,8 @@ struct Options {
     bool gpu = false;  // --gpu: use the GPU renderer whatever the scenario says
     bool frame_stats = false;  // --frame-stats: per-frame host timing, printed at the end (adds a window-sized render each frame)
     int stats_width = 1920, stats_height = 1080;  // --frame-stats-size WxH: the output size drawn for the stats
+    int64_t frames_from = 0, frames_to = -1, frames_step = 1;  // --gpu-frames FROM:TO[:STEP]:DIR: rendered frames in that range of emulated frames as BMPs
+    std::string frames_dir;
     bool no_xa = false;  // --no-xa: drop XA-ADPCM sectors (isolates SPU voice output when auditing)
 };
 
@@ -361,7 +363,19 @@ int main(int argc, char** argv) {
                 return 2;
             }
         }
-        else if (a == "--dump" && i + 1 < argc) {
+        else if (a == "--gpu-frames" && i + 1 < argc) {
+            const std::string v = argv[++i];
+            const auto c1 = v.find(':'), c2 = v.find(':', c1 + 1), c3 = v.find(':', c2 + 1);
+            if (c1 == std::string::npos || c2 == std::string::npos) {
+                std::fprintf(stderr, "--gpu-frames wants FROM:TO[:STEP]:DIR\n");
+                return 2;
+            }
+            opt.frames_from = std::stoll(v.substr(0, c1));
+            opt.frames_to = std::stoll(v.substr(c1 + 1, c2 - c1 - 1));
+            if (c3 != std::string::npos) opt.frames_step = std::max<int64_t>(1, std::stoll(v.substr(c2 + 1, c3 - c2 - 1)));
+            opt.frames_dir = v.substr(c3 == std::string::npos ? c2 + 1 : c3 + 1);
+            opt.gpu = true;
+        } else if (a == "--dump" && i + 1 < argc) {
             std::string v = argv[++i];
             auto colon = v.find(':');
             if (colon == std::string::npos) {
@@ -503,7 +517,56 @@ int main(int argc, char** argv) {
             }
         }
     };
+    // [[flicker_watch]]: per window, the last two different pictures (grey, 640x360) and the most flickering blocks seen.
+    struct FlickerTrace {
+        std::vector<uint8_t> older, last;
+        int frames = 0, pictures = 0;
+        int worst_blocks = 0;
+    };
+    std::vector<FlickerTrace> flicker_traces(scenario.flicker_watches.size());
+    auto trace_flicker = [&](int64_t script) {
+        if (!hw) return;
+        std::vector<uint32_t> px;
+        bool rendered = false;
+        constexpr int kW = 1280, kH = 720, kGreyW = kW / 2, kGreyH = kH / 2;
+        std::vector<uint8_t> grey;
+        for (std::size_t i = 0; i < scenario.flicker_watches.size(); ++i) {
+            const auto& w = scenario.flicker_watches[i];
+            if (script < w.from || script > w.to) continue;
+            if (!rendered) {
+                rendered = hw->render_to_image(host->machine().gpu().display(), dw3::ScaleMode::Fit, false, nullptr, kW, kH, px);
+                if (!rendered) return;
+                grey.resize(static_cast<std::size_t>(kGreyW) * kGreyH);
+                for (int y = 0; y < kGreyH; ++y)
+                    for (int x = 0; x < kGreyW; ++x) {
+                        const uint32_t p = px[static_cast<std::size_t>(y * 2) * kW + static_cast<std::size_t>(x * 2)];
+                        grey[static_cast<std::size_t>(y) * kGreyW + static_cast<std::size_t>(x)] =
+                            static_cast<uint8_t>((((p & 0xFF) * 77) + (((p >> 8) & 0xFF) * 151) + (((p >> 16) & 0xFF) * 28)) >> 8);
+                    }
+            }
+            FlickerTrace& t = flicker_traces[i];
+            ++t.frames;
+            if (!t.last.empty() && t.last == grey) continue;
+            if (!t.older.empty()) {
+                constexpr int kBlock = 16;
+                std::vector<int> flicker((kGreyW / kBlock) * (kGreyH / kBlock + 1), 0);
+                for (int y = 0; y < kGreyH; ++y)
+                    for (int x = 0; x < kGreyW; ++x) {
+                        const std::size_t k = static_cast<std::size_t>(y) * kGreyW + static_cast<std::size_t>(x);
+                        const int to_middle = std::abs(static_cast<int>(t.last[k]) - static_cast<int>(t.older[k]));
+                        const int outer = std::abs(static_cast<int>(grey[k]) - static_cast<int>(t.older[k]));
+                        if (to_middle > 24 && outer < 8) ++flicker[static_cast<std::size_t>((y / kBlock) * (kGreyW / kBlock) + x / kBlock)];
+                    }
+                const int blocks = static_cast<int>(std::count_if(flicker.begin(), flicker.end(), [](int n) { return n * 4 >= kBlock * kBlock; }));
+                t.worst_blocks = std::max(t.worst_blocks, blocks);
+            }
+            t.older = std::move(t.last);
+            t.last = grey;
+            ++t.pictures;
+        }
+    };
     bool wait_timeout = false;
+    int64_t frames_written = 0;
 
     bool want_wav = !opt.wav.empty();
     for (const auto& c : scenario.checks) want_wav = want_wav || c.wav;
@@ -611,6 +674,7 @@ int main(int argc, char** argv) {
                 return 77;
             }
             host->machine().gpu().set_rasterizer(hw.get());
+            if (scenario_settings.graphics.precise_geometry) host->machine().enable_precise_geometry();
         }
         dw3app::SettingsController settings_controller(scenario_settings, scenario_settings, nullptr, {});
         dw3app::ingame::FieldMenuSettings settings_screen(host->machine(), settings_controller);
@@ -676,6 +740,16 @@ int main(int argc, char** argv) {
             timeline.advance(last_frame, read_ram);
             const int64_t script = timeline.script_frame();
             trace_margins(script);
+            trace_flicker(script);
+            if (hw && last_frame >= opt.frames_from && last_frame <= opt.frames_to && (last_frame - opt.frames_from) % opt.frames_step == 0) {
+                std::vector<uint32_t> px;
+                const dw3::PostFx post = dw3app::post_fx_from(scenario_settings.graphics);
+                if (hw->render_to_image(host->machine().gpu().display(), dw3::ScaleMode::Fit, scenario_settings.graphics.output_filter >= 1, &post, opt.stats_width, opt.stats_height, px)) {
+                    char name[32];
+                    std::snprintf(name, sizeof name, "f%06lld.bmp", static_cast<long long>(frames_written++));
+                    write_bmp(std::filesystem::path(opt.frames_dir) / name, px, opt.stats_width, opt.stats_height);
+                }
+            }
             while (dumps_done < opt.dumps.size() && script >= opt.dumps[dumps_done].first) {
                 const auto& d = opt.dumps[dumps_done++];
                 if (std::filesystem::path(d.second).extension() == ".bmp") {
@@ -881,6 +955,15 @@ int main(int argc, char** argv) {
             auto path = std::filesystem::path(opt.out) / scenario.name / ("margin_watch_" + slug(w.label) + ".bmp");
             if (write_bmp(path, sheet, kCols * kTileW, rows * kTileH)) std::printf("    strip %s\n", path.string().c_str());
         }
+    }
+    for (std::size_t i = 0; i < scenario.flicker_watches.size(); ++i) {
+        const auto& w = scenario.flicker_watches[i];
+        const FlickerTrace& t = flicker_traces[i];
+        const bool pass = t.pictures >= 3 && t.worst_blocks <= w.flicker_blocks_max;
+        std::printf("  %s flicker_watch \"%s\" [%lld, %lld]: %d frames, %d different pictures, most flickering blocks %d, allowed <= %d\n",
+                    pass ? "PASS" : "FAIL", w.label.c_str(), static_cast<long long>(w.from), static_cast<long long>(w.to), t.frames,
+                    t.pictures, t.worst_blocks, w.flicker_blocks_max);
+        ++(pass ? total.pass : total.fail);
     }
     bool ok = !broken && total.fail == 0;
     if (opt.frame_stats) std::fputs(frame_stats.report().c_str(), stdout);

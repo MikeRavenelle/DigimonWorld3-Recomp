@@ -1,0 +1,22 @@
+name = "battle_stable"
+description = "A forest battle from its first frame at the handheld settings on the GPU renderer: with the camera still, the arena must not jump for a frame and back (vertices dropping to integer positions, wrong depths stretching textures)."
+start_state = "endgame_battle_start.state"   # written by endgame_field_battle.toml
+start_frame = 3570
+frames = 3900
+memcard = "blank"
+gpu = true
+settings = ["graphics.internal_res=4", "graphics.texture_filter=xbr", "graphics.true_color=true", "graphics.precise_geometry=true",
+            "graphics.widescreen=16:9"]
+
+[[check]]
+at = 3890
+label = "battle menu"
+display_enabled = true
+ram = [{ addr = 0x800554D0, size = 4, value = 6 }]
+screenshot = true
+
+[[flicker_watch]]
+from = 3600
+to = 3890
+label = "battle menu arena"
+flicker_blocks_max = 40

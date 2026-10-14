@@ -59,11 +59,11 @@ TEST(PreciseVertexCache, OnlyTheElevenBitFieldsTheGpuReadsAreTheKey) {
 TEST(PreciseVertexCache, NewerRecordReplacesTheSameWord) {
     PreciseVertexCache c;
     c.record(3, 4, 3.1, 4.1, 10.0);
-    c.record(3, 4, 3.9, 4.9, 20.0);
+    c.record(3, 4, 3.9, 4.9, 11.0);
     PreciseVertex v;
     ASSERT_TRUE(c.find(pk(3, 4), v));
     EXPECT_FLOAT_EQ(v.x, 3.9f);
-    EXPECT_FLOAT_EQ(v.w, 20.0f);
+    EXPECT_FLOAT_EQ(v.w, 11.0f);
 }
 
 TEST(PreciseVertexCache, RecordIsRefusedWhenTheIntegerIsNotTheTruncatedPosition) {
@@ -85,13 +85,38 @@ TEST(PreciseVertexCache, EntriesExpireAfterTheirFrames) {
     c.record(1, 2, 1.5, 2.5, 9.0);
     PreciseVertex v;
     EXPECT_TRUE(c.find(pk(1, 2), v));
-    frame = 101;
-    EXPECT_TRUE(c.find(pk(1, 2), v));  // drawn a frame later
-    frame = 102;
+    frame = 103;
+    EXPECT_TRUE(c.find(pk(1, 2), v));  // the game draws up to three video frames after the projection
+    frame = 104;
     EXPECT_FALSE(c.find(pk(1, 2), v));  // stale
     c.record(1, 2, 1.25, 2.25, 9.0);    // refreshed
     EXPECT_TRUE(c.find(pk(1, 2), v));
     EXPECT_FLOAT_EQ(v.x, 1.25f);
+}
+
+TEST(PreciseVertexCache, ASlowlyChangingDepthKeepsTheEntry) {
+    uint64_t frame = 100;
+    PreciseVertexCache c;
+    c.set_clock([&] { return frame; });
+    c.record(1, 2, 1.5, 2.5, 1000.0);
+    frame = 101;
+    c.record(1, 2, 1.6, 2.5, 1100.0);
+    PreciseVertex v;
+    EXPECT_TRUE(c.find(pk(1, 2), v));
+    EXPECT_FLOAT_EQ(v.x, 1.6f);
+}
+
+TEST(PreciseVertexCache, PixelsSharedByVerticesOfVeryDifferentDepthAreNotReturned) {
+    uint64_t frame = 100;
+    PreciseVertexCache c;
+    c.set_clock([&] { return frame; });
+    c.record(1, 2, 1.5, 2.5, 1000.0);
+    c.record(1, 2, 1.9, 2.1, 9000.0);  // another vertex, much farther away
+    PreciseVertex v;
+    EXPECT_FALSE(c.find(pk(1, 2), v));
+    frame = 110;  // the contest is over once the entries are old
+    c.record(1, 2, 1.7, 2.3, 9000.0);
+    EXPECT_TRUE(c.find(pk(1, 2), v));
 }
 
 TEST(PreciseVertexCache, ClearInvalidatesEverything) {

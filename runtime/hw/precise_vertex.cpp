@@ -22,6 +22,11 @@ void PreciseVertexCache::record(int32_t sx, int32_t sy, double x, double y, doub
     for (int i = 0; i < 2 && !slot; ++i)
         if (!set[i].valid) slot = &set[i];
     if (!slot) slot = set[0].frame <= set[1].frame ? &set[0] : &set[1];
+    // The same vertex moves its depth smoothly from frame to frame; a jump means a different vertex took the pixel.
+    const bool same_pixel_live = slot->valid && slot->key == key && frame - slot->frame < kMaxAge;
+    const bool jump = same_pixel_live && std::fabs(slot->v.w - w) > kMaxDepthStep * w;
+    if (!same_pixel_live) slot->contested = 0;
+    if (jump) slot->contested = frame + 1;
     slot->key = key;
     slot->frame = frame;
     slot->valid = true;
@@ -35,7 +40,7 @@ bool PreciseVertexCache::find(uint32_t word, PreciseVertex& out) const {
     for (int i = 0; i < 2; ++i) {
         const Entry& e = set[i];
         if (!e.valid || e.key != key) continue;
-        if (frame - e.frame >= kMaxAge) break;
+        if (frame - e.frame >= kMaxAge || (e.contested && frame + 1 - e.contested < kMaxAge)) break;
         if (std::floor(e.v.x) != sext11(key & 0x7FFu) || std::floor(e.v.y) != sext11(key >> 16)) break;
         out = e.v;
         ++hits_;

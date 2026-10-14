@@ -28,6 +28,16 @@ TEST(ScenarioFormat, MinimalFileDefaults) {
     EXPECT_TRUE(s.checks.empty());
 }
 
+TEST(ScenarioFormat, FlickerWatchParsed) {
+    Scenario s = parse("name = \"t\"\nframes = 100\n[[flicker_watch]]\nfrom = 10\nto = 90\nlabel = \"arena\"\nflicker_blocks_max = 12\n");
+    ASSERT_EQ(s.flicker_watches.size(), 1u);
+    EXPECT_EQ(s.flicker_watches[0].from, 10);
+    EXPECT_EQ(s.flicker_watches[0].to, 90);
+    EXPECT_EQ(s.flicker_watches[0].label, "arena");
+    EXPECT_EQ(s.flicker_watches[0].flicker_blocks_max, 12);
+    EXPECT_THROW(parse("name = \"t\"\nframes = 100\n[[flicker_watch]]\nfrom = 10\nto = 200\n"), std::runtime_error);
+}
+
 TEST(ScenarioFormat, MissingNameOrFramesRejected) {
     EXPECT_THROW(parse("frames = 10\n"), std::runtime_error);
     EXPECT_THROW(parse("name = \"x\"\n"), std::runtime_error);

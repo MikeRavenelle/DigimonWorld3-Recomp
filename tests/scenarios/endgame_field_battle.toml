@@ -322,6 +322,11 @@ label = "random encounter"
 ram = [{ addr = 0x800554D0, size = 4, value = 6 }]
 timeout = 600
 
+# The start of the battle is the fixture for battle_stable.toml.
+[[savestate]]
+at = 3570
+path = "endgame_battle_start.state"
+
 [[check]]
 at = 3900
 label = "battle menu"

@@ -326,6 +326,18 @@ Scenario parse(const std::string& text, const std::string& src) {
             s.margin_watches.push_back(std::move(w));
         }
     }
+    if (auto* arr = root["flicker_watch"].as_array()) {
+        for (auto& n : *arr) {
+            auto& t = *n.as_table();
+            FlickerWatch w;
+            w.from = t["from"].value_or(int64_t{-1});
+            w.to = t["to"].value_or(int64_t{-1});
+            if (w.from < 0 || w.to < w.from || w.to > s.frames) fail(src, "[[flicker_watch]] needs 0 <= from <= to <= frames");
+            w.label = t["label"].value_or(std::string());
+            w.flicker_blocks_max = static_cast<int>(t["flicker_blocks_max"].value_or(int64_t{40}));
+            s.flicker_watches.push_back(std::move(w));
+        }
+    }
     if (auto* arr = root["check"].as_array()) {
         for (auto& n : *arr) {
             auto& t = *n.as_table();
