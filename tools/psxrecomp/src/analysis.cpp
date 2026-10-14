@@ -353,6 +353,12 @@ void Analyzer::scan_jal_words() {
     }
 }
 
+// A jump-table entry or other kernel-segment pointer decodes as `lb rt,-N(zero)`, a load from the top of the address
+// space that no compiled code performs, so it marks data even though it is a valid instruction.
+static bool is_pointer_word(uint32_t word) {
+    return (word >> 26) == 0x20 && ((word >> 21) & 31) == 0 && (word & 0x8000);
+}
+
 void Analyzer::gap_fill() {
     std::vector<std::pair<uint32_t, uint32_t>> gaps;  // [start, end) not covered by any function
     uint32_t cur = seg_.base;
@@ -406,7 +412,7 @@ void Analyzer::gap_fill() {
                 // Leaf function: start after the last non-instruction word (data) since the boundary.
                 uint32_t leaf = boundary;
                 for (uint32_t a = boundary; a < r; a += 4)
-                    if (decode(seg_.word(a), a).op == Op::Invalid) leaf = a + 4;
+                    if (decode(seg_.word(a), a).op == Op::Invalid || is_pointer_word(seg_.word(a))) leaf = a + 4;
                 while (leaf < r && seg_.word(leaf) == 0) leaf += 4;
                 if (leaf != cand) try_accept(leaf, gap_end, r);
             }

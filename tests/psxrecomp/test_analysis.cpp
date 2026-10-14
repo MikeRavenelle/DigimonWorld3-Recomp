@@ -332,6 +332,18 @@ TEST(Analysis, LeadingRodataThenCodeFoundByReturnAnchor) {
     EXPECT_EQ(get(r, fn).end, fn + 16);
 }
 
+TEST(Analysis, LeafAfterJumpTableOfPointersStartsPastTheTable) {
+    Program p(kBase);
+    p.emit({0x8001ab94u, 0x8001aba0u, 0x8001abacu});  // jump table entries, which decode as `lb t0,-N(zero)`
+    uint32_t fn = p.pc();
+    p.emit({sw(a1, 128, a0), jr(ra), nop()});
+    AnalysisConfig c;
+    auto r = analyze(p.segment(), c);
+    ASSERT_TRUE(r.functions.count(fn));
+    EXPECT_EQ(get(r, fn).start, fn);
+    EXPECT_FALSE(r.functions.count(kBase));
+}
+
 TEST(Analysis, MidFunctionReturnsDoNotSplitFunction) {
     Program p(kBase);
     p.emit({0xFC000000u});  // leading data so nothing is seeded at base

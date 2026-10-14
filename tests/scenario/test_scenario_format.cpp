@@ -154,6 +154,20 @@ TEST(ScenarioFormat, RebootMustBeInsideTheRunAndOrdered) {
     EXPECT_THROW(parse("name=\"t\"\nframes=100\n[[reboot]]\nat=50\n[[reboot]]\nat=40\n"), std::runtime_error);
 }
 
+TEST(ScenarioFormat, PokeEntriesAreSortedAndValidated) {
+    Scenario s = parse(
+        "name=\"t\"\nframes=100\n"
+        "[[poke]]\nat=50\naddr=0x80048C6E\nsize=2\nvalue=50\n"
+        "[[poke]]\nat=10\naddr=0x80048C70\nvalue=7\n");
+    ASSERT_EQ(s.pokes.size(), 2u);
+    EXPECT_EQ(s.pokes[0].at, 10);
+    EXPECT_EQ(s.pokes[0].size, 4);
+    EXPECT_EQ(s.pokes[1].addr, 0x80048C6Eu);
+    EXPECT_EQ(s.pokes[1].value, 50u);
+    EXPECT_THROW(parse("name=\"t\"\nframes=100\n[[poke]]\nat=1\naddr=0x80048C6E\nsize=3\n"), std::runtime_error);
+    EXPECT_THROW(parse("name=\"t\"\nframes=100\n[[poke]]\nat=1\naddr=0x100\n"), std::runtime_error);
+}
+
 TEST(ScenarioFormat, SaveAndLoadStateEntries) {
     Scenario s = parse(
         "name=\"t\"\nframes=100\nstart_state=\"a.state\"\nstart_frame=10\n"
