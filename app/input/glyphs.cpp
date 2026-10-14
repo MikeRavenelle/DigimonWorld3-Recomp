@@ -67,4 +67,9 @@ std::string select_hint(const Binding& select, PromptStyle style, bool pad_conne
     return "SELECT";
 }
 
+std::string close_hint(const Binding& close, PromptStyle style, bool pad_connected) {
+    if (!pad_connected || style == PromptStyle::PlayStation || close.pad == PadInput::None) return "";
+    return std::string(pad_label(close.pad, style));
+}
+
 }  // namespace dw3app::input

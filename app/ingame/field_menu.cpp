@@ -40,10 +40,12 @@ constexpr uint32_t kLocaleTableId = 0xB1;
 constexpr uint32_t kRowStringIds = 0x8003EB20;  // 6 ids per variant, 4 bytes each
 constexpr uint32_t kRowStringsPerVariant = 6;
 
-// The header's hint, in place of the menu's own: the triangle glyph, "Close", then the way to the settings.
-std::vector<uint8_t> header_hint(const std::string& select_name) {
-    std::vector<uint8_t> out = {1, 0x34, 1, 1};
-    const std::vector<uint8_t> rest = text_of({"Close ", select_name, ": SETTINGS"});
+// The header's hint, in place of the menu's own: the close button (the game's triangle glyph, or the pad's name for
+// it), "Close", then the way to the settings, all named in one prompt style.
+std::vector<uint8_t> header_hint(const std::string& close_name, const std::string& select_name) {
+    std::vector<uint8_t> out = close_name.empty() ? std::vector<uint8_t>{1, 0x34, 1, 1} : text_of({close_name, ": "});
+    if (!out.empty() && out.back() == 0) out.pop_back();
+    const std::vector<uint8_t> rest = text_of({"Close  ", select_name, ": SETTINGS"});
     out.insert(out.end(), rest.begin(), rest.end());
     return out;
 }
@@ -109,7 +111,7 @@ struct MenuHook {
         self->machine_.lookup_original(kListTaskFunction)(ctx);
         if (g.r32(task + kState) != kStateRunning || g.r32(task + kSubState) != kSubStateWaiting) return;
         const uint32_t header = g.r32(windows + kWindowHeader);
-        if (header) g.show(header, header_hint(select_name_of(self->model_)));
+        if (header) g.show(header, header_hint(close_name_of(self->model_), select_name_of(self->model_)));
         if (g.pressed(kSelect, false) && g.r32(task + kRowCount) > 0) {
             g.w32(task + kScreenCursor, 0);
             g.w32(task + kScreenMarker, kScreenOpen);

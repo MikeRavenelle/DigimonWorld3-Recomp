@@ -28,4 +28,8 @@ std::string binding_label(const Binding& b, PromptStyle style);
 // a pad is connected, otherwise "SELECT".
 std::string select_hint(const Binding& select, PromptStyle style, bool pad_connected);
 
+// The name of the menu's close button in the hint line, or empty where the game's own triangle glyph fits: with no pad
+// connected, on PlayStation names, or when the binding has no pad button.
+std::string close_hint(const Binding& close, PromptStyle style, bool pad_connected);
+
 }  // namespace dw3app::input

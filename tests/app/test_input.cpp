@@ -306,3 +306,12 @@ TEST(Glyphs, SettingsHintNamesTheButtonOnAPad) {
     EXPECT_EQ(select_hint(select, PromptStyle::Xbox, false), "SELECT");
     EXPECT_EQ(select_hint({"Backspace", PadInput::None}, PromptStyle::Xbox, true), "SELECT");
 }
+
+TEST(Glyphs, CloseHintNamesThePadButtonOutsidePlayStationStyle) {
+    const Binding close{"S", PadInput::North};
+    EXPECT_EQ(close_hint(close, PromptStyle::Xbox, true), "Y");
+    EXPECT_EQ(close_hint(close, PromptStyle::Nintendo, true), "X");
+    EXPECT_EQ(close_hint(close, PromptStyle::PlayStation, true), "");
+    EXPECT_EQ(close_hint(close, PromptStyle::Xbox, false), "");
+    EXPECT_EQ(close_hint({"S", PadInput::None}, PromptStyle::Xbox, true), "");
+}
