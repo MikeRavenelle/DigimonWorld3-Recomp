@@ -1,0 +1,8 @@
+name = "training_gym"
+description = "The training gym in Central Park outside Asuka City: talk to Leomon, run a Punch training session on the training overlay and walk back out into the park."
+start_state = "new_game.state"   # written by new_game_state.toml
+start_frame = 1473
+frames = 3950
+memcard = "blank"
+settings = ["gameplay.encounters=off"]
+include = ["common/training_gym.toml"]

@@ -38,6 +38,12 @@
 //   button = "START"
 //   at = 900
 //
+//   [[poke]]                   # write `value` (little endian, `size` 1, 2 or 4 bytes) to RAM `addr` at script frame `at`,
+//   at = 5135                  # for states the game's own play does not reach cheaply (e.g. training points)
+//   addr = 0x80048C6E
+//   size = 2
+//   value = 50
+//
 //   [[repeat]]                 # press `button` every `every` frames in [from, to)
 //   button = "CROSS"
 //   from = 1100
@@ -69,7 +75,7 @@
 //   direction (RIGHT when x is too small) and UP/DOWN likewise for z (DOWN when z is too small). Wall collisions are
 //   not modelled: a route around obstacles is a sequence of walks to waypoints.
 //
-//   include = ["common/new_game.toml"]   # entries ([[press]], [[repeat]], [[wait]], [[walk]], [[check]], [[reboot]])
+//   include = ["common/new_game.toml"]   # entries ([[press]], [[repeat]], [[wait]], [[walk]], [[check]], [[reboot]], [[poke]])
 //                              # of the listed files (paths relative to this file) are merged in before this file's own;
 //                              # their other keys are ignored. Frames in all files share one script clock.
 //
@@ -215,6 +221,14 @@ struct MarginWatch {
     bool strip = false;
 };
 
+// [[poke]]
+struct Poke {
+    int64_t at = 0;
+    uint32_t addr = 0;
+    int size = 4;
+    uint32_t value = 0;
+};
+
 // [[savestate]] / [[loadstate]]
 struct StateOp {
     int64_t at = 0;
@@ -232,6 +246,7 @@ struct Scenario {
     bool gpu = false;  // draw with a headless GPU renderer (implied by a widescreen setting)
     std::vector<Press> presses;
     std::vector<int64_t> reboots;  // sorted, within (0, frames)
+    std::vector<Poke> pokes;  // sorted by `at`
     std::vector<StateOp> saves, loads;  // sorted by `at`
     std::string start_state;
     int64_t start_frame = 0;

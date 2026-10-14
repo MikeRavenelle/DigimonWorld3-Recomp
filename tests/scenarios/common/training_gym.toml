@@ -1,0 +1,217 @@
+# From the start state of new_game_state.toml (Asuka City Central Sector, the player in control): out through the city gate
+# and the Asuka Bridge into Central Park, to the training gym at the top of the park, a session of Punch training with
+# Leomon, and back out into the park. RAM words as documented in new_game.toml.
+#
+#   training points  0x80048C6E (half): none at the start of a new game, so a [[poke]] gives the party 50
+#   game mode        0x800554D0: 0xA is the training overlay (STGTRAIN)
+#
+# The training screens wait on CROSS: the session is steered by taps, and TRIANGLE backs out of the menus.
+
+[[walk]]
+at = 1474
+label = "to the gate 1"
+x = { via = 0x8004ADC0, addr = 0x58, size = 4 }
+z = { via = 0x8004ADC0, addr = 0x5C, size = 4 }
+target = [819, 521]
+tolerance = 10
+axes = "x"
+timeout = 900
+guard = [{ addr = 0x800554D4, size = 4, value = 0x1C3 }]
+
+[[walk]]
+at = 1475
+label = "to the gate 2"
+x = { via = 0x8004ADC0, addr = 0x58, size = 4 }
+z = { via = 0x8004ADC0, addr = 0x5C, size = 4 }
+target = [801, 482]
+tolerance = 10
+axes = "z"
+timeout = 900
+guard = [{ addr = 0x800554D4, size = 4, value = 0x1C3 }]
+
+[[walk]]
+at = 1476
+label = "to the gate 3"
+x = { via = 0x8004ADC0, addr = 0x58, size = 4 }
+z = { via = 0x8004ADC0, addr = 0x5C, size = 4 }
+target = [577, 610]
+tolerance = 10
+timeout = 900
+guard = [{ addr = 0x800554D4, size = 4, value = 0x1C3 }]
+
+[[walk]]
+at = 1477
+label = "to the gate 4"
+x = { via = 0x8004ADC0, addr = 0x58, size = 4 }
+z = { via = 0x8004ADC0, addr = 0x5C, size = 4 }
+target = [173, 595]
+tolerance = 10
+axes = "x"
+timeout = 900
+guard = [{ addr = 0x800554D4, size = 4, value = 0x1C3 }]
+
+[[walk]]
+at = 1478
+label = "to the gate 5"
+x = { via = 0x8004ADC0, addr = 0x58, size = 4 }
+z = { via = 0x8004ADC0, addr = 0x5C, size = 4 }
+target = [253, 531]
+tolerance = 10
+axes = "z"
+timeout = 900
+guard = [{ addr = 0x800554D4, size = 4, value = 0x1C3 }]
+
+[[walk]]
+at = 1479
+label = "to the gate 6"
+x = { via = 0x8004ADC0, addr = 0x58, size = 4 }
+z = { via = 0x8004ADC0, addr = 0x5C, size = 4 }
+target = [257, 749]
+tolerance = 10
+axes = "z"
+timeout = 900
+guard = [{ addr = 0x800554D4, size = 4, value = 0x1C3 }]
+
+[[walk]]
+at = 1480
+label = "to the gate 7"
+x = { via = 0x8004ADC0, addr = 0x58, size = 4 }
+z = { via = 0x8004ADC0, addr = 0x5C, size = 4 }
+target = [67, 799]
+tolerance = 10
+axes = "x"
+timeout = 900
+guard = [{ addr = 0x800554D4, size = 4, value = 0x1C3 }]
+
+[[check]]
+at = 1482
+label = "Central Sector gate bridge"
+display_enabled = true
+screenshot = true
+
+# CROSS on the exit arrow leads to the Asuka Bridge (0x1C4), where a second arrow at the far end leads on.
+[[wait]]
+at = 1486
+label = "Asuka Bridge"
+ram = [{ addr = 0x800554D4, size = 4, value = 0x1C4 }, { addr = 0x800554D0, size = 4, value = 2 }]
+timeout = 1500
+press = "CROSS"
+every = 10
+press_hold = 3
+
+[[walk]]
+at = 1488
+label = "to the Central Park arrow"
+x = { via = 0x8004ADC0, addr = 0x58, size = 4 }
+z = { via = 0x8004ADC0, addr = 0x5C, size = 4 }
+target = [226, 494]
+tolerance = 5
+timeout = 900
+guard = [{ addr = 0x800554D4, size = 4, value = 0x1C4 }]
+
+[[check]]
+at = 1490
+label = "Asuka Bridge"
+display_enabled = true
+screenshot = true
+
+[[wait]]
+at = 1494
+label = "Central Park"
+ram = [{ addr = 0x800554D4, size = 4, value = 0x1D2 }, { addr = 0x800554D0, size = 4, value = 2 }]
+timeout = 1500
+press = "CROSS"
+every = 10
+press_hold = 3
+
+
+[[walk]]
+at = 1770
+label = "to the gym 1"
+x = { via = 0x8004ADC0, addr = 0x58, size = 4 }
+z = { via = 0x8004ADC0, addr = 0x5C, size = 4 }
+target = [958, 224]
+tolerance = 12
+axes = "x"
+timeout = 900
+guard = [{ addr = 0x800554D4, size = 4, value = 0x1D2 }]
+
+[[walk]]
+at = 1771
+label = "to the gym 2"
+x = { via = 0x8004ADC0, addr = 0x58, size = 4 }
+z = { via = 0x8004ADC0, addr = 0x5C, size = 4 }
+target = [972, 397]
+tolerance = 12
+axes = "z"
+timeout = 900
+guard = [{ addr = 0x800554D4, size = 4, value = 0x1D2 }]
+
+[[walk]]
+at = 1772
+label = "to the gym 3"
+x = { via = 0x8004ADC0, addr = 0x58, size = 4 }
+z = { via = 0x8004ADC0, addr = 0x5C, size = 4 }
+target = [948, 371]
+tolerance = 12
+timeout = 900
+guard = [{ addr = 0x800554D4, size = 4, value = 0x1D2 }]
+
+[[poke]]
+at = 1778
+addr = 0x80048C6E
+size = 2
+value = 50
+
+[[press]]
+button = "LEFT"
+at = 1780
+hold = 2
+
+[[wait]]
+at = 1790
+label = "training menu"
+ram = [{ addr = 0x800554D0, size = 4, value = 0xA }]
+timeout = 1500
+press = "CROSS"
+every = 50
+press_hold = 3
+
+[[check]]
+at = 1795
+label = "training menu"
+display_enabled = true
+ram = [{ addr = 0x800554D0, size = 4, value = 0xA }, { addr = 0x80048C6E, size = 2, value = 50 }]
+screenshot = true
+
+# Leomon asks which training and how many points: CROSS takes the first choices (Punch, 1 TP) and the minigame runs.
+[[repeat]]
+button = "CROSS"
+from = 1800
+to = 3500
+every = 50
+
+[[check]]
+at = 3550
+label = "after the session"
+display_enabled = true
+ram = [{ addr = 0x800554D0, size = 4, value = 0xA }, { addr = 0x80048C6E, size = 2, value = 49 },
+       { addr = 0x80048C78, size = 2, value = 48, cmp = "gt" }]
+screenshot = true
+
+[[wait]]
+at = 3600
+label = "outside the gym"
+ram = [{ addr = 0x800554D0, size = 4, value = 2 }, { addr = 0x800554D4, size = 4, value = 0x1D2 }]
+timeout = 3000
+press = "TRIANGLE"
+every = 40
+press_hold = 3
+
+[[check]]
+at = 3900
+label = "back in the park"
+display_enabled = true
+ram = [{ addr = 0x800554D0, size = 4, value = 2 }, { addr = 0x800554D4, size = 4, value = 0x1D2 }]
+screenshot = true
+

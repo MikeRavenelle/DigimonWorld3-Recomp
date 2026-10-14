@@ -444,7 +444,7 @@ int main(int argc, char** argv) {
     };
     std::vector<uint32_t> watch_last(opt.watches.size(), 0);
     std::vector<bool> watch_seen(opt.watches.size(), false);
-    std::size_t waits_seen = 0, dumps_done = 0;
+    std::size_t waits_seen = 0, dumps_done = 0, pokes_done = 0;
     // [[margin_watch]]: per window, the lit state of the outer columns of each rendered frame and the frames kept for a strip.
     struct MarginTrace {
         int changes = 0, frames = 0;
@@ -624,6 +624,12 @@ int main(int argc, char** argv) {
                     f.write(reinterpret_cast<const char*>(host->machine().bus().ram()), 2 * 1024 * 1024);
                 }
                 std::printf("  dump @%lld -> %s\n", static_cast<long long>(script), d.second.c_str());
+            }
+            while (pokes_done < scenario.pokes.size() && script >= scenario.pokes[pokes_done].at) {
+                const auto& p = scenario.pokes[pokes_done++];
+                uint8_t* ram = host->machine().bus().ram();
+                const uint32_t offset = p.addr & (DW3_RAM_SIZE - 1);
+                for (int b = 0; b < p.size; ++b) ram[offset + b] = static_cast<uint8_t>(p.value >> (8 * b));
             }
             for (std::size_t i = 0; i < opt.watches.size(); ++i) {
                 const auto& w = opt.watches[i];

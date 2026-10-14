@@ -1,0 +1,11 @@
+name = "training_gym_remaster"
+description = "The training gym session with the handheld settings: GPU renderer at 4x with xBR, true colour, precise geometry, FSR, SMAA, sharpening, 16:9 and seamless backgrounds."
+start_state = "new_game.state"   # written by new_game_state.toml
+start_frame = 1473
+frames = 3950
+memcard = "blank"
+gpu = true
+settings = ["gameplay.encounters=off", "graphics.internal_res=4", "graphics.texture_filter=xbr", "graphics.true_color=true",
+            "graphics.precise_geometry=true", "graphics.output_filter=fsr", "graphics.antialiasing=smaa",
+            "graphics.sharpening=high", "graphics.widescreen=16:9", "graphics.seamless_bg=true", "graphics.frame_pacing=even"]
+include = ["common/training_gym.toml"]

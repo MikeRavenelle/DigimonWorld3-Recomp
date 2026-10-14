@@ -86,7 +86,7 @@ void parse_wait_common(const std::string& src, const toml::table& t, const char*
 
 bool in_ram(uint32_t p) { return (p & 0x1FFFFFFFu) < 0x200000u && p != 0; }
 
-const char* const kMergedTables[] = {"press", "repeat", "reboot", "wait", "walk", "check"};
+const char* const kMergedTables[] = {"press", "repeat", "reboot", "wait", "walk", "check", "poke"};
 
 // Merges the tables of the `include` files into `root`, included entries first. `seen` guards against cycles.
 void merge_includes(toml::table& root, const std::filesystem::path& file, std::vector<std::filesystem::path>& seen) {
@@ -232,6 +232,21 @@ Scenario parse(const std::string& text, const std::string& src) {
     s.start_frame = root["start_frame"].value_or(int64_t{0});
     if (s.start_frame < 0 || s.start_frame >= s.frames) fail(src, "`start_frame` must be within [0, frames)");
     if (s.start_frame && s.start_state.empty()) fail(src, "`start_frame` needs `start_state`");
+    if (auto* arr = root["poke"].as_array()) {
+        for (auto& n : *arr) {
+            auto& t = *n.as_table();
+            Poke p;
+            p.at = t["at"].value_or(int64_t{-1});
+            p.addr = t["addr"].value_or(0u);
+            p.size = static_cast<int>(t["size"].value_or(int64_t{4}));
+            p.value = t["value"].value_or(0u);
+            if (p.at < 0 || p.at > s.frames) fail(src, "[[poke]] `at` must be within [0, frames]");
+            if (p.addr < 0x80000000u) fail(src, "[[poke]] needs `addr` in main RAM (0x80000000 and up)");
+            if (p.size != 1 && p.size != 2 && p.size != 4) fail(src, "[[poke]] `size` must be 1, 2 or 4");
+            s.pokes.push_back(p);
+        }
+        std::stable_sort(s.pokes.begin(), s.pokes.end(), [](const Poke& a, const Poke& b) { return a.at < b.at; });
+    }
     for (const char* key : {"savestate", "loadstate"}) {
         auto* arr = root[key].as_array();
         if (!arr) continue;
