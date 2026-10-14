@@ -285,7 +285,7 @@ TEST(Assets, PlanListsUpscalerThenModels) {
 
 TEST(Assets, UnsetValuesFailClearly) {
     DownloadPlan plan = plan_for(dw3::platform::Os::Linux, dw3::platform::Arch::X86_64);
-    EXPECT_FALSE(plan_problem(plan).empty());  // the project's model files are not published yet
+    EXPECT_EQ(plan_problem(plan), "");  // the shipped plan is complete
     for (Asset& a : plan.assets) {
         a.url = "https://example.test/" + a.file_name;
         a.sha256 = std::string(64, 'a');
