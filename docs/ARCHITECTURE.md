@@ -228,6 +228,14 @@ touch a frame edge (fades, backdrops) stretch to the new edge. The extra columns
 wide copy is shown instead of the 4:3 picture with its own aspect while it is current; every other screen is 4:3 with
 borders.
 
+Widescreen fields (game mode 2) use the same copy. The field's pre-rendered background is drawn from sprites that cover
+the 4:3 view only, so the renderer takes the map and scroll that the seamless-background tracker works out from them
+(`render/src/texrep/field_backdrop.*`) and draws the map's pieces for the widened view into the copy, in the same
+layer order (far, ground, characters, foreground); the game's own draws are replayed after the pieces that are due
+before them. Actors need no help: the field's per-actor update (FIELDSTG `0x80090294`, the method at +0x48 of the actor vtable) queues every active actor
+for drawing whatever its position, and the 2D draw only clips to the drawing area. A frame whose map is not resolved
+is shown at 4:3. `graphics.seamless_bg` only decides whether the same pieces also complete the 4:3 area.
+
 HDR output (`graphics.hdr`): with the plume HDR patch the swap chain can be R16G16B16A16_FLOAT in the scRGB colour
 space (Vulkan `VK_EXT_swapchain_colorspace` extended sRGB, Direct3D 12 `DXGI_COLOR_SPACE_RGB_FULL_G10_NONE_P709`).
 The picture is then always post-processed, and the last pass (scale, RCAS or CRT) ends in the transform of

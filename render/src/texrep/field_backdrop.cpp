@@ -18,6 +18,20 @@ unsigned group_of(int layer) { return layer == 1 ? layers::kFront : layers::kBac
 
 }  // namespace
 
+BackdropRect widened_view(const BackdropRect& view, int margin) { return {view.x0 - margin, view.y0, view.x1 + margin, view.y1}; }
+
+WideBackdropPlan plan_wide_backdrop(const std::vector<BackdropFill>& listed, const BackdropRect& view, bool seamless) {
+    WideBackdropPlan plan;
+    for (const BackdropFill& f : listed) {
+        const BackdropRect r{f.x, f.y, f.x + f.piece->w, f.y + f.piece->h};
+        if (seamless && r.intersects(view)) plan.frame.push_back(f);
+        // Without seamless backgrounds the 4:3 part of the copy shows what the game drew; only the margins are filled.
+        const bool inside = r.x0 >= view.x0 && r.x1 <= view.x1;
+        if (seamless || !inside) plan.wide.push_back(f);
+    }
+    return plan;
+}
+
 uint64_t FieldBackdrop::geometry_key(int x, int y, int w, int h) {
     auto field = [](int v) { return static_cast<uint64_t>(static_cast<uint16_t>(v)); };
     return field(x) | (field(y) << 16) | (field(w) << 32) | (field(h) << 48);

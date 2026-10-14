@@ -27,6 +27,7 @@ std::unique_ptr<HwPresenter> HwPresenter::create(SDL_Window* window, dw3::Graphi
     hw.precise_geometry = options.precise_geometry;
     hw.texture_pack = options.texture_pack;
     hw.stage_library = options.stage_library;
+    hw.seamless_inside = options.seamless_bg;
     hw.wide_frame = dw3::make_wide_frame(options.widescreen);
     hw.hdr = options.post.hdr.mode != dw3::HdrMode::Off;
     p->api_ = api;
@@ -58,7 +59,7 @@ bool HwPresenter::update_options(const PresentOptions& options, dw3::Gpu& gpu) {
     if (options.internal_res != options_.internal_res || options.true_color != options_.true_color ||
         options.texture_filter != options_.texture_filter || options.precise_geometry != options_.precise_geometry ||
         options.texture_pack != options_.texture_pack || options.stage_library != options_.stage_library ||
-        options.widescreen != options_.widescreen ||
+        options.widescreen != options_.widescreen || options.seamless_bg != options_.seamless_bg ||
         (options.post.hdr.mode != dw3::HdrMode::Off) != (options_.post.hdr.mode != dw3::HdrMode::Off)) {
         dw3::HwOptions hw;
         hw.true_color = options.true_color;
@@ -66,6 +67,7 @@ bool HwPresenter::update_options(const PresentOptions& options, dw3::Gpu& gpu) {
         hw.precise_geometry = options.precise_geometry;
         hw.texture_pack = options.texture_pack;
         hw.stage_library = options.stage_library;
+        hw.seamless_inside = options.seamless_bg;
         hw.wide_frame = dw3::make_wide_frame(options.widescreen);
         hw.hdr = options.post.hdr.mode != dw3::HdrMode::Off;
         std::string error;
@@ -76,6 +78,7 @@ bool HwPresenter::update_options(const PresentOptions& options, dw3::Gpu& gpu) {
             options_.precise_geometry = options.precise_geometry;
             options_.texture_pack = options.texture_pack;
             options_.stage_library = options.stage_library;
+            options_.seamless_bg = options.seamless_bg;
             options_.widescreen = options.widescreen;
             options_.post.hdr = options.post.hdr;
             if (hw.hdr && !renderer_->hdr_active()) SDL_Log("HDR output is not available on this display or driver; staying SDR");
@@ -93,7 +96,7 @@ bool HwPresenter::update_options(const PresentOptions& options, dw3::Gpu& gpu) {
 
 bool HwPresenter::supports_hdr() const { return api_ != dw3::GraphicsApi::Metal; }  // the Metal swap chain has no EDR path yet
 
-void HwPresenter::set_wide_active(bool active) { renderer_->set_wide_mirror(active); }
+void HwPresenter::set_wide_mode(dw3::WideMode mode) { renderer_->set_wide_mode(mode); }
 
 void HwPresenter::attach(dw3::Gpu& gpu) { gpu.set_rasterizer(renderer_.get()); }
 

@@ -294,3 +294,81 @@ TEST(StageLibrary, IndexesKeysAndLoadsImages) {
     EXPECT_EQ(img.h, 128);
     EXPECT_EQ(img.rgba[0] >> 24, 255u);  // palette entry 1 is opaque
 }
+
+TEST(FieldBackdrop, WideViewListsTheMarginsToo) {
+    auto lib = make_library();
+    FieldBackdrop b(lib);
+    // Scroll (200, 100) as above; the game drew cells (1,1) and (2,1), the first of which lies at x -72..56.
+    b.add_sprite(keyed(*lib, 1, 1, -72, 28));
+    b.add_sprite(keyed(*lib, 2, 1, 56, 28));
+    // A 16:9 margin of 52 columns on each side: the view becomes x -52..372.
+    const BackdropRect wide = widened_view(kScreen, 52);
+    EXPECT_EQ(wide.x0, -52);
+    EXPECT_EQ(wide.x1, 372);
+    EXPECT_EQ(wide.y0, kScreen.y0);
+    EXPECT_EQ(wide.y1, kScreen.y1);
+    const auto fills = b.take_missing(layers::kMain, wide);
+    // Cell column 0 lies at screen x -200..-72: even the margin does not reach it. Columns 1..3 are listed as before.
+    for (const BackdropFill& f : fills) EXPECT_GE(lib->map(f.map).tiles[f.tile].col, 1);
+    EXPECT_EQ(fills.size(), 7u);
+}
+
+TEST(FieldBackdrop, WideViewReachesCellsBeyondTheFourByThreeView) {
+    auto lib = make_library();
+    FieldBackdrop b(lib);
+    // Scroll (200, 100): cell column 0 lies at x -200..-72 and column 3 at 184..312.
+    b.add_sprite(keyed(*lib, 1, 1, -72, 28));
+    b.add_sprite(keyed(*lib, 2, 1, 56, 28));
+    const auto fills = b.take_missing(layers::kMain, widened_view(kScreen, 120));
+    int column0 = 0;
+    for (const BackdropFill& f : fills) column0 += lib->map(f.map).tiles[f.tile].col == 0;
+    EXPECT_EQ(column0, 3) << "the 21:9 margin shows the three cells of column 0 that lie within 120 columns";
+}
+
+TEST(FieldBackdrop, WideViewStopsAtTheEdgeOfTheMap) {
+    auto lib = make_library();
+    FieldBackdrop b(lib);
+    // Scroll (192, 0): the 512 wide map ends at screen x 320, so the right margin lies past the map.
+    b.add_sprite(keyed(*lib, 3, 0, 192, 0));
+    b.add_sprite(keyed(*lib, 2, 0, 64, 0));
+    const auto fills = b.take_missing(layers::kMain, widened_view(kScreen, 120));
+    ASSERT_FALSE(fills.empty());
+    for (const BackdropFill& f : fills) EXPECT_LT(f.x, 320) << "no piece lies beyond the map";
+}
+
+namespace {
+BackdropFill fill_at(const StagePiece& p, int x, int y) {
+    BackdropFill f;
+    f.piece = &p;
+    f.x = x;
+    f.y = y;
+    return f;
+}
+}  // namespace
+
+TEST(WideBackdropPlan, SeamlessDrawsEverythingInBothCopies) {
+    const StagePiece cell = piece(0, 0, 0, 0, 0, 128, 128);
+    const std::vector<BackdropFill> listed = {fill_at(cell, -100, 0), fill_at(cell, 100, 0), fill_at(cell, 300, 0), fill_at(cell, -128, 0)};
+    const WideBackdropPlan plan = plan_wide_backdrop(listed, kScreen, true);
+    EXPECT_EQ(plan.wide.size(), 4u);
+    // The frame buffer gets those that touch the view: -100..28, 100..228 and 300..428 do; -128..0 does not.
+    ASSERT_EQ(plan.frame.size(), 3u);
+    EXPECT_EQ(plan.frame[0].x, -100);
+    EXPECT_EQ(plan.frame[2].x, 300);
+}
+
+TEST(WideBackdropPlan, WithoutSeamlessOnlyTheMarginsAreFilled) {
+    const StagePiece cell = piece(0, 0, 0, 0, 0, 128, 128);
+    const std::vector<BackdropFill> listed = {
+        fill_at(cell, 100, 0),   // wholly inside the 4:3 view: the game's own picture decides
+        fill_at(cell, -40, 0),   // straddles the left edge: drawn, it also covers part of the margin
+        fill_at(cell, -200, 0),  // wholly in the margin
+        fill_at(cell, 240, 0),   // straddles the right edge
+    };
+    const WideBackdropPlan plan = plan_wide_backdrop(listed, kScreen, false);
+    EXPECT_TRUE(plan.frame.empty());
+    ASSERT_EQ(plan.wide.size(), 3u);
+    EXPECT_EQ(plan.wide[0].x, -40);
+    EXPECT_EQ(plan.wide[1].x, -200);
+    EXPECT_EQ(plan.wide[2].x, 240);
+}

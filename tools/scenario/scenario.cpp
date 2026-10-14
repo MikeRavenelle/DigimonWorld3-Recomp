@@ -327,6 +327,10 @@ Scenario parse(const std::string& text, const std::string& src) {
             if (auto v = t["squares_hidden_min"].value<int64_t>()) c.squares_hidden_min = static_cast<uint64_t>(*v);
             if (auto v = t["squares_drawn_min"].value<int64_t>()) c.squares_drawn_min = static_cast<uint64_t>(*v);
             if (auto v = t["squares_drawn_max"].value<int64_t>()) c.squares_drawn_max = static_cast<uint64_t>(*v);
+            if (auto v = t["wide_field_frames_min"].value<int64_t>()) c.wide_field_frames_min = static_cast<uint64_t>(*v);
+            if (auto v = t["wide_field_fallbacks_max"].value<int64_t>()) c.wide_field_fallbacks_max = static_cast<uint64_t>(*v);
+            if (auto v = t["wide_margin_polygons_min"].value<int64_t>()) c.wide_margin_polygons_min = static_cast<uint64_t>(*v);
+            if (auto v = t["wide_margin_polygons_max"].value<int64_t>()) c.wide_margin_polygons_max = static_cast<uint64_t>(*v);
             if (auto v = t["audio_min_rms"].value<double>()) c.audio_min_rms = *v;
             if (auto v = t["audio_max_rms"].value<double>()) c.audio_max_rms = *v;
             c.audio_frames = static_cast<int>(t["audio_frames"].value_or(int64_t{60}));

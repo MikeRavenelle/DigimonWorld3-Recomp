@@ -1,0 +1,35 @@
+# From the start state of new_game_state.toml (Asuka City Central Sector, the player in control): the walk along the street
+# to the Patamon and Kotemon at the foot of the stairs, the same legs as seamless_bg_field.toml and widescreen_battle.toml
+# begin with. RAM words as documented in new_game.toml.
+
+[[walk]]
+at = 1474
+label = "to the gate 1"
+x = { via = 0x8004ADC0, addr = 0x58, size = 4 }
+z = { via = 0x8004ADC0, addr = 0x5C, size = 4 }
+target = [819, 521]
+tolerance = 10
+axes = "x"
+timeout = 900
+guard = [{ addr = 0x800554D4, size = 4, value = 0x1C3 }]
+
+[[walk]]
+at = 1475
+label = "to the gate 2"
+x = { via = 0x8004ADC0, addr = 0x58, size = 4 }
+z = { via = 0x8004ADC0, addr = 0x5C, size = 4 }
+target = [801, 482]
+tolerance = 10
+axes = "z"
+timeout = 900
+guard = [{ addr = 0x800554D4, size = 4, value = 0x1C3 }]
+
+[[walk]]
+at = 1476
+label = "to the gate 3"
+x = { via = 0x8004ADC0, addr = 0x58, size = 4 }
+z = { via = 0x8004ADC0, addr = 0x5C, size = 4 }
+target = [577, 610]
+tolerance = 10
+timeout = 900
+guard = [{ addr = 0x800554D4, size = 4, value = 0x1C3 }]

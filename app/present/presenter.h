@@ -32,7 +32,8 @@ struct PresentOptions {
     dw3::WideAspect widescreen = dw3::WideAspect::Off;  // GPU renderer: wider battles (see dw3/widescreen.h)
     dw3::PostFx post;               // GPU renderer: post-processing (the software path ignores it)
     std::shared_ptr<const dw3::texrep::TexturePack> texture_pack;  // GPU renderer: replacement backgrounds (null: off)
-    std::shared_ptr<dw3::texrep::StageLibrary> stage_library;      // GPU renderer: seamless field backgrounds (null: off)
+    std::shared_ptr<dw3::texrep::StageLibrary> stage_library;      // GPU renderer: map pieces for field backgrounds (null: none)
+    bool seamless_bg = false;                                      // ... also inside the 4:3 area, not only in widescreen margins
 };
 
 // Window contents as seen by the user (borders included), RGBA8888.
@@ -57,7 +58,7 @@ public:
     virtual bool update_options(const PresentOptions& options, dw3::Gpu& gpu) = 0;
     // Turns the wide picture on while the game is in a mode that has one (battles). Ignored without the GPU renderer
     // or a widescreen option.
-    virtual void set_wide_active(bool) {}
+    virtual void set_wide_mode(dw3::WideMode) {}
     // Starts recording the background images the game draws into `directory` (see dw3::HwRenderer::set_texture_dump).
     // Returns false if this presenter cannot (the software path).
     virtual bool set_texture_dump(const std::string& directory) { return false; }

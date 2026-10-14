@@ -51,6 +51,8 @@
 // on, every primitive and fill that lands in a frame buffer is drawn a second time, shifted into those columns with
 // the drawing area widened (see widescreen.h for how edge-touching 2D shapes are stretched); the copy is never read
 // back. 3D geometry is clipped by the game's 320 px drawing area only, so the copy shows what lies beyond it.
+// Fields (WideMode::Field) need HwOptions::stage_library: the margins are filled with the pieces of the map's background
+// for the widened view, the game's own draws follow them, and a frame whose map is not resolved is shown at 4:3.
 // Precise geometry. With HwOptions::precise_geometry, triangles that have sub-pixel vertex positions are drawn from
 // interpolated float attributes instead of the fixed-point planes (see build_precise_triangle); everything else
 // is unchanged. At scale 1 the triangle covers the same pixels as the integer one.
@@ -104,6 +106,9 @@ struct HwOptions {
     // Seamless field backgrounds (texrep/field_backdrop.h): the maps of the game, as indexed from the disc. When set, the
     // renderer draws the pieces of a field map's background that the game has not drawn yet. Implies the display layer.
     std::shared_ptr<texrep::StageLibrary> stage_library;
+    // Whether the pieces are also drawn inside the 4:3 area. Without it a library only fills the margins of the wide
+    // field picture (and nothing outside the wide copy).
+    bool seamless_inside = true;
     // Extra render-target columns that hold a wider copy of the frame buffers (widescreen.h). Margin 0: none.
     WideFrame wide_frame;
     // Ask for an HDR swap chain (scRGB: linear Rec. 709 half floats, 1.0 = 80 nits) where the window system and the
@@ -125,6 +130,10 @@ struct HwStats {
     // Seamless field backgrounds: pieces drawn by the renderer, and the opaque 64x64 squares the game draws over cells it
     // has not loaded, hidden or let through.
     uint64_t backdrop_pieces = 0, squares_hidden = 0, squares_drawn = 0;
+    // Wide field mode: finished frames shown wide (the map was resolved) and shown at 4:3 instead.
+    uint64_t wide_field_frames = 0, wide_field_fallbacks = 0;
+    // Textured polygons (the game's characters and objects) that were drawn into the margins of the wide copy.
+    uint64_t wide_margin_polygons = 0;
     uint64_t draw_calls = 0, vertices = 0, uploads = 0, readbacks = 0, copy_syncs = 0, submits = 0, fills = 0, copies = 0;
 };
 
@@ -171,7 +180,8 @@ public:
     bool hdr_active() const;
     // Starts or stops duplicating frame-buffer draws into the wide copy (needs HwOptions::wide_frame). While it
     // runs, present() shows the copy, at its own aspect, whenever the displayed buffer has one.
-    void set_wide_mirror(bool active);
+    void set_wide_mirror(bool active) { set_wide_mode(active ? WideMode::Battle : WideMode::Off); }
+    void set_wide_mode(WideMode mode);
 
     // Starts recording the background images the game draws (empty directory stops it). write_texture_dump() saves
     // what was seen so far (see texrep/dump.h); the pack generator takes it from there.

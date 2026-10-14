@@ -204,7 +204,7 @@ struct HwRenderer::Impl {
     PrimitiveFlags backdrop_flags;
     bool backdrop_has_state = false;
     void flush_backdrop();
-    void draw_backdrop_fills(const std::vector<texrep::BackdropFill>& fills);
+    void draw_backdrop_fills(const std::vector<texrep::BackdropFill>& fills, bool wide_copy);
     const Resident* make_tile_resident(const texrep::BackdropFill& fill);
     bool note_backdrop_sprite(std::span<uint16_t> vram, const DrawState& s, const PrimitiveFlags& f, const GpuVertex& v, int width,
                               int height);
@@ -218,7 +218,13 @@ struct HwRenderer::Impl {
     // has had its copy drawn since mirroring started.
     WideFrame wide;
     bool mirror = false;
+    WideMode wide_mode = WideMode::Off;
     bool wide_ready[2] = {false, false};
+    // Field mode shows the copy only when the frame's map was resolved (wide_known), and the frame buffer last drawn into
+    // is the one the next flip finishes.
+    bool wide_known[2] = {false, false};
+    int drawing_buffer = 0;
+    bool seamless_inside = true;  // the pieces the game left out are also drawn inside the 4:3 area
     int target_width() const { return kVramWidth + (wide.enabled() ? wide.width() : 0); }
     bool mirrors(const DrawState& s) const {
         return mirror && wide.in_frame(s.area_x1, s.area_y1, s.area_x2, s.area_y2);
@@ -342,7 +348,7 @@ struct HwRenderer::Impl {
     void queue_primitive(const DrawState& s, const Region& bounds, bool reads_dest, const Region* tex_src,
                          const Region* clut_src, std::size_t vertices_before);
     bool draw_background_rect(std::span<uint16_t> vram, const DrawState& s, const PrimitiveFlags& f, const GpuVertex& v, int width,
-                              int height);
+                              int height, bool wide_copy = false);
     const Resident* place_image(const ResidentKey& key, const texrep::Image& img, int image_scale);
     const Resident* make_resident(const texrep::PackEntry& e, ImageKind kind = ImageKind::PackImage, const texrep::Image* alpha_from = nullptr);
     void upload_replacement(const texrep::Image& img, int x, int y);
@@ -352,7 +358,7 @@ struct HwRenderer::Impl {
     // ---- presentation -------------------------------------------------------------------------------
 
     void draw_triangle(const DrawState& s, const PrimitiveFlags& f, const GpuVertex v[3], bool tracked);
-    void draw_rect(std::span<uint16_t> vram, const DrawState& s, const PrimitiveFlags& f, const GpuVertex& v, int width,
+    bool draw_rect(std::span<uint16_t> vram, const DrawState& s, const PrimitiveFlags& f, const GpuVertex& v, int width,
                    int height, bool tracked);
     void draw_line(const DrawState& s, const PrimitiveFlags& f, const GpuVertex& a, const GpuVertex& b, bool tracked);
     DrawState wide_state(const DrawState& s);
@@ -373,6 +379,7 @@ bool HwRenderer::Impl::init(const NativeWindow* window, int internal_scale, cons
     scale = std::clamp(internal_scale, 1, 8);
     precise = options.precise_geometry;
     wide = options.wide_frame;
+    seamless_inside = options.seamless_inside;
     pack = options.texture_pack;
     reset_backdrop(options.stage_library);
     layer = options.true_color || options.filter != TextureFilter::Nearest || pack || library;
@@ -1122,7 +1129,7 @@ const HwRenderer::Impl::Resident* HwRenderer::Impl::make_tile_resident(const tex
 // block with a replacement from the atlas. Returns false when nothing is replaced, so the caller draws the sprite as
 // usual.
 bool HwRenderer::Impl::draw_background_rect(std::span<uint16_t> vram, const DrawState& s, const PrimitiveFlags& f,
-                                            const GpuVertex& v, int width, int height) {
+                                            const GpuVertex& v, int width, int height, bool wide_copy) {
     const Region clut = clut_region(s, f);
     if (clut.empty() || dirty.intersects(clut)) return false;  // the CPU copy of the palette may be stale
     const int clut_x = (f.clut & 0x3F) * 16, clut_y = (f.clut >> 6) & 0x1FF;
@@ -1143,7 +1150,7 @@ bool HwRenderer::Impl::draw_background_rect(std::span<uint16_t> vram, const Draw
         for (const texrep::Piece& p : pieces) {
             if (!p.block) continue;
             const uint64_t bh = blocks.hash_of(*p.block, vram);
-            if (dump && p.w * p.h >= 16) {
+            if (dump && !wide_copy && p.w * p.h >= 16) {
                 if (!dump->has_variant(bh, clut_hash)) {
                     std::vector<uint32_t> rgba;
                     texrep::decode_block_8bit(vram, p.block->rect, clut_x, clut_y, rgba);
@@ -1236,33 +1243,39 @@ void HwRenderer::Impl::flush_backdrop() {
     if (!due) return;
     const DrawState& s = backdrop_state;
     const texrep::BackdropRect view{s.area_x1 - s.off_x, s.area_y1 - s.off_y, s.area_x2 - s.off_x + 1, s.area_y2 - s.off_y + 1};
-    draw_backdrop_fills(backdrop.take_missing(due, view));
+    const bool wide_copy = wide_mode == WideMode::Field && mirrors(s);
+    const std::vector<texrep::BackdropFill> listed = backdrop.take_missing(due, wide_copy ? texrep::widened_view(view, wide.margin) : view);
+    const texrep::WideBackdropPlan plan = texrep::plan_wide_backdrop(listed, view, seamless_inside);
+    draw_backdrop_fills(plan.frame, false);
+    if (wide_copy) draw_backdrop_fills(plan.wide, true);
 }
 
-void HwRenderer::Impl::draw_backdrop_fills(const std::vector<texrep::BackdropFill>& fills) {
+void HwRenderer::Impl::draw_backdrop_fills(const std::vector<texrep::BackdropFill>& fills, bool wide_copy) {
+    const DrawState state = wide_copy ? wide_state(backdrop_state) : backdrop_state;
+    const int shift = wide_copy ? wide.shift() : 0;
     for (const texrep::BackdropFill& fill : fills) {
         const Resident* r = make_tile_resident(fill);
         if (!r) continue;
         const texrep::StagePiece& piece = *fill.piece;
         const Resident slot = *r;
         GpuVertex v;
-        v.x = fill.x + backdrop_state.off_x;
+        v.x = fill.x + backdrop_state.off_x + shift;
         v.y = fill.y + backdrop_state.off_y;
         v.u = static_cast<uint8_t>(piece.ax);
         v.v = static_cast<uint8_t>(piece.ay);
         v.r = static_cast<uint8_t>(fill.color);
         v.g = static_cast<uint8_t>(fill.color >> 8);
         v.b = static_cast<uint8_t>(fill.color >> 16);
-        const Region bounds = rect_bounds(backdrop_state, v, piece.w, piece.h);
+        const Region bounds = rect_bounds(state, v, piece.w, piece.h);
         if (bounds.empty()) continue;
         const std::size_t before = pending.size();
-        build_rect(pending, backdrop_state, backdrop_flags, v, piece.w, piece.h);
+        build_rect(pending, state, backdrop_flags, v, piece.w, piece.h);
         const texrep::ReplacementOffset o = texrep::replacement_offset(0, 0, slot.x, slot.y, slot.scale);
         for (std::size_t i = before; i < pending.size(); ++i) {
             pending[i].state0 |= state_bits::kHd | state_bits::kDirect | (static_cast<uint32_t>(slot.scale - 1) << state_bits::kHdScaleShift);
             pending[i].hd_offset = (static_cast<uint32_t>(o.y) << 16) | (static_cast<uint32_t>(o.x) & 0xFFFFu);
         }
-        queue_primitive(backdrop_state, bounds, false, nullptr, nullptr, before);
+        queue_primitive(state, bounds, false, nullptr, nullptr, before);
         ++stats.backdrop_pieces;
     }
 }
@@ -1289,8 +1302,10 @@ const PostFx* HwRenderer::Impl::effective_post(const PostFx* in, PostFx& storage
 // The picture to show: the wide frame copy while it is being drawn and the display is one of the frame buffers.
 DisplayState HwRenderer::Impl::wide_display(const DisplayState& d) const {
     if (!mirror || !wide.enabled() || !d.enabled || d.color24 || d.width != wide.frame_w || d.height != wide.frame_h ||
-        d.vram_x != 0 || (d.vram_y != 0 && d.vram_y != 256) || !wide_ready[d.vram_y == 256 ? 1 : 0])
+        d.vram_x != 0 || (d.vram_y != 0 && d.vram_y != 256))
         return d;
+    const int buffer = d.vram_y == 256 ? 1 : 0;
+    if (!wide_ready[buffer] || (wide_mode == WideMode::Field && !wide_known[buffer])) return d;
     DisplayState w = d;
     w.vram_x = WideFrame::kOriginX;
     w.width = wide.width();
@@ -1504,7 +1519,8 @@ DrawState HwRenderer::Impl::wide_state(const DrawState& s) {
         d.area_x1 = wide.map_x(s.area_x1);
         d.area_x2 = wide.map_x(s.area_x2);
     }
-    wide_ready[s.area_y1 >= 256 ? 1 : 0] = true;
+    drawing_buffer = s.area_y1 >= 256 ? 1 : 0;
+    wide_ready[drawing_buffer] = true;
     return d;
 }
 
@@ -1527,6 +1543,8 @@ void HwRenderer::Impl::draw_triangle(const DrawState& s, const PrimitiveFlags& f
 
 void HwRenderer::triangle(std::span<uint16_t>, const DrawState& s, const PrimitiveFlags& f, const GpuVertex v[3]) {
     Impl& m = *impl_;
+    // The game's own draw goes first: it lists the background pieces due before it (flush_backdrop), in both copies.
+    m.draw_triangle(s, f, v, true);
     if (m.mirrors(s)) {
         // World geometry (drawn with a screen-centre offset) keeps its position relative to the centre; flat 2D
         // shapes that touch the frame edge stretch to the edge of the wide frame.
@@ -1539,22 +1557,28 @@ void HwRenderer::triangle(std::span<uint16_t>, const DrawState& s, const Primiti
             g.fx += static_cast<float>(m.wide.shift());
             g.x = mapped;
         }
+        if (m.wide_mode == WideMode::Field && uses_texture(s, f) && m.wide.reaches_margin(t[0].x, t[1].x, t[2].x)) ++m.stats.wide_margin_polygons;
         m.draw_triangle(m.wide_state(s), f, t, false);
     }
-    m.draw_triangle(s, f, v, true);
 }
 
-void HwRenderer::Impl::draw_rect(std::span<uint16_t> vram, const DrawState& s, const PrimitiveFlags& f, const GpuVertex& v,
+bool HwRenderer::Impl::draw_rect(std::span<uint16_t> vram, const DrawState& s, const PrimitiveFlags& f, const GpuVertex& v,
                                  int width, int height, bool tracked) {
     const Region bounds = rect_bounds(s, v, width, height);
-    if (bounds.empty()) return;
+    if (bounds.empty()) return true;
     if (tracked && s.depth == TexDepth::Bit4 && uses_texture(s, f) && !f.semi_transparent && width == 64 && height == 64) {
         // The squares the game puts over cells it has not loaded would hide what is drawn there instead.
-        if (library && backdrop.is_placeholder(v.x - s.off_x, v.y - s.off_y, width, height)) {
+        if (library && seamless_inside && backdrop.is_placeholder(v.x - s.off_x, v.y - s.off_y, width, height)) {
             ++stats.squares_hidden;
-            return;
+            return false;
         }
         ++stats.squares_drawn;
+    }
+    if (!tracked && wide_mode == WideMode::Field && pack) {
+        // The copy of a background sprite takes the replacement image too.
+        const bool candidate = s.depth == TexDepth::Bit8 && uses_texture(s, f) && !f.semi_transparent && !s.rect_flip_x &&
+                               !s.rect_flip_y && s.win_mask_x == 0 && s.win_mask_y == 0;
+        if (candidate && draw_background_rect(vram, s, f, v, width, height, true)) return true;
     }
     if (tracked && tracking()) {
         blocks.invalidate(bounds);
@@ -1563,7 +1587,7 @@ void HwRenderer::Impl::draw_rect(std::span<uint16_t> vram, const DrawState& s, c
                                !s.rect_flip_y && s.win_mask_x == 0 && s.win_mask_y == 0;
         // Other sprites (effects, text, translucent shapes) neither belong to the background nor end its phase of the frame.
         if (library && candidate) note_backdrop_sprite(vram, s, f, v, width, height);
-        if (candidate && draw_background_rect(vram, s, f, v, width, height)) return;
+        if (candidate && draw_background_rect(vram, s, f, v, width, height)) return true;
     }
     const std::size_t before = pending.size();
     build_rect(pending, s, f, v, width, height);
@@ -1574,12 +1598,14 @@ void HwRenderer::Impl::draw_rect(std::span<uint16_t> vram, const DrawState& s, c
         c = clut_region(s, f);
     }
     queue_primitive(s, bounds, f.semi_transparent || s.check_mask, tex ? &t : nullptr, tex ? &c : nullptr, before);
+    return true;
 }
 
 void HwRenderer::rect(std::span<uint16_t> vram, const DrawState& s, const PrimitiveFlags& f, const GpuVertex& v, int width,
                       int height) {
     Impl& m = *impl_;
-    if (m.mirrors(s)) {
+    const bool drawn = m.draw_rect(vram, s, f, v, width, height, true);
+    if (drawn && m.mirrors(s)) {
         GpuVertex t = v;
         int w = width;
         if (!uses_texture(s, f)) {
@@ -1591,7 +1617,6 @@ void HwRenderer::rect(std::span<uint16_t> vram, const DrawState& s, const Primit
         }
         m.draw_rect(vram, m.wide_state(s), f, t, w, height, false);
     }
-    m.draw_rect(vram, s, f, v, width, height, true);
 }
 
 void HwRenderer::Impl::draw_line(const DrawState& s, const PrimitiveFlags& f, const GpuVertex& a, const GpuVertex& b,
@@ -1608,19 +1633,21 @@ void HwRenderer::Impl::draw_line(const DrawState& s, const PrimitiveFlags& f, co
 void HwRenderer::line(std::span<uint16_t>, const DrawState& s, const PrimitiveFlags& f, const GpuVertex& a,
                       const GpuVertex& b) {
     Impl& m = *impl_;
+    m.draw_line(s, f, a, b, true);
     if (m.mirrors(s)) {
         GpuVertex wa = a, wb = b;
         wa.x = m.wide.map_x(a.x);
         wb.x = m.wide.map_x(b.x);
         m.draw_line(m.wide_state(s), f, wa, wb, false);
     }
-    m.draw_line(s, f, a, b, true);
 }
 
 void HwRenderer::display_flipped() {
     Impl& m = *impl_;
     if (!m.library) return;
     m.flush_backdrop();
+    m.wide_known[m.drawing_buffer] = m.backdrop.resolve();
+    if (m.wide_mode == WideMode::Field) ++(m.wide_known[m.drawing_buffer] ? m.stats.wide_field_frames : m.stats.wide_field_fallbacks);
     m.backdrop.begin_frame();
 }
 
@@ -1663,7 +1690,8 @@ bool HwRenderer::vram_fill(const VramRect& r, uint16_t color) {
         m.cmd->drawInstanced(3, 1, 0, 0);
         ++m.stats.draw_calls;
         m.stale.add({x0, r.y, x1, r.y + r.h});
-        m.wide_ready[r.y >= 256 ? 1 : 0] = true;
+        m.drawing_buffer = r.y >= 256 ? 1 : 0;
+        m.wide_ready[m.drawing_buffer] = true;
     }
     if (m.tracking()) m.blocks.invalidate(b);
     m.stale.add(b);
@@ -1857,6 +1885,7 @@ bool HwRenderer::render_to_image(const DisplayState& shown, ScaleMode mode, bool
 
 bool HwRenderer::reconfigure(int internal_scale, const HwOptions& options, std::span<uint16_t> vram, std::string& error) {
     Impl& m = *impl_;
+    m.seamless_inside = options.seamless_inside;
     const int new_scale = std::clamp(internal_scale, 1, 8);
     const bool new_layer = options.true_color || options.filter != TextureFilter::Nearest || options.texture_pack || options.stage_library;
     const uint32_t new_mode = (new_layer ? 1u : 0u) | (options.true_color ? 2u : 0u) | (static_cast<uint32_t>(options.filter) << 2);
@@ -1934,11 +1963,15 @@ bool HwRenderer::reconfigure(int internal_scale, const HwOptions& options, std::
 
 bool HwRenderer::hdr_active() const { return impl_->hdr_active; }
 
-void HwRenderer::set_wide_mirror(bool active) {
+void HwRenderer::set_wide_mode(WideMode mode) {
     Impl& m = *impl_;
-    if (active == m.mirror) return;
-    m.mirror = active && m.wide.enabled();
+    if (!m.wide.enabled()) mode = WideMode::Off;
+    if (mode == WideMode::Field && !m.library) mode = WideMode::Off;
+    if (mode == m.wide_mode) return;
+    m.wide_mode = mode;
+    m.mirror = mode != WideMode::Off;
     m.wide_ready[0] = m.wide_ready[1] = false;
+    m.wide_known[0] = m.wide_known[1] = false;
 }
 
 void HwRenderer::set_texture_dump(const std::string& directory) {

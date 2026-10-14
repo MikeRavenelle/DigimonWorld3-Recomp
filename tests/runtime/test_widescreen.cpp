@@ -59,3 +59,23 @@ TEST(WideFrameMapping, RecognisesFrameBufferAreas) {
     EXPECT_TRUE(w.covers_width(0, 319));
     EXPECT_FALSE(w.covers_width(208, 307));
 }
+
+TEST(WideMode, FollowsTheGameMode) {
+    EXPECT_EQ(wide_mode_for_game_mode(6), WideMode::Battle);
+    EXPECT_EQ(wide_mode_for_game_mode(2), WideMode::Field);
+    for (uint32_t other : {0u, 1u, 5u, 0xCu, 0xEu, 0x14u, 0xFFFFFFFFu}) EXPECT_EQ(wide_mode_for_game_mode(other), WideMode::Off) << other;
+}
+
+TEST(WideFrameMapping, FindsPolygonsThatReachTheMargins) {
+    const WideFrame w = make_wide_frame(WideAspect::Ratio16x9);  // margin 52, copy columns 1024..1447
+    const int centre = WideFrame::kOriginX + 52;
+    EXPECT_FALSE(w.reaches_margin(centre, centre + 100, centre + 50)) << "inside the 4:3 area";
+    EXPECT_FALSE(w.reaches_margin(centre, centre + 319, centre + 100)) << "touching both edges of it";
+    EXPECT_TRUE(w.reaches_margin(centre - 1, centre + 20, centre + 20)) << "one column into the left margin";
+    EXPECT_TRUE(w.reaches_margin(centre + 300, centre + 320, centre + 310)) << "into the right margin";
+    EXPECT_TRUE(w.reaches_margin(WideFrame::kOriginX, WideFrame::kOriginX + 2, WideFrame::kOriginX)) << "at the far left";
+    EXPECT_FALSE(w.reaches_margin(WideFrame::kOriginX - 40, WideFrame::kOriginX - 2, WideFrame::kOriginX - 10)) << "beyond the copy";
+    EXPECT_FALSE(w.reaches_margin(WideFrame::kOriginX + w.width(), WideFrame::kOriginX + w.width() + 30, WideFrame::kOriginX + w.width() + 5))
+        << "beyond the copy on the right";
+    EXPECT_TRUE(w.reaches_margin(centre - 20, centre + 340, centre + 100)) << "spanning the frame";
+}
