@@ -259,6 +259,11 @@ struct HwRenderer::Impl {
     int wide_trusted_frames = 0;  // consecutive finished frames whose map was resolved from enough sprites
     bool wide_shown = false;
     int drawing_buffer = 0;
+    // Field frames: the margins of a wide copy are painted black before its first draw of the frame. Nothing repaints
+    // the part beyond the edge of a map, so without this it would keep whatever an earlier frame (a banner, a window)
+    // left there.
+    bool margin_clear_pending[2] = {true, true};
+    void clear_wide_margins(const DrawState& wide, int buffer);
     bool seamless_inside = true;  // the pieces the game left out are also drawn inside the 4:3 area
     int target_width() const { return kVramWidth + (wide.enabled() ? wide.width() : 0); }
     bool mirrors(const DrawState& s) const {
@@ -1620,7 +1625,30 @@ DrawState HwRenderer::Impl::wide_state(const DrawState& s) {
     }
     drawing_buffer = s.area_y1 >= 256 ? 1 : 0;
     wide_ready[drawing_buffer] = true;
+    if (wide_mode == WideMode::Field && margin_clear_pending[drawing_buffer]) {
+        margin_clear_pending[drawing_buffer] = false;
+        clear_wide_margins(d, drawing_buffer);
+    }
     return d;
+}
+
+void HwRenderer::Impl::clear_wide_margins(const DrawState& wide_draw, int buffer) {
+    DrawState fs = wide_draw;
+    const int top = buffer * kFrameBufferRows;
+    fs.area_x1 = WideFrame::kOriginX;
+    fs.area_x2 = WideFrame::kOriginX + wide.width() - 1;
+    fs.area_y1 = top;
+    fs.area_y2 = top + wide.frame_h - 1;
+    fs.off_x = fs.off_y = 0;
+    fs.dither = false;
+    fs.set_mask = fs.check_mask = false;
+    const PrimitiveFlags flat;
+    GpuVertex v;
+    v.y = top;
+    v.x = WideFrame::kOriginX;
+    draw_rect({}, fs, flat, v, wide.margin, wide.frame_h, false);
+    v.x = WideFrame::kOriginX + wide.margin + wide.frame_w;
+    draw_rect({}, fs, flat, v, wide.margin, wide.frame_h, false);
 }
 
 void HwRenderer::Impl::draw_triangle(const DrawState& s, const PrimitiveFlags& f, const GpuVertex v[3], bool tracked) {
@@ -1753,6 +1781,7 @@ void HwRenderer::display_flipped() {
     m.wide_shown = m.wide_trusted_frames >= (m.wide_shown ? 1 : kWideEnterFrames);
     if (trusted) m.prefetch_map_images();
     m.wide_known[0] = m.wide_known[1] = m.wide_shown;
+    m.margin_clear_pending[0] = m.margin_clear_pending[1] = true;
     if (m.wide_mode == WideMode::Field) ++(m.wide_shown ? m.stats.wide_field_frames : m.stats.wide_field_fallbacks);
     m.backdrop.begin_frame();
 }

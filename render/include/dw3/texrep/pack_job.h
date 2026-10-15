@@ -26,11 +26,13 @@ struct PackJob {
     CommandRunner run;
     std::function<void(const std::string&)> log;             // status lines
     std::function<void(std::size_t, std::size_t)> progress;  // images done / total
+    std::function<bool()> cancelled;                         // polled between maps and batches; true stops the job
 };
 
 // Writes the dump of the field maps found on the disc (or the chosen ones) to `dir`.
+// `cancelled`, when set, is polled between maps; the call then fails with the error "Cancelled.".
 bool extract_disc(const std::filesystem::path& disc, const std::filesystem::path& dir, const std::vector<std::string>& only,
-                  const std::function<void(const std::string&)>& log, std::string& error);
+                  const std::function<void(const std::string&)>& log, std::string& error, const std::function<bool()>& cancelled = {});
 
 // The realesrgan-ncnn-vulkan command line for one batch of images.
 std::vector<std::string> upscaler_command(const PackJob& job, const std::filesystem::path& in_dir, const std::filesystem::path& out_dir);

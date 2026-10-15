@@ -20,7 +20,7 @@
 
 #include <cstdint>
 #include <memory>
-#include <unordered_set>
+#include <unordered_map>
 #include <vector>
 
 #include "dw3/texrep/stage_library.h"
@@ -116,7 +116,14 @@ private:
     std::shared_ptr<const StageLibrary> library_;
     std::vector<Hypothesis> votes_;
     std::vector<Match> matches_;
-    std::unordered_set<uint64_t> drawn_;
+    // What the game drew at each piece shape and place; the keys of its picture when it is one the library knows.
+    struct Drawn {
+        bool keyed = false;
+        uint64_t block = 0, clut = 0;
+    };
+    std::unordered_map<uint64_t, Drawn> drawn_;
+    // The game drew this piece's place with the picture of another cell of the map (its window has not caught up yet).
+    bool is_stale(const Drawn& d, uint32_t tile) const;
     std::size_t consumed_[2] = {0, 0};  // matches_ entries already listed for the background and front groups
     int picked_ = -1;
     int idle_frames_ = 0;

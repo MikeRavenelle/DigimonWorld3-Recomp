@@ -5,3 +5,6 @@ out/
 compile_commands.json
 # generated recompiled C (derived from the game; never commit)
 generated/
+
+# macOS Finder metadata
+.DS_Store

@@ -1,0 +1,2 @@
+// The executable's icon (Explorer, taskbar, Alt-Tab). Made by packaging/icons/make_icons.sh.
+1 ICON "../../packaging/icons/dw3recomp.ico"

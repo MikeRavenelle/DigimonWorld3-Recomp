@@ -149,6 +149,10 @@ resolution, and is not part of any preset. The map files are indexed in the back
 on, so it takes effect a few seconds later. Limits: while a map is still loading, before the game has drawn any of its
 cells, the game's squares remain; a foreground piece is only drawn in frames where the game draws some foreground piece.
 
+While a field runs the internal resolution is limited to what the field can use: the pack's scale when a texture pack is
+selected, 2x with the xBR filter, otherwise 1x. Fields are pre-rendered pictures and flat sprites, so a higher 3D scale
+there only costs GPU memory and time. The full setting applies again in battles and everywhere else.
+
 Making a pack:
 
 1. Get realesrgan-ncnn-vulkan (the Real-ESRGAN ncnn Vulkan program, MIT licence) and a model for it. The tool works with

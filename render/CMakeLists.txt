@@ -27,6 +27,11 @@ target_include_directories(dw3texrep SYSTEM PRIVATE ${PROJECT_SOURCE_DIR}/third_
 target_link_libraries(dw3texrep PUBLIC dw3runtime psxdisc tomlplusplus::tomlplusplus)
 dw3_target_defaults(dw3texrep)
 set_source_files_properties(src/texrep/stb_impl.cpp PROPERTIES COMPILE_OPTIONS "-w")
+if(NOT MSVC)
+    # The pack generator decodes and encodes thousands of images (the PNG writer dominates); unoptimised it takes minutes
+    # longer in Debug builds, and it is batch code nobody steps through.
+    target_compile_options(dw3texrep PRIVATE $<$<CONFIG:Debug>:-O2>)
+endif()
 
 if(DW3_HAVE_PLUME)
     set(SHADER_DIR ${CMAKE_CURRENT_SOURCE_DIR}/shaders)

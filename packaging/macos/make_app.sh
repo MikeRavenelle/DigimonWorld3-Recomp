@@ -18,11 +18,7 @@ cp "$build/app/dw3recomp" "$app/Contents/MacOS/dw3recomp"
 cp "$root/LICENSE" "$app/Contents/Resources/LICENSE"
 sed -e "s/@VERSION@/$version/g" -e "s/@MIN_OS@/$min_os/g" "$here/Info.plist.in" > "$app/Contents/Info.plist"
 
-iconset="$out/AppIcon.iconset"
-rm -rf "$iconset"
-swift "$here/make_icon.swift" "$iconset"
-iconutil -c icns "$iconset" -o "$app/Contents/Resources/AppIcon.icns"
-rm -rf "$iconset"
+cp "$root/packaging/icons/dw3recomp.icns" "$app/Contents/Resources/AppIcon.icns"
 
 # Bundle every non-system dylib the executable needs (and theirs), pointing their install names at the bundle.
 exe="$app/Contents/MacOS/dw3recomp"

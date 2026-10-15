@@ -3,25 +3,77 @@
 A static recompilation of *Digimon World 3* (PS1, USA) to native x86_64 and ARM64. It targets
 Vulkan, Metal and Direct3D 12 through [plume](https://github.com/renderbag/plume).
 
-> **Status:** early scaffolding. The game does not run yet.
+> **Status:** work in progress. The game boots and is playable on Linux, macOS (Apple silicon) and Windows, with
+> a Metal, Vulkan or Direct3D 12 renderer and a software fallback. Expect rough edges.
 
 You must supply your own copy of the game. No game data is included in this repository.
 
-## Building (Linux)
+## Building
 
-Requirements: clang ≥ 17, CMake ≥ 3.24, Ninja, SDL3, Vulkan headers/loader. GoogleTest and
-toml++ are fetched automatically if they are not installed.
+Every platform needs three steps, in this order. **Step 2 is required**: the game executable cannot be built
+without the recompiled sources, which are generated from your own disc and never committed.
+
+1. **Put your disc image** at `game/Digimon World 3 (USA).bin` / `.cue` (git-ignored), or point `-DDW3_GAME_DIR=` at
+   its directory.
+2. **Generate the recompiled code** (once, and again whenever `config/dw3.toml` or the recompiler changes). From the
+   repository root, with `<preset>` as in the table below:
+
+   ```sh
+   cmake --preset <preset>
+   cmake --build --preset <preset> --target dw3extract psxrecomp
+   build/<preset>/tools/dw3extract/dw3extract "game/Digimon World 3 (USA).cue" extract game/extracted
+   cmake --build --preset <preset> --target recompile      # writes generated/
+   ```
+
+   The generated C is architecture-neutral, so it can be produced on one machine and copied to `generated/` on another.
+3. **Build and test**. CMake only picks up `generated/` when it configures, so configure again after step 2:
+
+   ```sh
+   cmake --preset <preset>
+   cmake --build --preset <preset>
+   ctest --preset <preset> -LE scenario -j8      # unit tests; `-L scenario` runs the in-game tests (needs the disc)
+   ```
+
+   The executable is `build/<preset>/app/dw3recomp`.
+
+If the build stops with `fatal error: 'dw3/host.h' file not found`, `generated/` is missing: do step 2.
+
+| Platform | Presets | Details |
+|---|---|---|
+| Linux x86-64 | `linux-x64-debug`, `linux-x64-release` | below |
+| Linux arm64 | `linux-arm64-*` (native), `linux-arm64-cross-*` (from x86-64, tests under qemu) | [docs/BUILDING.md](docs/BUILDING.md) |
+| macOS (Apple silicon) | `macos-arm64-debug`, `macos-arm64-release` | below |
+| Windows x64 | `windows-x64-debug`, `windows-x64-release` (on Windows), `windows-x64-cross-*` (from Linux) | [docs/BUILDING.md](docs/BUILDING.md) |
+
+### Linux
+
+Requirements: clang ≥ 17, lld, CMake ≥ 3.24, Ninja, glslang, SDL3 and the Vulkan headers/loader. GoogleTest, toml++,
+zstd and plume are fetched automatically if they are not installed.
 
 ```sh
 # On immutable distros (Bazzite/Silverblue) use a distrobox:
 distrobox create -n dw3-build -i registry.fedoraproject.org/fedora:latest
-distrobox enter dw3-build -- sudo dnf install -y clang lld cmake ninja-build SDL3-devel \
+distrobox enter dw3-build -- sudo dnf install -y clang lld cmake ninja-build glslang SDL3-devel \
     vulkan-loader-devel vulkan-headers gtest-devel gmock-devel
-
-cmake --preset linux-x64-debug
-cmake --build --preset linux-x64-debug
-ctest --preset linux-x64-debug
 ```
+
+Then run the three steps above with `<preset>` = `linux-x64-release` (inside the container if you use one).
+
+### macOS
+
+Requirements: Xcode command line tools (Apple clang), CMake ≥ 3.24, Ninja, glslang and SDL3.
+
+```sh
+brew install cmake ninja glslang sdl3        # spirv-tools is optional (shader validation)
+```
+
+Then run the three steps above with `<preset>` = `macos-arm64-release`. Rendering uses Metal. To build the `.app` and
+disk image see [packaging/macos/README.md](packaging/macos/README.md).
+
+### Windows and other targets
+
+See [docs/BUILDING.md](docs/BUILDING.md) for Windows (native and cross-compiled from Linux, including running under
+Wine), Linux arm64 cross builds and packaging.
 
 ## First run
 
@@ -42,10 +94,10 @@ while playing stay in the game's own settings screen. See `docs/SETTINGS.md` for
 ## Game files
 
 Put your dump at `game/Digimon World 3 (USA).bin` / `.cue`. That directory is git-ignored. Tests
-that need the disc are skipped when it is absent.
+that need the disc are skipped when it is absent. `dw3extract` also lists and extracts the disc contents:
 
 ```sh
-build/linux-x64-debug/tools/dw3extract/dw3extract "game/Digimon World 3 (USA).cue" extract game/extracted
+build/<preset>/tools/dw3extract/dw3extract "game/Digimon World 3 (USA).cue" extract game/extracted
 ```
 
 ## Layout
@@ -55,10 +107,13 @@ build/linux-x64-debug/tools/dw3extract/dw3extract "game/Digimon World 3 (USA).cu
 | `tools/psxdisc` | cue/bin, raw sector, ISO9660 and PS-X EXE library |
 | `tools/dw3extract` | disc file lister/extractor (includes the hidden `AAA/` tree) |
 | `tools/psxrecomp` | MIPS R3000A → C static recompiler |
-| `runtime/` | PS1 hardware and BIOS runtime, platform abstraction, renderer |
-| `app/` | game executable |
+| `runtime/` | PS1 hardware and BIOS runtime, platform abstraction |
+| `app/` | game executable (window, input, settings, setup wizard, presenters) |
+| `host/` | boot/run logic shared by the app and the scenario runner (built once `generated/` exists) |
+| `render/` | GPU renderers (Metal, Vulkan, Direct3D 12) and the software rasterizer |
 | `config/` | recompiler configuration for DW3 |
-| `tests/` | GoogleTest unit and integration tests |
+| `tests/` | GoogleTest unit and integration tests, plus in-game scenarios |
+| `packaging/` | macOS `.app`/dmg scripts and the Windows package note |
 | `docs/` | architecture notes |
 
 See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md). Options, visual presets, hotkeys and fast-forward are

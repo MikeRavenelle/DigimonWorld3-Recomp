@@ -14,7 +14,7 @@ namespace dw3::texrep {
 namespace fs = std::filesystem;
 
 bool extract_disc(const fs::path& disc, const fs::path& dir, const std::vector<std::string>& only,
-                  const std::function<void(const std::string&)>& log, std::string& error) {
+                  const std::function<void(const std::string&)>& log, std::string& error, const std::function<bool()>& cancelled) {
     std::unique_ptr<StageSource> source = StageSource::open(disc, error);
     if (!source) return false;
     StageDumpWriter writer(dir);
@@ -22,6 +22,10 @@ bool extract_disc(const fs::path& disc, const fs::path& dir, const std::vector<s
     std::size_t index = 0;
     for (const std::string& map : source->maps()) {
         ++index;
+        if (cancelled && cancelled()) {
+            error = "Cancelled.";
+            return false;
+        }
         if (!only.empty() && std::find(only.begin(), only.end(), map) == only.end()) continue;
         StagePack pack;
         std::string detail;
@@ -62,7 +66,7 @@ bool run_pack_job(PackJob& job, GenerateReport& report, std::string& error) {
     };
     std::vector<fs::path> dumps = job.dumps;
     if (!job.disc.empty()) {
-        if (!extract_disc(job.disc, job.work / "disc-dump", job.maps, job.log, error)) return finish(false);
+        if (!extract_disc(job.disc, job.work / "disc-dump", job.maps, job.log, error, job.cancelled)) return finish(false);
         dumps.insert(dumps.begin(), job.work / "disc-dump");
     }
 
@@ -80,6 +84,10 @@ bool run_pack_job(PackJob& job, GenerateReport& report, std::string& error) {
         fs::create_directories(job.work / "out", ec);
         char name[32];
         for (std::size_t i = 0; i < in.size(); ++i) {
+            if (job.cancelled && job.cancelled()) {
+                err = "Cancelled.";
+                return false;
+            }
             std::snprintf(name, sizeof name, "%05zu.png", i);
             if (!write_png(job.work / "in" / name, in[i], err, false)) return false;  // the upscaler mishandles alpha
         }

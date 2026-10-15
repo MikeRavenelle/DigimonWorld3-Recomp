@@ -1,7 +1,7 @@
 # macOS packaging
 
 Builds `Digimon World 3 Recomp.app` (bundle id `io.github.mikeravenelle.dw3recomp`) and a disk image. Needs the Xcode
-command line tools (`swift`, `iconutil`, `codesign`, `hdiutil`, `notarytool`).
+command line tools (`codesign`, `hdiutil`, `notarytool`).
 
 ```sh
 cmake --preset macos-arm64-release -DDW3_GAME_DIR=$HOME/dw3/game -DDW3_FETCH_SDL=ON
@@ -17,8 +17,8 @@ DW3_NOTARY_PROFILE=<keychain profile> packaging/macos/notarize.sh DW3Recomp.dmg
   non-system dylib into `Contents/Frameworks` and points the executable at it (`@executable_path/../Frameworks`).
 - `make_app.sh` signs ad hoc, which is enough to run the app on the machine that built it. Unsigned or ad-hoc builds that
   were downloaded need right-click > Open (Gatekeeper).
-- The icon is a generated placeholder (`make_icon.swift`: "DW3" on a blue square); put real art in as an `.icns` and
-  copy it instead.
+- The icon is `packaging/icons/dw3recomp.icns`, made together with the Windows and Linux icons by
+  `packaging/icons/make_icons.sh` (see `packaging/icons/README.md`); `make_app.sh` copies it into the bundle.
 - User data (settings, memory cards, save states, the HD tools and packs) lives in
   `~/Library/Application Support/DW3Recomp`, not in the bundle, so the app can sit on a read-only image.
 - `sign.sh` uses the hardened runtime (`--options runtime`) and needs no entitlements: Metal, SDL and the game logic

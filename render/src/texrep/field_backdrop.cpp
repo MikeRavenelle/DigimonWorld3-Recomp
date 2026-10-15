@@ -73,7 +73,7 @@ void FieldBackdrop::begin_frame() {
 }
 
 bool FieldBackdrop::add_sprite(const BackdropSprite& s) {
-    drawn_.insert(geometry_key(s.x, s.y, s.w, s.h));
+    drawn_[geometry_key(s.x, s.y, s.w, s.h)] = {s.keyed, s.block, s.clut};
     if (!library_ || !library_->ready()) return false;
     if (s.keyed) {
         bool matched = false;
@@ -101,6 +101,18 @@ bool FieldBackdrop::add_sprite(const BackdropSprite& s) {
     }
     // Not a picture that is known: it still is background when it has the shape and place of a piece.
     return fits_known_piece(s);
+}
+
+bool FieldBackdrop::is_stale(const Drawn& d, uint32_t tile) const {
+    if (!library_) return false;
+    // A sprite that reads no picture the renderer tracks is what the game draws for a cell it has not loaded: whatever
+    // its picture memory holds there (window textures, nothing).
+    if (!d.keyed) return true;
+    const auto refs = library_->refs(d.block, d.clut);
+    if (refs.empty()) return false;  // not a picture of the library: animated pieces are left alone
+    for (const StageLibrary::TileRef& r : refs)
+        if (static_cast<int>(r.map) == map_ && r.tile == tile) return false;
+    return true;
 }
 
 bool FieldBackdrop::fits_known_piece(const BackdropSprite& s) const {
@@ -164,9 +176,8 @@ bool FieldBackdrop::resolve() {
 bool FieldBackdrop::is_placeholder(int x, int y, int w, int h) {
     constexpr int kSquare = 64;
     if (w != kSquare || h != kSquare || !resolve()) return false;
-    const int mx = x + sx_, my = y + sy_;
-    const StageLibrary::Map& m = library_->map(static_cast<uint32_t>(map_));
-    return mx >= 0 && my >= 0 && mx % kSquare == 0 && my % kSquare == 0 && mx < m.cols * kCell && my < m.rows * kCell;
+    // The game also covers the cells beyond the edge of the map with these squares; a widened view shows them.
+    return (x + sx_) % kSquare == 0 && (y + sy_) % kSquare == 0;
 }
 
 unsigned FieldBackdrop::due() {
@@ -206,7 +217,8 @@ std::vector<BackdropFill> FieldBackdrop::take_missing(unsigned layer_mask, const
             f.y = tile.row * kCell + piece.y - sy_;
             const BackdropRect r{f.x, f.y, f.x + piece.w, f.y + piece.h};
             if (!r.intersects(view)) continue;
-            const bool drawn = drawn_.count(geometry_key(f.x, f.y, piece.w, piece.h)) != 0;
+            const auto seen = drawn_.find(geometry_key(f.x, f.y, piece.w, piece.h));
+            const bool drawn = seen != drawn_.end() && !is_stale(seen->second, t);
             if (drawn && piece.layer != 0) continue;
             (drawn ? present_main : by_layer[piece.layer]).push_back(f);
         }
@@ -226,7 +238,7 @@ std::vector<BackdropFill> FieldBackdrop::take_missing(unsigned layer_mask, const
     out.insert(out.end(), by_layer[0].begin(), by_layer[0].end());
     out.insert(out.end(), by_layer[1].begin(), by_layer[1].end());
     // Pieces listed now count as drawn, so a second request in the same frame does not list them again.
-    for (const BackdropFill& f : out) drawn_.insert(geometry_key(f.x, f.y, f.piece->w, f.piece->h));
+    for (const BackdropFill& f : out) drawn_[geometry_key(f.x, f.y, f.piece->w, f.piece->h)] = {true, m.tiles[f.tile].block_hash, 0};
     return out;
 }
 

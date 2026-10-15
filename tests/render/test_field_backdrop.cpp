@@ -255,8 +255,8 @@ TEST(FieldBackdrop, PlaceholderSquaresLieOnTheCellGrid) {
     EXPECT_TRUE(b.is_placeholder(-8, 92, 64, 64));
     EXPECT_FALSE(b.is_placeholder(-71, 28, 64, 64));
     EXPECT_FALSE(b.is_placeholder(-72, 28, 32, 64));
-    // Beyond the map's left edge (map x < 0) there is no cell.
-    EXPECT_FALSE(b.is_placeholder(-264, 28, 64, 64));
+    // The game covers the cells beyond the map's edge with the squares too, and a widened view shows them.
+    EXPECT_TRUE(b.is_placeholder(-264, 28, 64, 64));
 }
 
 TEST(FieldBackdrop, NothingWithoutLibrary) {
@@ -371,4 +371,19 @@ TEST(WideBackdropPlan, WithoutSeamlessOnlyTheMarginsAreFilled) {
     EXPECT_EQ(plan.wide[0].x, -40);
     EXPECT_EQ(plan.wide[1].x, -200);
     EXPECT_EQ(plan.wide[2].x, 240);
+}
+
+TEST(FieldBackdrop, RedrawsAPlaceThatHoldsAnotherCellsPicture) {
+    auto lib = make_library();
+    FieldBackdrop b(lib);
+    b.add_sprite(keyed(*lib, 1, 1, -72, 28));
+    b.add_sprite(keyed(*lib, 2, 1, 56, 28));
+    // The game's window has not caught up: the place of cell (3,1) still shows the picture of cell (0,0).
+    b.add_sprite(keyed(*lib, 0, 0, 184, 28));
+    const auto fills = b.take_missing(layers::kMain, kScreen);
+    const bool redrawn = std::any_of(fills.begin(), fills.end(), [&](const BackdropFill& f) {
+        const auto& tile = lib->map(f.map).tiles[f.tile];
+        return tile.col == 3 && tile.row == 1;
+    });
+    EXPECT_TRUE(redrawn);
 }

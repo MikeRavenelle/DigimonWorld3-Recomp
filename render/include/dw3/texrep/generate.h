@@ -21,7 +21,7 @@ struct GenerateOptions {
     int scale = 4;          // pixels per original texel in the pack; divides model_scale
     int model_scale = 4;    // factor of the upscaler
     int pad = 16;           // pixels of neighbouring context given to the upscaler around each block
-    int batch = 24;         // images handed to the upscaler at once
+    int batch = 192;        // images handed to the upscaler at once (each batch starts the program again and loads the model)
     // Called after each batch with (done, total).
     std::function<void(std::size_t, std::size_t)> progress;
 };

@@ -1,5 +1,8 @@
 cmake_minimum_required(VERSION 3.24)
 project(DW3Recomp VERSION 0.1.0 LANGUAGES C CXX)
+if(WIN32)
+    enable_language(RC)  # the executable icon
+endif()
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -60,6 +63,7 @@ add_custom_target(recompile
     DEPENDS psxrecomp
     COMMENT "Recompiling game code with psxrecomp")
 
+add_subdirectory(app/icon)
 add_subdirectory(app/input)
 add_subdirectory(app/settings)
 add_subdirectory(app/ingame)

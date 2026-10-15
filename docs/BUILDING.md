@@ -2,7 +2,7 @@
 
 ## Linux
 
-See the README. Presets: `linux-x64-debug`, `linux-x64-release`.
+See the README (Linux section and the three build steps). Presets: `linux-x64-debug`, `linux-x64-release`.
 
 ## Linux arm64
 
@@ -77,8 +77,8 @@ Exceptions thrown through the recompiled C (the stop request, a restored save st
 with `-fexceptions`, which `dw3_generated` does; the save-state scenarios exercise it.
 
 Memory cards, save states and the disc index cache are under `~/Library/Application Support/DW3Recomp`. The window is
-created at its logical size and the swap chain follows the Retina backing size. There is no app bundle, signing or
-notarization yet.
+created at its logical size and the swap chain follows the Retina backing size. The app bundle, signing and
+notarization are described in `packaging/macos/README.md`.
 
 ## Recompiled code
 
@@ -86,9 +86,12 @@ The game executable and the in-game tests need the recompiled sources, which are
 never committed:
 
 ```sh
-build/linux-x64-release/tools/psxrecomp/psxrecomp config/dw3.toml emit --out generated
+build/<preset>/tools/dw3extract/dw3extract "game/Digimon World 3 (USA).cue" extract game/extracted
+cmake --build --preset <preset> --target recompile     # runs psxrecomp config/dw3.toml emit --out generated
 ```
 
+`config/dw3.toml` reads the extracted files from `game/extracted`, so extract first. Without `generated/` CMake skips
+`host/` and the app fails to compile (`'dw3/host.h' file not found`). Configure again after `generated/` appears.
 Build the recompiler natively first. The Windows build compiles the same generated C.
 
 ## Windows (cross-compiled from Linux)

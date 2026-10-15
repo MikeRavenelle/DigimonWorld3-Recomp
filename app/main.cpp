@@ -362,6 +362,7 @@ int main(int argc, char** argv) {
     if (opt.max_frames >= 0 && !opt.intro) opt.presses.push_back({dw3::kPadStart, 300, 306});
 
     SDL_SetHint(SDL_HINT_NO_SIGNAL_HANDLERS, "1");
+    SDL_SetHint(SDL_HINT_APP_ID, "dw3recomp");  // matches dw3recomp.desktop, so Linux desktops show its icon
     std::signal(SIGINT, on_quit_signal);
     std::signal(SIGTERM, on_quit_signal);
     if (!SDL_Init(SDL_INIT_VIDEO | SDL_INIT_EVENTS | SDL_INIT_GAMEPAD)) {
@@ -373,6 +374,9 @@ int main(int argc, char** argv) {
     // What the presenter should do for a configuration; vsync is off whenever the run is not paced to the display.
     dw3app::TexturePackCache texture_packs;
     dw3app::StageLibraryCache stage_libraries;
+    // The field is pre-rendered art and sprites: a high 3D scale buys nothing there and costs a lot of GPU memory and
+    // bandwidth, so while a field runs the internal resolution is limited to what its HD images and filter can use.
+    bool in_field = false;
     auto present_options = [&](const dw3app::Settings& st) {
         dw3app::PresentOptions po;
         const auto& g = st.graphics;
@@ -380,13 +384,17 @@ int main(int argc, char** argv) {
                                                                                        : static_cast<dw3app::VsyncMode>(g.vsync);
         po.linear = g.output_filter >= 1;
         po.post = dw3app::post_fx_from(g);
-        po.internal_res = g.internal_res;
         po.true_color = g.true_color;
         po.texture_filter = g.texture_filter;
         po.precise_geometry = g.precise_geometry;
         po.widescreen = static_cast<dw3::WideAspect>(g.widescreen);
         po.texture_pack = texture_packs.get(g);
         po.stage_library = stage_libraries.get(g, *disc);
+        po.internal_res = g.internal_res;
+        if (in_field) {
+            const int usable = po.texture_pack ? po.texture_pack->scale() : po.texture_filter == 2 ? 2 : 1;
+            po.internal_res = std::min(g.internal_res, std::max(usable, 1));
+        }
         po.seamless_bg = g.seamless_bg;
         const char* modes[] = {"fit", "integer", "stretch"};
         dw3::parse_scale_mode(modes[g.scale_mode], po.scale);
@@ -730,9 +738,13 @@ int main(int argc, char** argv) {
         const bool periodic = opt.shot_every > 0 && frame % static_cast<uint64_t>(opt.shot_every) == 0;
         const bool want_shot = periodic || (last && !opt.screenshot.empty());
         constexpr uint32_t kGameMode = 0x800554D0;
-        presenter->set_wide_mode(settings.active().graphics.widescreen != 0
-                                     ? dw3::wide_mode_for_game_mode(dw3_read32(&machine.ctx(), kGameMode))
-                                     : dw3::WideMode::Off);
+        const uint32_t game_mode = dw3_read32(&machine.ctx(), kGameMode);
+        if ((game_mode == 2) != in_field) {
+            in_field = game_mode == 2;
+            presenter->update_options(present_options(settings.active()), machine.gpu());
+        }
+        presenter->set_wide_mode(settings.active().graphics.widescreen != 0 ? dw3::wide_mode_for_game_mode(game_mode)
+                                                                            : dw3::WideMode::Off);
         const auto& shown = settings.active().graphics;
         // Frame pacing "even" repeats presents only while the measured gap between back-to-back presents says the
         // display really runs at a multiple of 60 Hz; the reported refresh rate is just the hint to try.

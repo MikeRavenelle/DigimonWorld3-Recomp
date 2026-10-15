@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=Digimon World 3 Recomp
+Comment=Static recompilation of Digimon World 3 (USA)
+Exec=dw3recomp
+Icon=dw3recomp
+Terminal=false
+Categories=Game;
+StartupWMClass=dw3recomp

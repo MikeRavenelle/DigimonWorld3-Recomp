@@ -5,6 +5,7 @@
 #include <vector>
 
 #include "hw_presenter.h"
+#include "window_icon.h"
 #include "software_presenter.h"
 
 namespace dw3app {
@@ -42,6 +43,7 @@ std::unique_ptr<Presenter> create_presenter(const char* title, int width, int he
 #endif
         window = SDL_CreateWindow(title, width, height, flags);
         if (window) {
+            set_window_icon(window);
             if (auto gpu = HwPresenter::create(window, api, options, error)) return gpu;
             SDL_DestroyWindow(window);
             window = nullptr;
@@ -62,6 +64,7 @@ std::unique_ptr<Presenter> create_presenter(const char* title, int width, int he
         log(std::string("window creation failed: ") + SDL_GetError());
         return nullptr;
     }
+    set_window_icon(window);
     auto sw = SoftwarePresenter::create(window, options, error);
     if (!sw) {
         log(error);

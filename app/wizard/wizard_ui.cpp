@@ -20,6 +20,7 @@
 #include "hd_install.h"
 #include "process_runner.h"
 #include "roboto_medium.h"
+#include "window_icon.h"
 
 namespace dw3setup {
 
@@ -438,6 +439,7 @@ private:
             job.upscaler = upscaler;
             job.models = models;
             job.model = kModelName;
+            job.cancelled = [&cancel] { return cancel.load(); };
             job.run = [&cancel](const std::vector<std::string>& command) { return run_process(command, cancel); };
             job.progress = progress;
             dw3::texrep::GenerateReport report;
@@ -567,6 +569,7 @@ WizardOutcome run_setup_wizard(const WizardLaunch& launch) {
         SDL_QuitSubSystem(SDL_INIT_VIDEO | SDL_INIT_EVENTS | SDL_INIT_GAMEPAD);
         return {};
     }
+    dw3app::set_window_icon(window);
     SDL_SetRenderVSync(renderer, 1);
     SDL_SetWindowMinimumSize(window, 720, 520);
 
@@ -601,6 +604,8 @@ WizardOutcome run_setup_wizard(const WizardLaunch& launch) {
             ImGui::NewFrame();
             ui.frame(io.DisplaySize.x, io.DisplaySize.y);
             ImGui::Render();
+            // ImGui lays out in window points; a high pixel density window (Retina) has more pixels than points.
+            SDL_SetRenderScale(renderer, io.DisplayFramebufferScale.x, io.DisplayFramebufferScale.y);
             SDL_SetRenderDrawColor(renderer, 19, 21, 26, 255);
             SDL_RenderClear(renderer);
             ImGui_ImplSDLRenderer3_RenderDrawData(ImGui::GetDrawData(), renderer);

@@ -44,5 +44,5 @@ add_library(dw3wizard_ui STATIC
     process_runner.cpp
     ${WIZARD_FONT_HEADER})
 target_include_directories(dw3wizard_ui PRIVATE ${CMAKE_CURRENT_BINARY_DIR})
-target_link_libraries(dw3wizard_ui PUBLIC dw3wizard_core PRIVATE imgui dw3texrep dw3runtime SDL3::SDL3)
+target_link_libraries(dw3wizard_ui PUBLIC dw3wizard_core PRIVATE imgui dw3icon dw3texrep dw3runtime SDL3::SDL3)
 dw3_target_defaults(dw3wizard_ui)
