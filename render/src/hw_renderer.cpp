@@ -1692,15 +1692,18 @@ void HwRenderer::triangle(std::span<uint16_t>, const DrawState& s, const Primiti
 bool HwRenderer::Impl::draw_rect(std::span<uint16_t> vram, const DrawState& s, const PrimitiveFlags& f, const GpuVertex& v,
                                  int width, int height, bool tracked) {
     const Region bounds = rect_bounds(s, v, width, height);
-    if (bounds.empty()) return true;
+    // The squares the game puts over cells it has not loaded would hide what is drawn there instead. Tested before the
+    // clip: a square wholly outside the 4:3 frame is still copied into a widened view's margin unless it is refused
+    // here, and the margins are always filled from the map, with or without the 4:3 area completed.
     if (tracked && s.depth == TexDepth::Bit4 && uses_texture(s, f) && !f.semi_transparent && width == 64 && height == 64) {
-        // The squares the game puts over cells it has not loaded would hide what is drawn there instead.
-        if (library && seamless_inside && backdrop.is_placeholder(v.x - s.off_x, v.y - s.off_y, width, height)) {
+        if (library && (seamless_inside || bounds.empty()) &&
+            backdrop.is_placeholder(v.x - s.off_x, v.y - s.off_y, width, height)) {
             ++stats.squares_hidden;
             return false;
         }
-        ++stats.squares_drawn;
+        if (!bounds.empty()) ++stats.squares_drawn;
     }
+    if (bounds.empty()) return true;
     if (!tracked && wide_mode == WideMode::Field && pack) {
         // The copy of a background sprite takes the replacement image too.
         const bool candidate = s.depth == TexDepth::Bit8 && uses_texture(s, f) && !f.semi_transparent && !s.rect_flip_x &&
