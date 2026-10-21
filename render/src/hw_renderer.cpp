@@ -1608,10 +1608,17 @@ bool HwRenderer::api_compiled_in(GraphicsApi api) {
 std::unique_ptr<HwRenderer> HwRenderer::create(const NativeWindow* window, const std::vector<std::string>& instance_extensions,
                                                std::string& error, int internal_scale,
                                                const HwOptions& options) {
-    SetVulkanExtraInstanceExtensions(instance_extensions);
-    std::unique_ptr<HwRenderer> r(new HwRenderer());
-    if (!r->impl_->init(window, internal_scale, options, error)) return nullptr;
-    return r;
+    try {
+        SetVulkanExtraInstanceExtensions(instance_extensions);
+        std::unique_ptr<HwRenderer> r(new HwRenderer());
+        if (!r->impl_->init(window, internal_scale, options, error)) return nullptr;
+        return r;
+    } catch (const std::exception& e) {
+        error = std::string("GPU initialisation threw: ") + e.what();
+    } catch (...) {
+        error = "GPU initialisation threw";
+    }
+    return nullptr;
 }
 
 DrawState HwRenderer::Impl::wide_state(const DrawState& s) {

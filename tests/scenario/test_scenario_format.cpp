@@ -435,7 +435,10 @@ TEST(ScenarioAudio, WavFileWritten) {
 }
 
 TEST(ScenarioAudio, WavUnwritablePathFails) {
-    EXPECT_FALSE(write_wav("/proc/definitely/not/here.wav", std::vector<int16_t>{1, 2}));
+    auto blocker = std::filesystem::temp_directory_path() / "dw3_wav_blocker";
+    { std::ofstream(blocker) << "x"; }
+    EXPECT_FALSE(write_wav((blocker / "sub" / "here.wav").string(), std::vector<int16_t>{1, 2}));
+    std::filesystem::remove(blocker);
 }
 
 namespace {
