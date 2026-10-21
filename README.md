@@ -10,9 +10,12 @@ You need your own copy of the game. Nothing from the disc is in this repo or in 
 > and please report them.
 
 ## Features
-- Three looks: **Original** (exactly what the PlayStation showed), **Enhanced** (same look, sharper, no dither, no
-  wobbling polygons) and **Remaster** (everything cranked). One key flips between Original and your pick so you can
-  compare.
+- Three looks: 
+
+  **Original** (exactly what the PlayStation showed)
+  **Enhanced** (same look, sharper, no dither, no wobbling polygons)
+  **Remaster** (everything cranked).
+
 - 3D rendered at up to 8x the original resolution.
 - HD backgrounds. The field maps are pre-rendered pictures, so we can swap in AI-upscaled ones. You make them from your
   own disc on your own PC, the setup walks you through it, and it's optional.
