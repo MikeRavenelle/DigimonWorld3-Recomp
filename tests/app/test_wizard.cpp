@@ -686,3 +686,55 @@ TEST(HdInstall, CancelStopsBeforeWork) {
     EXPECT_EQ(r.error, "Cancelled.");
     EXPECT_EQ(f.system.downloads, 0);
 }
+
+TEST(WizardState, PrepareStepComesAfterVerifyWhenRequired) {
+    WizardState w;
+    w.require_prepare(true);
+    w.next();
+    w.set_disc_path("game.cue");
+    w.next();
+    DiscCheck ok;
+    ok.status = DiscStatus::Ok;
+    w.finish_verify(ok);
+    w.next();
+    EXPECT_EQ(w.step(), Step::PrepareWork);
+    EXPECT_FALSE(w.can_continue());
+    EXPECT_FALSE(w.can_go_back());
+    w.fail_prepare("compiler missing");
+    EXPECT_TRUE(w.prepare_failed());
+    EXPECT_EQ(w.prepare_error(), "compiler missing");
+    w.finish_prepare();  // a failed attempt cannot be finished
+    EXPECT_EQ(w.step(), Step::PrepareWork);
+    w.retry_prepare();
+    EXPECT_FALSE(w.prepare_failed());
+    w.finish_prepare();
+    EXPECT_EQ(w.step(), Step::HdOffer);
+    w.skip_hd();
+    w.press_finish();
+    EXPECT_TRUE(w.outcome().prepared);
+}
+
+TEST(WizardState, ResumeAtPrepareSkipsTheDiscSteps) {
+    WizardState w;
+    w.resume_at_prepare("game.cue");
+    EXPECT_EQ(w.step(), Step::PrepareWork);
+    EXPECT_EQ(w.disc_path(), "game.cue");
+    w.finish_prepare();
+    EXPECT_EQ(w.step(), Step::HdOffer);
+    EXPECT_TRUE(w.can_go_back());
+}
+
+TEST(WizardState, NoPrepareStepWhenNotRequired) {
+    WizardState w;
+    w.next();
+    w.set_disc_path("game.cue");
+    w.next();
+    DiscCheck ok;
+    ok.status = DiscStatus::Ok;
+    w.finish_verify(ok);
+    w.next();
+    EXPECT_EQ(w.step(), Step::HdOffer);
+    w.skip_hd();
+    w.press_finish();
+    EXPECT_FALSE(w.outcome().prepared);
+}

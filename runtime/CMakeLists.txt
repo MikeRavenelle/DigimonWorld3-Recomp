@@ -5,6 +5,7 @@ add_library(dw3runtime STATIC
     bios/bios_state.cpp
     core/bus.cpp
     core/disc_ref.cpp
+    core/game_module.cpp
     core/machine.cpp
     core/memcard.cpp
     core/state.cpp
@@ -32,4 +33,6 @@ target_include_directories(dw3runtime PUBLIC ${zstd_SOURCE_DIR}/lib)
 dw3_target_defaults(dw3runtime)
 if(WIN32)
     target_link_libraries(dw3runtime PUBLIC shell32)
+else()
+    target_link_libraries(dw3runtime PUBLIC ${CMAKE_DL_LIBS})
 endif()

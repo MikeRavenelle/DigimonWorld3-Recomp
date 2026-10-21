@@ -7,13 +7,14 @@
 
 namespace dw3setup {
 
-enum class Step { Welcome, ChooseDisc, Verify, HdOffer, HdWork, Done };
+enum class Step { Welcome, ChooseDisc, Verify, PrepareWork, HdOffer, HdWork, Done };
 enum class HdPhase { Preparing, Downloading, Unpacking, Generating, Failed };
 
 struct WizardOutcome {
     bool completed = false;  // false when the window was closed before the end
     std::string disc_path;
     bool hd_backgrounds = false;
+    bool prepared = false;  // the game module was built by this run
 };
 
 class WizardState {
@@ -32,6 +33,17 @@ public:
     bool can_go_back() const;
     void next();
     void back();
+
+    // Preparing the game from the disc (only when the program has no game code of its own): after the disc is verified
+    // the work starts by itself; it ends in HdOffer, or in a failure that can be retried.
+    void require_prepare(bool required) { prepare_required_ = required; }
+    bool prepare_required() const { return prepare_required_; }
+    void resume_at_prepare(std::string verified_disc);  // the disc was checked already: start with the work
+    bool prepare_failed() const { return prepare_failed_; }
+    const std::string& prepare_error() const { return prepare_error_; }
+    void fail_prepare(std::string message);  // PrepareWork only
+    void retry_prepare();                    // a failed PrepareWork starts over
+    void finish_prepare();                   // PrepareWork -> HdOffer
 
     // Optional HD backgrounds
     void accept_hd();  // HdOffer -> HdWork
@@ -58,6 +70,10 @@ private:
     HdPhase hd_phase_ = HdPhase::Preparing;
     std::string hd_error_;
     bool hd_installed_ = false;
+    bool prepare_required_ = false;
+    bool prepare_failed_ = false;
+    bool prepared_ = false;
+    std::string prepare_error_;
     bool finish_pressed_ = false;
     bool quit_ = false;
 };

@@ -47,14 +47,27 @@ if(EXISTS "${DW3_GENERATED_DIR}/sources.txt")
         $<$<C_COMPILER_ID:Clang,GNU>:-fexceptions> $<$<C_COMPILER_ID:MSVC>:/O1> $<$<C_COMPILER_ID:MSVC>:/w>
         $<$<C_COMPILER_ID:MSVC>:/EHsc>)
     set(DW3_HAVE_GENERATED ON)
-    add_subdirectory(host)
     message(STATUS "DW3: using recompiled code from ${DW3_GENERATED_DIR}")
 else()
     set(DW3_HAVE_GENERATED OFF)
     message(STATUS "DW3: no recompiled code found; run psxrecomp emit to generate it")
 endif()
 
+add_subdirectory(host)
 add_subdirectory(tools/scenario)  # after the generated-code check: the runner needs dw3host
+
+# The recompiled code as a game module (a shared library the executable loads at run time), for testing the module path
+# from a checkout. Releases build the module on the player's machine instead.
+option(DW3_BUILD_GAME_MODULE "Build the recompiled code as a loadable game module" OFF)
+if(DW3_BUILD_GAME_MODULE AND DW3_HAVE_GENERATED)
+    file(WRITE "${CMAKE_BINARY_DIR}/dw3game_build_id.c" "const char dw3_module_build_id[] = \"dev\";\n")
+    add_library(dw3game MODULE ${DW3_GENERATED_NAMES} runtime/module/module_entry.c "${CMAKE_BINARY_DIR}/dw3game_build_id.c")
+    target_include_directories(dw3game PRIVATE runtime/include)
+    target_compile_definitions(dw3game PRIVATE DW3_MODULE=1)
+    set_target_properties(dw3game PROPERTIES PREFIX "" C_VISIBILITY_PRESET hidden)
+    target_compile_options(dw3game PRIVATE $<$<C_COMPILER_ID:Clang,GNU>:-O1> $<$<C_COMPILER_ID:Clang,GNU>:-w>
+        $<$<C_COMPILER_ID:Clang,GNU>:-fexceptions> $<$<C_COMPILER_ID:Clang,GNU>:-ffp-contract=off>)
+endif()
 
 # Regenerate recompiled code: cmake --build <dir> --target recompile
 add_custom_target(recompile

@@ -30,8 +30,10 @@ dw3_add_test(test_psxdisc
 
 dw3_add_test(test_psxrecomp
     SOURCES psxrecomp/test_decoder.cpp psxrecomp/test_golden.cpp psxrecomp/test_analysis.cpp
-            psxrecomp/test_analysis_real.cpp psxrecomp/test_emitter_text.cpp
+            psxrecomp/test_analysis_real.cpp psxrecomp/test_emitter_text.cpp psxrecomp/test_pipeline.cpp
     LIBS psxrecomp_core psxdisc)
+dw3_test_path(DW3_TEST_SOURCE_DIR "${PROJECT_SOURCE_DIR}")
+target_compile_definitions(test_psxrecomp PRIVATE DW3_SOURCE_DIR="${DW3_TEST_SOURCE_DIR}")
 
 dw3_add_test(test_runtime
     SOURCES runtime/test_bus.cpp runtime/test_platform.cpp runtime/test_gte.cpp
@@ -41,8 +43,16 @@ dw3_add_test(test_runtime
             runtime/test_state_cdrom.cpp runtime/test_state_sio.cpp runtime/test_state_spu.cpp runtime/test_soft_rasterizer.cpp runtime/test_sio.cpp
             runtime/test_mdec.cpp runtime/test_memcard.cpp runtime/test_disc_ref.cpp
             runtime/test_spu_dsp.cpp runtime/test_spu_voices.cpp runtime/test_xa.cpp
-            runtime/test_present_layout.cpp runtime/test_widescreen.cpp runtime/test_hdr.cpp runtime/test_display_snapshot.cpp runtime/test_precise_vertex.cpp
+            runtime/test_game_module.cpp runtime/test_present_layout.cpp runtime/test_widescreen.cpp runtime/test_hdr.cpp runtime/test_display_snapshot.cpp runtime/test_precise_vertex.cpp
     LIBS dw3runtime)
+
+# A tiny game module for the loader tests.
+add_library(dw3_module_fixture MODULE runtime/module_fixture.c ${PROJECT_SOURCE_DIR}/runtime/module/module_entry.c)
+target_include_directories(dw3_module_fixture PRIVATE ${PROJECT_SOURCE_DIR}/runtime/include)
+target_compile_definitions(dw3_module_fixture PRIVATE DW3_MODULE=1)
+set_target_properties(dw3_module_fixture PROPERTIES PREFIX "")
+add_dependencies(test_runtime dw3_module_fixture)
+target_compile_definitions(test_runtime PRIVATE DW3_FIXTURE_MODULE="$<TARGET_FILE:dw3_module_fixture>")
 
 # Differential emitter tests: emit_testgen recompiles the programs of psxrecomp/test_programs.h at build
 # time; test_emitter runs the emitted C and a test-only reference interpreter side by side.
@@ -140,5 +150,6 @@ dw3_add_test(test_ingame
 
 # First-run wizard logic: state machine, disc identification, hashes, download plan, unpacking and the install sequence.
 dw3_add_test(test_wizard
-    SOURCES app/test_wizard.cpp
+    SOURCES app/test_wizard.cpp app/test_module_build.cpp
     LIBS dw3wizard_core dw3texrep miniz)
+target_compile_definitions(test_wizard PRIVATE DW3_SOURCE_DIR="${DW3_TEST_SOURCE_DIR}")

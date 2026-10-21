@@ -3,15 +3,26 @@
 // the game's own settings screen.
 #pragma once
 #include <filesystem>
+#include <optional>
 #include <string>
 
+#include "module_build.h"
 #include "wizard_state.h"
 
 namespace dw3setup {
 
+// What preparing the game needs. Present when the program has no game code of its own.
+struct PrepareSetup {
+    Toolchain toolchain;
+    std::string game_config;
+    std::string build_id;
+    bool disc_verified = false;  // the disc is known to be right: open straight at the preparation
+};
+
 struct WizardLaunch {
     std::string initial_disc;          // pre-filled path, such as a stored one that no longer works
     std::filesystem::path user_data;   // where tools, downloads and texture packs go
+    std::optional<PrepareSetup> prepare;
     std::string screenshot_dir;        // development aid: walk through the steps unattended, saving a picture of each
 };
 

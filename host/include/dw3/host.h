@@ -17,6 +17,7 @@
 #include <vector>
 
 #include "dw3/bios.h"
+#include "dw3/game_module.h"
 #include "dw3/machine.h"
 #include "psxdisc/disc.h"
 
@@ -30,6 +31,8 @@ enum class CardMode {
 
 struct Config {
     std::string disc_path = "game/Digimon World 3 (USA).cue";
+    // Game module to load the recompiled code from. Empty = the code linked into this executable (checkout builds).
+    std::string module_path;
     CardMode card_mode = CardMode::Files;
     std::array<std::string, 2> card_path;  // Files mode overrides; empty = <user data dir>/memcards/slotN.mcd
     std::vector<uint8_t> blank_card;  // Blank mode: start from this image (e.g. the previous boot's) instead of a fresh one
@@ -57,6 +60,10 @@ public:
     Host(const Host&) = delete;
     Host& operator=(const Host&) = delete;
 
+    // True when this executable has the game's recompiled code linked in (checkout builds); otherwise a game module is needed.
+    static bool has_linked_code();
+    // The recompiled code in use: from the loaded module or linked in.
+    std::span<const RecompSegment> segments() const { return segments_; }
     Machine& machine() { return *machine_; }
     Bios& bios() { return *bios_; }
     int card_count() const;  // cards currently inserted
@@ -96,6 +103,8 @@ private:
     struct Impl;
     std::unique_ptr<Impl> impl_;
     std::optional<psxdisc::Disc> disc_;
+    std::unique_ptr<GameModule> module_;  // outlives machine_: its functions run until the machine is gone
+    std::span<const RecompSegment> segments_;
     std::unique_ptr<Machine> machine_;
     std::unique_ptr<Bios> bios_;
     bool running_ = false;

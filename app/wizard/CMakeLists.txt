@@ -13,9 +13,10 @@ add_library(dw3wizard_core STATIC
     commands.cpp
     zip_extract.cpp
     wizard_state.cpp
-    hd_install.cpp)
+    hd_install.cpp
+    module_build.cpp)
 target_include_directories(dw3wizard_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
-target_link_libraries(dw3wizard_core PUBLIC dw3runtime psxdisc PRIVATE miniz)
+target_link_libraries(dw3wizard_core PUBLIC dw3runtime psxdisc psxrecomp_core PRIVATE miniz)
 dw3_target_defaults(dw3wizard_core)
 
 set(IMGUI_DIR ${PROJECT_SOURCE_DIR}/third_party/imgui)

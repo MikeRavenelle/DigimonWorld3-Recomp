@@ -64,6 +64,15 @@ See `runtime/include/dw3/recomp.h`.
   backward jump. Event checks record the label they are about to jump to in `ctx->cur_pc`. Save states
   resume through these (below). A `jr $ra` whose delay slot writes `$ra` is a recompile error.
 
+### Game modules
+
+Besides being linked into the executable, the generated code can be built as a shared library (`DW3_MODULE`, target
+`dw3game` with `-DDW3_BUILD_GAME_MODULE=ON`) and loaded with `--module`. Inside a module the runtime functions of
+`recomp.h` are macros over a `Dw3Api` table that the loader passes to `dw3_module_init()`, so the library needs no
+import libraries and loads the same way on every OS. `GameModule` (`runtime/core/game_module.cpp`) loads it and
+returns the segment table the `Machine` is built from. A module is a library of recompiled functions plus
+`runtime/module/module_entry.c`; the executable contains no game code.
+
 ## Host overrides
 
 `Machine::override_function(addr, fn)` makes everything that resolves through `Machine::lookup` (indirect calls, `jr`

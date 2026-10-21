@@ -18,6 +18,7 @@
 #include "dw3/platform.h"
 #include "dw3/texrep/pack_job.h"
 #include "hd_install.h"
+#include "module_build.h"
 #include "process_runner.h"
 #include "roboto_medium.h"
 #include "window_icon.h"
@@ -111,6 +112,10 @@ class SetupUi {
 public:
     SetupUi(SDL_Window* window, const WizardLaunch& launch) : window_(window), launch_(launch) {
         state_.set_disc_path(launch.initial_disc);
+        if (launch.prepare) {
+            state_.require_prepare(true);
+            if (launch.prepare->disc_verified) state_.resume_at_prepare(launch.initial_disc);
+        }
         std::snprintf(path_buffer_, sizeof path_buffer_, "%s", launch.initial_disc.c_str());
         plan_ = plan_for(dw3::platform::host_os(), dw3::platform::host_arch());
     }
@@ -132,6 +137,7 @@ public:
             case Step::Welcome: welcome(); break;
             case Step::ChooseDisc: choose_disc(); break;
             case Step::Verify: verify(); break;
+            case Step::PrepareWork: prepare_work(); break;
             case Step::HdOffer: hd_offer(); break;
             case Step::HdWork: hd_work(); break;
             case Step::Done: done(); break;
@@ -150,7 +156,11 @@ public:
     bool verify_waiting() const { return state_.verify_pending(); }
     bool worker_running() const { return worker_.joinable(); }
     HdSnapshot hd_snapshot() const { return installer_ ? installer_->snapshot() : HdSnapshot{}; }
-    void request_stop() { if (installer_) installer_->cancel(); }
+    PrepareSnapshot prepare_snapshot() const { return preparer_ ? preparer_->snapshot() : PrepareSnapshot{}; }
+    void request_stop() {
+        if (installer_) installer_->cancel();
+        if (preparer_) preparer_->cancel();
+    }
 
     // Scripted access for the unattended run.
     void demo_type_path(const std::string& path) {
@@ -164,21 +174,26 @@ private:
         ImGui::PushFont(nullptr, ImGui::GetStyle().FontSizeBase * 1.45f);
         ImGui::TextUnformatted("Digimon World 3 Recomp setup");
         ImGui::PopFont();
-        const char* labels[] = {"Welcome", "Disc", "Verify", "HD backgrounds", "Done"};
+        std::vector<const char*> labels = {"Welcome", "Disc", "Verify"};
+        if (state_.prepare_required()) labels.push_back("Prepare");
+        labels.push_back("HD backgrounds");
+        labels.push_back("Done");
+        const int offset = state_.prepare_required() ? 1 : 0;  // steps after Verify move right by one
         int current = 0;
         switch (state_.step()) {
             case Step::Welcome: current = 0; break;
             case Step::ChooseDisc: current = 1; break;
             case Step::Verify: current = 2; break;
+            case Step::PrepareWork: current = 3; break;
             case Step::HdOffer:
-            case Step::HdWork: current = 3; break;
-            case Step::Done: current = 4; break;
+            case Step::HdWork: current = 3 + offset; break;
+            case Step::Done: current = 4 + offset; break;
         }
         ImDrawList* draw = ImGui::GetWindowDrawList();
         ImVec2 at = ImGui::GetCursorScreenPos();
         const float font = ImGui::GetFontSize();
         float x = at.x;
-        for (int i = 0; i < 5; ++i) {
+        for (int i = 0; i < static_cast<int>(labels.size()); ++i) {
             const bool active = i == current;
             const ImU32 color = active ? kAccent : (i < current ? kGood : kMuted);
             const float radius = font * 0.42f;
@@ -290,6 +305,23 @@ private:
         }
     }
 
+    void prepare_work() {
+        if (!prepare_started_ && !state_.prepare_failed()) begin_prepare();
+        heading(state_.prepare_failed() ? "Preparing the game: stopped" : "Preparing the game");
+        if (state_.prepare_failed()) {
+            colored_wrapped(kBad, state_.prepare_error());
+            return;
+        }
+        const PrepareSnapshot snap = prepare_snapshot();
+        const char* phase_names[] = {"Reading the disc", "Analysing", "Translating", "Compiling", "Linking", "Stopped"};
+        ImGui::Text("Step: %s", phase_names[static_cast<int>(snap.phase)]);
+        ImGui::TextWrapped("%s", snap.status.c_str());
+        ImGui::Spacing();
+        ImGui::ProgressBar(snap.fraction < 0 ? -1.0f * static_cast<float>(ImGui::GetTime()) : static_cast<float>(snap.fraction), ImVec2(-1, 0));
+        ImGui::Spacing();
+        colored_wrapped(kMuted, "The game is built on this computer from your own disc, once. It can take a few minutes. Nothing from the disc leaves this computer.");
+    }
+
     void hd_work() {
         const HdSnapshot snap = hd_snapshot();
         heading(state_.hd_phase() == HdPhase::Failed ? "HD backgrounds: stopped" : "Creating HD backgrounds");
@@ -333,6 +365,10 @@ private:
             case Step::Welcome: buttons = {{"Next", 1}, {"Quit", 9}}; break;
             case Step::ChooseDisc: buttons = {{"Next", 1}, {"Back", 2}}; break;
             case Step::Verify: buttons = {{"Next", 1}, {"Back", 2}}; break;
+            case Step::PrepareWork:
+                if (state_.prepare_failed()) buttons = {{"Try again", 10}, {"Quit", 9}};
+                else buttons = {{"Cancel", 6}};
+                break;
             case Step::HdOffer: buttons = {{"Accept and download", 3}, {"Skip", 4}, {"Back", 2}}; break;
             case Step::HdWork:
                 if (state_.hd_phase() == HdPhase::Failed) buttons = {{"Try again", 5}, {"Skip", 4}};
@@ -374,13 +410,16 @@ private:
             case 6: request_stop(); break;
             case 7: state_.press_finish(); break;
             case 9: state_.quit(); break;
+            case 10: begin_prepare(); break;
         }
     }
 
     void shortcuts() {
         if (ImGui::IsAnyItemActive()) return;  // typing in the path box
         if (ImGui::IsKeyPressed(ImGuiKey_Escape, false) || ImGui::IsKeyPressed(ImGuiKey_GamepadFaceRight, false)) {
-            if (state_.step() == Step::HdWork && state_.hd_phase() != HdPhase::Failed) request_stop();
+            if ((state_.step() == Step::HdWork && state_.hd_phase() != HdPhase::Failed) ||
+                (state_.step() == Step::PrepareWork && !state_.prepare_failed()))
+                request_stop();
             else state_.back();
         }
     }
@@ -403,6 +442,15 @@ private:
                 dialog_.has_path = false;
             }
         }
+        if (state_.step() == Step::PrepareWork) {
+            if (worker_done_ && worker_.joinable()) {
+                worker_.join();
+                prepare_started_ = false;
+                if (prepare_result_.ok) state_.finish_prepare();
+                else state_.fail_prepare(prepare_result_.error);
+            }
+            return;
+        }
         if (state_.step() != Step::HdWork) return;
         if (worker_done_ && worker_.joinable()) {
             worker_.join();
@@ -416,6 +464,27 @@ private:
         } else if (worker_.joinable()) {
             state_.set_hd_phase(hd_snapshot().phase);
         }
+    }
+
+    void begin_prepare() {
+        if (!launch_.prepare) return;
+        if (state_.prepare_failed()) state_.retry_prepare();
+        stop_worker();
+        worker_done_ = false;
+        prepare_started_ = true;
+        PrepareConfig config;
+        config.user_data = launch_.user_data;
+        config.disc = dw3::platform::path_from_utf8(state_.disc_path());
+        config.game_config = launch_.prepare->game_config;
+        config.toolchain = launch_.prepare->toolchain;
+        config.build_id = launch_.prepare->build_id;
+        config.jobs = std::max(2u, std::thread::hardware_concurrency());
+        config.run = [](const std::vector<std::string>& command, const std::atomic<bool>& cancel) { return run_process(command, cancel); };
+        preparer_ = std::make_unique<ModulePreparer>(std::move(config));
+        worker_ = std::thread([this] {
+            prepare_result_ = preparer_->run();
+            worker_done_ = true;
+        });
     }
 
     void begin_hd() {
@@ -455,6 +524,7 @@ private:
     void stop_worker() {
         if (worker_.joinable()) {
             if (installer_) installer_->cancel();
+            if (preparer_) preparer_->cancel();
             worker_.join();
         }
     }
@@ -470,6 +540,9 @@ private:
     int focus_frames_ = 2;
     int verify_frames_ = 0;
     std::unique_ptr<HdInstaller> installer_;
+    std::unique_ptr<ModulePreparer> preparer_;
+    PrepareResult prepare_result_;
+    bool prepare_started_ = false;
     std::thread worker_;
     std::atomic<bool> worker_done_{false};
     HdResult hd_result_;

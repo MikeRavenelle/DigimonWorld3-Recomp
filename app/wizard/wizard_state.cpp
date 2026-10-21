@@ -20,6 +20,7 @@ bool WizardState::can_continue() const {
         case Step::Welcome: return true;
         case Step::ChooseDisc: return !disc_path_.empty();
         case Step::Verify: return check_done_ && check_.ok();
+        case Step::PrepareWork:
         case Step::HdOffer:
         case Step::HdWork:
         case Step::Done: return false;  // these have their own buttons
@@ -44,7 +45,7 @@ void WizardState::next() {
             check_done_ = false;
             step_ = Step::Verify;
             break;
-        case Step::Verify: step_ = Step::HdOffer; break;
+        case Step::Verify: step_ = prepare_required_ ? Step::PrepareWork : Step::HdOffer; break;
         default: break;
     }
 }
@@ -57,6 +58,33 @@ void WizardState::back() {
         case Step::HdOffer: step_ = Step::ChooseDisc; break;
         default: break;
     }
+}
+
+void WizardState::resume_at_prepare(std::string verified_disc) {
+    disc_path_ = std::move(verified_disc);
+    check_ = {};
+    check_.status = DiscStatus::Ok;
+    check_done_ = true;
+    prepare_required_ = true;
+    step_ = Step::PrepareWork;
+}
+
+void WizardState::fail_prepare(std::string message) {
+    if (step_ != Step::PrepareWork) return;
+    prepare_failed_ = true;
+    prepare_error_ = std::move(message);
+}
+
+void WizardState::retry_prepare() {
+    if (step_ != Step::PrepareWork || !prepare_failed_) return;
+    prepare_failed_ = false;
+    prepare_error_.clear();
+}
+
+void WizardState::finish_prepare() {
+    if (step_ != Step::PrepareWork || prepare_failed_) return;
+    prepared_ = true;
+    step_ = Step::HdOffer;
 }
 
 void WizardState::accept_hd() {
@@ -105,6 +133,7 @@ WizardOutcome WizardState::outcome() const {
     o.completed = finished();
     o.disc_path = disc_path_;
     o.hd_backgrounds = hd_installed_;
+    o.prepared = prepared_;
     return o;
 }
 

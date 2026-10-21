@@ -10,6 +10,8 @@
 // Options:
 //   --disc PATH        disc image (.cue), used as given; default: the path saved by the first-run setup (system.disc_path),
 //                      then game/Digimon World 3 (USA).cue if that exists
+//   --module PATH      load the recompiled code from this game module instead of the code linked into the executable
+//   --prepare          build the game module from the disc (what the setup does for a player), then exit
 //   --setup            open the first-run setup window (it also opens by itself when no valid disc is configured)
 //   --setup-shots DIR  with --setup: walk through the setup unattended, saving a picture of each page to DIR (nothing is saved)
 //   --frames N         exit after N emulated frames (audit runs)
@@ -69,7 +71,10 @@
 #include <SDL3/SDL.h>
 
 #include <array>
+#include <algorithm>
 #include <atomic>
+#include <chrono>
+#include <thread>
 #include <csignal>
 #include <cstdio>
 #include <cstdlib>
@@ -104,12 +109,17 @@
 #include "assets.h"
 #include "disc_check.h"
 #include "disc_location.h"
+#include "game_config.h"
+#include "module_build.h"
+#include "process_runner.h"
 #include "wizard_ui.h"
 
 namespace {
 
 struct Options {
     std::string disc;  // --disc, as given
+    std::string module;  // --module: game module to load instead of the linked code
+    bool prepare = false;  // --prepare: build the game module from the disc, then exit
     bool setup = false;
     std::string setup_shots;
     int max_frames = -1;
@@ -169,6 +179,8 @@ Options parse(int argc, char** argv) {
     for (int i = 1; i < argc; ++i) {
         std::string a = argv[i];
         if (a == "--disc" && i + 1 < argc) o.disc = argv[++i];
+        else if (a == "--module" && i + 1 < argc) o.module = argv[++i];
+        else if (a == "--prepare") o.prepare = true;
         else if (a == "--setup") o.setup = true;
         else if (a == "--setup-shots" && i + 1 < argc) o.setup_shots = argv[++i];
         else if (a == "--frames" && i + 1 < argc) o.max_frames = std::atoi(argv[++i]);
@@ -306,22 +318,75 @@ int main(int argc, char** argv) {
     SDL_Log("DW3Recomp starting (os=%s arch=%s)", dw3::platform::os_name(dw3::platform::host_os()).data(),
             dw3::platform::arch_name(dw3::platform::host_arch()).data());
 
-#if !DW3_HAVE_GENERATED
-    SDL_Log("no recompiled code linked: run `cmake --build <dir> --target recompile` and reconfigure");
-    return 1;
-#else
     // The disc: --disc, else the one the setup saved, else the checkout's own copy. With none, the setup window opens (not in
     // audit runs, which must not wait for a person).
     auto disc_usable = [](const std::string& p) { return dw3setup::check_disc(dw3::platform::path_from_utf8(p)).ok(); };
     std::optional<std::string> disc = dw3setup::locate_disc(opt.disc, active.system.disc_path, "game/Digimon World 3 (USA).cue", disc_usable);
-    if (opt.setup || !disc) {
+    // Without recompiled code in the executable the game is a module built from the disc (see module_build.h).
+    std::optional<dw3setup::PrepareSetup> prepare;
+    std::filesystem::path prepared_module;
+    if (!dw3::host::Host::has_linked_code() && opt.module.empty()) {
+        const std::string build_id = dw3setup::make_build_id(DW3_VERSION, kGameConfigToml, dw3setup::retail_usa().exe_sha256);
+        prepared_module = dw3setup::module_path(dw3::platform::user_data_dir(), build_id, dw3::platform::host_os());
+        std::error_code module_ec;
+        if (!std::filesystem::exists(prepared_module, module_ec)) {
+            const char* base = SDL_GetBasePath();
+            auto toolchain = dw3setup::find_toolchain(base ? dw3::platform::path_from_utf8(base) : std::filesystem::path());
+            if (!toolchain) {
+                std::fprintf(stderr, "this installation is incomplete: the toolchain folder next to the program is missing\n");
+                return 1;
+            }
+            prepare = dw3setup::PrepareSetup{*toolchain, kGameConfigToml, build_id, false};
+        }
+    }
+    if (opt.prepare) {
+        if (!prepare) {
+            std::fprintf(stderr, "the game is already prepared\n");
+            return 0;
+        }
+        if (!disc) {
+            std::fprintf(stderr, "no disc image: pass --disc PATH\n");
+            return 1;
+        }
+        dw3setup::PrepareConfig config;
+        config.user_data = dw3::platform::user_data_dir();
+        config.disc = dw3::platform::path_from_utf8(*disc);
+        config.game_config = prepare->game_config;
+        config.toolchain = prepare->toolchain;
+        config.build_id = prepare->build_id;
+        config.jobs = std::max(2u, std::thread::hardware_concurrency());
+        config.run = [](const std::vector<std::string>& command, const std::atomic<bool>& cancel) { return dw3setup::run_process(command, cancel); };
+        dw3setup::ModulePreparer preparer(std::move(config));
+        std::atomic<bool> done{false};
+        std::thread reporter([&] {
+            std::string last;
+            while (!done) {
+                const auto snap = preparer.snapshot();
+                if (snap.status != last) std::fprintf(stderr, "%s\n", (last = snap.status).c_str());
+                std::this_thread::sleep_for(std::chrono::milliseconds(200));
+            }
+        });
+        const dw3setup::PrepareResult result = preparer.run();
+        done = true;
+        reporter.join();
+        if (!result.ok) {
+            std::fprintf(stderr, "%s\n", result.error.c_str());
+            return 1;
+        }
+        std::fprintf(stderr, "prepared %s\n", dw3::platform::path_to_utf8(result.module).c_str());
+        return 0;
+    }
+    if (opt.setup || !disc || prepare) {
         if (opt.max_frames >= 0) {
-            std::fprintf(stderr, "no disc image: pass --disc PATH, or run without --frames to open the setup\n");
+            std::fprintf(stderr, "%s\n", prepare ? "the game is not prepared: run once without --frames, or with --prepare, to build it from the disc"
+                                                : "no disc image: pass --disc PATH, or run without --frames to open the setup");
             return 1;
         }
         dw3setup::WizardLaunch launch;
         launch.initial_disc = disc ? *disc : active.system.disc_path;
         launch.user_data = dw3::platform::user_data_dir();
+        launch.prepare = prepare;
+        if (launch.prepare) launch.prepare->disc_verified = disc.has_value() && !opt.setup;
         launch.screenshot_dir = opt.setup_shots;
         const dw3setup::WizardOutcome outcome = dw3setup::run_setup_wizard(launch);
         if (!outcome.completed) return opt.setup ? 0 : 1;
@@ -344,6 +409,7 @@ int main(int argc, char** argv) {
     }
     dw3::host::Config cfg;
     cfg.disc_path = *disc;
+    cfg.module_path = !opt.module.empty() ? opt.module : dw3::platform::path_to_utf8(prepared_module);
     cfg.card_mode = active.system.memcards ? dw3::host::CardMode::Files : dw3::host::CardMode::None;
     cfg.card_path = {active.system.memcard1, active.system.memcard2};
     cfg.trace_bios = opt.trace_bios;
@@ -510,8 +576,8 @@ int main(int argc, char** argv) {
     host_input.script = &opt.presses;
     machine.sio().set_pad_source(0, &host_input);
     std::size_t funcs = 0;
-    for (uint32_t i = 0; i < dw3_segment_count; ++i) funcs += dw3_segments[i].func_count;
-    SDL_Log("recompiled code: %u segments, %zu functions", dw3_segment_count, funcs);
+    for (const auto& segment : host->segments()) funcs += segment.func_count;
+    SDL_Log("recompiled code: %zu segments, %zu functions", host->segments().size(), funcs);
     host->on_tty = [](const std::string& s) { SDL_Log("[game] %s", s.c_str()); };
 
     auto shutdown = [&](int code) -> int {
@@ -821,5 +887,4 @@ int main(int argc, char** argv) {
     }
     if (result.end == dw3::host::RunResult::End::Returned) SDL_Log("game entry returned");
     return shutdown(0);
-#endif
 }

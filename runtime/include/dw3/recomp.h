@@ -35,19 +35,75 @@ typedef struct RecompContext {
 
 typedef void (*RecompFunc)(RecompContext* ctx);
 
-/* Slow-path memory access for anything outside RAM/scratchpad (I/O, BIOS, expansion). */
+/* Runtime services the recompiled code calls. Linked into the executable normally; a game module (DW3_MODULE) is a
+ * separate library that receives them through a Dw3Api table at load, so it needs no import libraries and loads the
+ * same way on every OS. */
+#define DW3_API_VERSION 1u
+
+typedef struct Dw3Api {
+    uint32_t version;
+    uint32_t (*mem_read)(RecompContext* ctx, uint32_t addr, int size);
+    void (*mem_write)(RecompContext* ctx, uint32_t addr, uint32_t value, int size);
+    RecompFunc (*lookup_func)(RecompContext* ctx, uint32_t addr);
+    void (*service_events)(RecompContext* ctx);
+    void (*syscall)(RecompContext* ctx, uint32_t pc);
+    void (*brk)(RecompContext* ctx, uint32_t pc);
+    void (*bad_jump)(RecompContext* ctx, uint32_t pc, uint32_t target);
+    void (*bios_call)(RecompContext* ctx, uint32_t table, uint32_t fn);
+    void (*bad_resume)(RecompContext* ctx, uint32_t fn);
+    void (*mtc0)(RecompContext* ctx, uint32_t reg, uint32_t value);
+    void (*rfe)(RecompContext* ctx);
+    uint32_t (*gte_read_data)(RecompContext* ctx, uint32_t reg);
+    void (*gte_write_data)(RecompContext* ctx, uint32_t reg, uint32_t value);
+    uint32_t (*gte_read_ctrl)(RecompContext* ctx, uint32_t reg);
+    void (*gte_write_ctrl)(RecompContext* ctx, uint32_t reg, uint32_t value);
+    void (*gte_cmd)(RecompContext* ctx, uint32_t cmd);
+} Dw3Api;
+
+#ifdef DW3_MODULE
+extern Dw3Api dw3_api;
+#define dw3_mem_read (dw3_api.mem_read)
+#define dw3_mem_write (dw3_api.mem_write)
+#define dw3_lookup_func (dw3_api.lookup_func)
+#define dw3_service_events (dw3_api.service_events)
+#define dw3_syscall (dw3_api.syscall)
+#define dw3_break (dw3_api.brk)
+#define dw3_bad_jump (dw3_api.bad_jump)
+#define dw3_bios_call (dw3_api.bios_call)
+#define dw3_bad_resume (dw3_api.bad_resume)
+#define dw3_mtc0 (dw3_api.mtc0)
+#define dw3_rfe (dw3_api.rfe)
+#define dw3_gte_read_data (dw3_api.gte_read_data)
+#define dw3_gte_write_data (dw3_api.gte_write_data)
+#define dw3_gte_read_ctrl (dw3_api.gte_read_ctrl)
+#define dw3_gte_write_ctrl (dw3_api.gte_write_ctrl)
+#define dw3_gte_cmd (dw3_api.gte_cmd)
+#else
 uint32_t dw3_mem_read(RecompContext* ctx, uint32_t addr, int size);
 void dw3_mem_write(RecompContext* ctx, uint32_t addr, uint32_t value, int size);
+RecompFunc dw3_lookup_func(RecompContext* ctx, uint32_t addr);
+void dw3_service_events(RecompContext* ctx);
+void dw3_syscall(RecompContext* ctx, uint32_t pc);
+void dw3_break(RecompContext* ctx, uint32_t pc);
+void dw3_bad_jump(RecompContext* ctx, uint32_t pc, uint32_t target);
+void dw3_bios_call(RecompContext* ctx, uint32_t table, uint32_t fn);
+void dw3_bad_resume(RecompContext* ctx, uint32_t fn);
+void dw3_mtc0(RecompContext* ctx, uint32_t reg, uint32_t value);
+void dw3_rfe(RecompContext* ctx);
+uint32_t dw3_gte_read_data(RecompContext* ctx, uint32_t reg);
+void dw3_gte_write_data(RecompContext* ctx, uint32_t reg, uint32_t value);
+uint32_t dw3_gte_read_ctrl(RecompContext* ctx, uint32_t reg);
+void dw3_gte_write_ctrl(RecompContext* ctx, uint32_t reg, uint32_t value);
+void dw3_gte_cmd(RecompContext* ctx, uint32_t cmd);
+#endif
+
+/* Slow-path memory access for anything outside RAM/scratchpad (I/O, BIOS, expansion). */
 
 /* Resolves an indirect jump/call target given the currently loaded overlays. Aborts with a
  * diagnostic if the target was not recompiled (pure static recomp: no fallback). */
-RecompFunc dw3_lookup_func(RecompContext* ctx, uint32_t addr);
 
 /* Called at block boundaries when ctx->cycles >= ctx->next_event (IRQs, VSync, DMA, CD). */
-void dw3_service_events(RecompContext* ctx);
 
-void dw3_syscall(RecompContext* ctx, uint32_t pc);
-void dw3_break(RecompContext* ctx, uint32_t pc);
 
 #define DW3_RAM_SIZE        0x200000u
 #define DW3_SCRATCHPAD_BASE 0x1F800000u
@@ -133,10 +189,8 @@ static inline void dw3_write8(RecompContext* ctx, uint32_t addr, uint8_t v) {
 static inline void dw3_call(RecompContext* ctx, uint32_t addr) { dw3_lookup_func(ctx, addr)(ctx); }
 
 /* A switch() over a recovered jump table hit an unexpected value. Fatal with diagnostics. */
-void dw3_bad_jump(RecompContext* ctx, uint32_t pc, uint32_t target);
 
 /* BIOS A0/B0/C0 dispatch (native HLE). `fn` is the function number from $t1. */
-void dw3_bios_call(RecompContext* ctx, uint32_t table, uint32_t fn);
 
 /* Event check on a backward jump to label `pc`. The label is where a save state resumes. */
 #define DW3_CHECK_EVENTS(ctx, pc)                     \
@@ -148,16 +202,8 @@ void dw3_bios_call(RecompContext* ctx, uint32_t table, uint32_t fn);
     } while (0)
 
 /* Entered function found no label for the address a restored chain asked it to resume at. */
-void dw3_bad_resume(RecompContext* ctx, uint32_t fn);
 
 /* ---- Coprocessors ---- */
-void dw3_mtc0(RecompContext* ctx, uint32_t reg, uint32_t value);
-void dw3_rfe(RecompContext* ctx);
-uint32_t dw3_gte_read_data(RecompContext* ctx, uint32_t reg);
-void dw3_gte_write_data(RecompContext* ctx, uint32_t reg, uint32_t value);
-uint32_t dw3_gte_read_ctrl(RecompContext* ctx, uint32_t reg);
-void dw3_gte_write_ctrl(RecompContext* ctx, uint32_t reg, uint32_t value);
-void dw3_gte_cmd(RecompContext* ctx, uint32_t cmd);
 
 /* ---- Arithmetic with MIPS-exact edge cases ---- */
 static inline void dw3_div(RecompContext* ctx, uint32_t rs, uint32_t rt) {
@@ -283,6 +329,18 @@ typedef struct RecompSegment {
 /* Emitted by psxrecomp into dw3_tables.c. Segment 0 is the main executable. */
 extern const RecompSegment dw3_segments[];
 extern const uint32_t dw3_segment_count;
+
+/* What a game module hands back from dw3_module_init(). `build_id` identifies the recompiler output the module was
+ * built from; the host compares it with the one it expects. */
+typedef struct RecompModuleInfo {
+    uint32_t api_version;
+    const char* build_id;
+    const RecompSegment* segments;
+    uint32_t segment_count;
+} RecompModuleInfo;
+
+typedef const RecompModuleInfo* (*RecompModuleInit)(const Dw3Api* api);
+#define DW3_MODULE_INIT_SYMBOL "dw3_module_init"
 
 #ifdef __cplusplus
 }

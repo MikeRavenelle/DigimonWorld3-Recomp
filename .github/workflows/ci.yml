@@ -8,8 +8,9 @@ concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
 
-# No game data is available here, so the recompiled game and the in-game scenarios are not built or run. The jobs
-# build the tools, the runtime and the renderer, and run the unit tests (the ones that need a disc skip themselves).
+# No game data is available here, so the recompiled game and the in-game scenarios are not built or run: the program is
+# built without game code, the way it is released (the player's setup builds the game module from their own disc). The
+# jobs build the tools, the runtime and the renderer, and run the unit tests (the ones that need a disc skip themselves).
 
 jobs:
   linux:
@@ -118,4 +119,6 @@ jobs:
           cmake --install build/windows-x64-release --component app --prefix "$RUNNER_TEMP/stage"
           find "$RUNNER_TEMP/stage" -type f | sort
           test -f "$RUNNER_TEMP/stage/dw3recomp.exe"
-          test "$(find "$RUNNER_TEMP/stage" -type f | wc -l)" -eq 3
+          test -f "$RUNNER_TEMP/stage/toolchain/include/dw3/recomp.h"
+          test -f "$RUNNER_TEMP/stage/toolchain/module/module_entry.c"
+          test "$(find "$RUNNER_TEMP/stage" -type f | wc -l)" -eq 5

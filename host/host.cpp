@@ -208,6 +208,14 @@ const std::vector<uint8_t>& Host::card_image(int slot) const { return impl_->ima
 
 int Host::card_count() const { return (impl_->image[0].empty() ? 0 : 1) + (impl_->image[1].empty() ? 0 : 1); }
 
+bool Host::has_linked_code() {
+#ifdef DW3_HAVE_GENERATED
+    return true;
+#else
+    return false;
+#endif
+}
+
 std::unique_ptr<Host> Host::create(const Config& cfg, std::string& error) {
     std::unique_ptr<Host> h(new Host());
     Impl& im = *h->impl_;
@@ -222,7 +230,19 @@ std::unique_ptr<Host> Host::create(const Config& cfg, std::string& error) {
         error = "SLUS_014.36 not found on disc";
         return nullptr;
     }
-    h->machine_ = std::make_unique<Machine>(std::span<const RecompSegment>(dw3_segments, dw3_segment_count));
+    if (!cfg.module_path.empty()) {
+        h->module_ = GameModule::load(platform::path_from_utf8(cfg.module_path), "", error);
+        if (!h->module_) return nullptr;
+        h->segments_ = h->module_->segments();
+    } else {
+#ifdef DW3_HAVE_GENERATED
+        h->segments_ = std::span<const RecompSegment>(dw3_segments, dw3_segment_count);
+#else
+        error = "no game module: this build has no recompiled code linked in";
+        return nullptr;
+#endif
+    }
+    h->machine_ = std::make_unique<Machine>(h->segments_);
     h->bios_ = std::make_unique<Bios>(*h->machine_);
     Machine& m = *h->machine_;
     Bios& bios = *h->bios_;

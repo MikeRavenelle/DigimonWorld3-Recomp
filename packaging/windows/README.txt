@@ -7,7 +7,8 @@ Run
 ---
     dw3recomp.exe
 
-On first start a setup window asks for your disc image (.cue) and saves its location; run
+On first start a setup window asks for your disc image (.cue), saves its location and builds the game from it on this
+computer (a few minutes, once; nothing is downloaded for this). Run
 "dw3recomp.exe --setup" to open it again. To use a disc for one run only:
     dw3recomp.exe --disc "C:\Games\Digimon World 3 (USA).cue"
 

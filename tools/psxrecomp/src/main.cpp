@@ -17,40 +17,12 @@
 #include "psxdisc/psxexe.h"
 #include "psxrecomp/analysis.h"
 #include "psxrecomp/emitter.h"
+#include "psxrecomp/pipeline.h"
 
 namespace fs = std::filesystem;
 using namespace psxrecomp;
 
 namespace {
-
-struct SegmentJob {
-    CodeSegment seg;
-    AnalysisConfig cfg;
-};
-
-std::vector<uint8_t> read_all(const fs::path& p) {
-    std::ifstream f(p, std::ios::binary);
-    return {std::istreambuf_iterator<char>(f), std::istreambuf_iterator<char>()};
-}
-
-// Expands "AAA/PRO/WSTAG*.PRO"-style patterns (single '*').
-std::vector<std::string> expand_glob(const fs::path& root, const std::string& pattern) {
-    std::vector<std::string> out;
-    auto star = pattern.find('*');
-    if (star == std::string::npos) return {pattern};
-    fs::path dir = fs::path(pattern).parent_path();
-    std::string fname = fs::path(pattern).filename().string();
-    auto fstar = fname.find('*');
-    std::string pre = fname.substr(0, fstar), post = fname.substr(fstar + 1);
-    std::error_code ec;
-    for (const auto& e : fs::directory_iterator(root / dir, ec)) {
-        std::string n = e.path().filename().string();
-        if (n.size() >= pre.size() + post.size() && n.starts_with(pre) && n.ends_with(post))
-            out.push_back((dir / n).generic_string());
-    }
-    std::sort(out.begin(), out.end());
-    return out;
-}
 
 void report_segment(FILE* out, const SegmentJob& job, const AnalysisResult& r, bool verbose) {
     std::size_t bios = 0, jt = 0, pjmp = 0, ijmp = 0, icall = 0, errs = 0;
@@ -92,19 +64,6 @@ void report_segment(FILE* out, const SegmentJob& job, const AnalysisResult& r, b
 
 }  // namespace
 
-bool write_if_changed(const fs::path& p, const std::string& text) {
-    // Avoid touching unchanged files so incremental builds stay fast.
-    {
-        std::ifstream in(p, std::ios::binary);
-        if (in) {
-            std::string old{std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>()};
-            if (old == text) return false;
-        }
-    }
-    std::ofstream(p, std::ios::binary) << text;
-    return true;
-}
-
 int main(int argc, char** argv) {
     std::string mode = argc >= 3 ? argv[2] : "";
     if (mode != "analyze" && mode != "emit") {
@@ -131,101 +90,42 @@ int main(int argc, char** argv) {
     }
     fs::path extracted = cfg["paths"]["extracted"].value_or(std::string("game/extracted"));
 
-    std::vector<SegmentJob> jobs;
-    {
-        auto file = read_all(extracted / cfg["exe"]["path"].value_or(std::string("SLUS_014.36")));
-        auto exe = psxdisc::parse_psxexe(file);
-        if (!exe) {
-            std::fprintf(stderr, "cannot load exe from %s\n", extracted.string().c_str());
-            return 1;
-        }
-        SegmentJob j;
-        j.seg = {"MAIN", exe->text_addr, exe->text};
-        j.cfg.entries.push_back(exe->pc);
-        j.cfg.code_end = cfg["exe"]["code_end"].value_or(0u);
-        if (auto* arr = cfg["exe"]["functions"].as_array())
-            for (auto& v : *arr) j.cfg.extra_functions.insert(v.value_or(0u));
-        jobs.push_back(std::move(j));
+    Game game;
+    std::string error;
+    if (!game.load(cfg, directory_source(extracted), error)) {
+        std::fprintf(stderr, "%s (in %s)\n", error.c_str(), extracted.string().c_str());
+        return 1;
     }
-    if (auto* slots = cfg["overlay_slot"].as_array()) {
-        for (auto& node : *slots) {
-            auto& slot = *node.as_table();
-            uint32_t base = slot["base"].value_or(0u);
-            std::vector<std::string> files;
-            if (auto* a = slot["files"].as_array())
-                for (auto& v : *a) files.push_back(v.value_or(std::string()));
-            if (auto* a = slot["files_glob"].as_array())
-                for (auto& v : *a)
-                    for (auto& f : expand_glob(extracted, v.value_or(std::string()))) files.push_back(f);
-            for (const auto& f : files) {
-                SegmentJob j;
-                j.seg = {fs::path(f).stem().string(), base, read_all(extracted / f)};
-                if (j.seg.bytes.empty()) {
-                    std::fprintf(stderr, "missing overlay %s\n", f.c_str());
-                    return 1;
-                }
-                jobs.push_back(std::move(j));
-            }
-        }
-    }
+    game.analyze({});
+    const auto& jobs = game.jobs();
+    const auto& results = game.results();
 
     FILE* rep = report_path.empty() ? nullptr : std::fopen(report_path.c_str(), "w");
     std::size_t total = 0;
-    std::vector<AnalysisResult> results;
-    for (const auto& job : jobs) {
-        results.push_back(analyze(job.seg, job.cfg));
-        total += results.back().functions.size();
-        if (mode == "analyze") report_segment(stdout, job, results.back(), false);
-        if (rep) report_segment(rep, job, results.back(), true);
+    for (std::size_t k = 0; k < jobs.size(); ++k) {
+        total += results[k].functions.size();
+        if (mode == "analyze") report_segment(stdout, jobs[k], results[k], false);
+        if (rep) report_segment(rep, jobs[k], results[k], true);
     }
     std::printf("total functions: %zu across %zu segments\n", total, jobs.size());
 
-    std::vector<TableSegment> tables;
-    for (std::size_t k = 0; k < jobs.size(); ++k) {
-        uint32_t extent = jobs[k].cfg.code_end ? jobs[k].cfg.code_end - jobs[k].seg.base : 0;
-        tables.push_back({&jobs[k].seg, &results[k].functions, extent});
-    }
-    std::size_t jump_tables = 0, pointer_jumps = 0, unresolved = 0, bad_funcs = 0;
-    for (const auto& r : results)
-        for (const auto& [a, f] : r.functions) {
-            jump_tables += f.jump_tables.size();
-            pointer_jumps += f.pointer_jumps.size();
-            unresolved += f.indirect_jumps.size();
-            bad_funcs += !f.errors.empty();
-        }
-    SlotRelations slots = analyze_slots(tables);
-    std::size_t stale_links = 0, stale_overlays = 0;
-    for (const auto& l : slots.stale_if) stale_links += l.size(), stale_overlays += !l.empty();
-    for (const auto& a : slots.ambiguous) std::printf("ambiguous overlays: %s\n", a.c_str());
+    EmitStats st = game.statistics();
+    for (const auto& a : st.ambiguous_overlays) std::printf("ambiguous overlays: %s\n", a.c_str());
     std::printf("summary: %zu functions, %zu jump tables, %zu pointer jumps, %zu unresolved jr, %zu functions with errors, "
                 "%zu overlays with stale-tail checks (%zu links), %zu ambiguous overlay pairs\n",
-                total, jump_tables, pointer_jumps, unresolved, bad_funcs, stale_overlays, stale_links,
-                slots.ambiguous.size());
+                st.functions, st.jump_tables, st.pointer_jumps, st.unresolved_jumps, st.functions_with_errors,
+                st.stale_overlays, st.stale_links, st.ambiguous_overlays.size());
 
     if (mode == "emit") {
-        fs::create_directories(out_dir);
-        std::vector<std::string> warnings;
-        std::size_t files = 0, changed = 0;
-        std::string manifest;
-        for (std::size_t k = 0; k < jobs.size(); ++k) {
-            EmitContext ec;
-            ec.seg = &jobs[k].seg;
-            ec.local = &results[k].functions;
-            ec.main = &results[0].functions;  // job 0 is always MAIN
-            for (auto& f : emit_segment(ec, 64, &warnings)) {
-                changed += write_if_changed(fs::path(out_dir) / f.name, f.text);
-                manifest += f.name + "\n";
-                ++files;
-            }
+        EmitStats emitted;
+        if (!game.emit(out_dir, {}, emitted, error)) {
+            std::fprintf(stderr, "%s\n", error.c_str());
+            return 1;
         }
-        auto t = emit_tables(tables, &warnings);
-        changed += write_if_changed(fs::path(out_dir) / t.name, t.text);
-        manifest += t.name + "\n";
-        write_if_changed(fs::path(out_dir) / "sources.txt", manifest);
-        std::printf("emitted %zu files (%zu changed) to %s, %zu warnings\n", files + 1, changed, out_dir.c_str(),
-                    warnings.size());
+        std::printf("emitted %zu files (%zu changed) to %s, %zu warnings\n", emitted.files, emitted.files_changed,
+                    out_dir.c_str(), emitted.warnings.size());
         if (rep)
-            for (const auto& w : warnings) std::fprintf(rep, "EMIT %s\n", w.c_str());
+            for (const auto& w : emitted.warnings) std::fprintf(rep, "EMIT %s\n", w.c_str());
     }
     if (rep) std::fclose(rep);
     return 0;

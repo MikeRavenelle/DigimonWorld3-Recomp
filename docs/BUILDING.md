@@ -202,3 +202,12 @@ distrobox enter dw3-build -- cpack --config build/windows-x64-cross-release/CPac
 
 The ZIP holds `dw3recomp.exe` (static CRT and SDL, no DLLs), `LICENSE` and a `README.txt` that explains how to supply
 the disc. It contains no game data and no SDK files.
+
+## Release packages
+
+A release has no game code. `cmake --install <build dir> --component app --prefix <dir>` puts the program, the licence
+and `toolchain/` (the headers and entry point a game module is built from) in place; add `-DDW3_ZIG_DIR=<unpacked zig>`
+when configuring to include the compiler (`.github/workflows/release.yml` pins the zig version and checks its SHA-256).
+To try the player's path from a checkout, build without `generated/` (or move it away), point `DW3_TOOLCHAIN` at a folder
+laid out like `toolchain/`, and run `dw3recomp --prepare --disc "<disc.cue>"`; the module lands in the user data folder
+under `module/`. The setup window does the same on first start.

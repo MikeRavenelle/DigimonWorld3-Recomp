@@ -1,22 +1,71 @@
 # Digimon World 3 Recomp
 
-A static recompilation of *Digimon World 3* (PS1, USA) to native x86_64 and ARM64. It targets
-Vulkan, Metal and Direct3D 12 through [plume](https://github.com/renderbag/plume).
+Digimon World 3 (PS1, USA) running as a native program on your PC. It isn't an emulator. The game's code was
+translated ahead of time into code your machine runs directly, so it starts fast, sits well on handhelds and gives us
+room to do things an emulator can't do cleanly.
 
-> **Status:** work in progress. The game boots and is playable on Linux, macOS (Apple silicon) and Windows, with
-> a Metal, Vulkan or Direct3D 12 renderer and a software fallback. Expect rough edges.
+You bring your own copy of the game. Nothing from the disc is in this repo or in any download from it.
 
-You must supply your own copy of the game. No game data is included in this repository.
+> **Status:** beta. The whole game boots and plays on Linux, macOS (Apple silicon) and Windows. Expect rough edges,
+> and please report them.
 
-## Building
+## What you get
 
-Every platform needs three steps, in this order. **Step 2 is required**: the game executable cannot be built
-without the recompiled sources, which are generated from your own disc and never committed.
+**A picture that doesn't look 25 years old**
+- Three looks: **Original** (exactly what the PlayStation showed), **Enhanced** (same look, sharper, no dither, no
+  wobbling polygons) and **Remaster** (everything cranked). One key flips between Original and your pick so you can
+  compare.
+- 3D rendered at up to 8x the original resolution.
+- HD backgrounds. The field maps are pre-rendered pictures, so we can swap in AI-upscaled ones. You make them from your
+  own disc on your own PC, the setup walks you through it, and it's optional.
+- Seamless maps. No more dark squares popping in at the edges of a field while you walk.
+- Widescreen at 16:9, 16:10 or 21:9 without stretching the picture.
+- HDR, FSR, SMAA, sharpening, colour grading, and a CRT look if you want scanlines.
 
-1. **Put your disc image** at `game/Digimon World 3 (USA).bin` / `.cue` (git-ignored), or point `-DDW3_GAME_DIR=` at
-   its directory.
-2. **Generate the recompiled code** (once, and again whenever `config/dw3.toml` or the recompiler changes). From the
-   repository root, with `<preset>` as in the table below:
+**Play it your way**
+- Save states anywhere, on top of the normal memory card saves (those are plain files you can back up).
+- Fast-forward, or run the whole game at 2x to 4x with the music staying in tune.
+- Text speed up to instant, encounter rate (half, double or off), an XP multiplier and a god mode. All of it is off by
+  default, so the game plays like the original until you say otherwise.
+- Separate music and effects volume.
+- Controller support with Xbox, PlayStation or Nintendo button prompts, and everything is rebindable.
+- Borderless, windowed or exclusive fullscreen on whichever monitor you pick.
+
+Every option lives in an in-game settings screen, and in a plain `settings.toml` if you like editing files. The full
+list is in [docs/SETTINGS.md](docs/SETTINGS.md).
+
+## Running it
+
+1. Get a dump of your own disc as a `.cue` / `.bin` pair.
+2. Start the program. First launch opens a setup window that asks for the `.cue`, checks it's the right game
+   (SLUS-01436) and remembers it. Then it builds the game from your disc on your PC. That takes a minute or a few, it
+   only happens once, and nothing gets downloaded for it. `--setup` opens the window again.
+3. Optional: say yes to HD backgrounds in the same window. It downloads an upscaler and a model, checks them against
+   fixed hashes, and builds a pack from your disc. That takes a long time and needs a Vulkan GPU, but you can cancel and
+   pick it up later.
+
+Prebuilt downloads aren't up yet. Until they are, you build it yourself (below).
+
+## Under the hood
+
+The recompiler reads the main executable and all 263 overlays off the disc, finds every function, and writes C for
+each one. That C is compiled for your platform and linked against a runtime that does the rest of the console: GPU,
+SPU, GTE, CD drive, memory cards, timers, DMA and a native BIOS. No CPU emulation, no interpreter, and no fallback
+if the recompiler missed something. A missing function stops the game with a clear message.
+
+- Renderers: Metal, Vulkan and Direct3D 12 through [plume](https://github.com/renderbag/plume), plus a software
+  rasterizer. All 3D and post-processing happens on the GPU.
+- Platforms: Linux x86-64 and arm64, macOS on Apple silicon, Windows x64.
+- Save states record where the game is in the original's addresses, so they don't depend on which build made them.
+- The generated C is architecture neutral, so one machine can produce it for the others.
+- Licensed GPL-3.0.
+
+### Building
+
+The recompiled code comes from your disc, so it's never committed and you generate it before building the game.
+
+1. Put your disc at `game/Digimon World 3 (USA).bin` / `.cue` (git-ignored), or point `-DDW3_GAME_DIR=` at its folder.
+2. Generate the recompiled code. Do this once, and again when `config/dw3.toml` or the recompiler changes:
 
    ```sh
    cmake --preset <preset>
@@ -25,99 +74,61 @@ without the recompiled sources, which are generated from your own disc and never
    cmake --build --preset <preset> --target recompile      # writes generated/
    ```
 
-   The generated C is architecture-neutral, so it can be produced on one machine and copied to `generated/` on another.
-3. **Build and test**. CMake only picks up `generated/` when it configures, so configure again after step 2:
+3. Configure again so CMake sees `generated/`, then build and test:
 
    ```sh
    cmake --preset <preset>
    cmake --build --preset <preset>
-   ctest --preset <preset> -LE scenario -j8      # unit tests; `-L scenario` runs the in-game tests (needs the disc)
+   ctest --preset <preset> -LE scenario -j8      # unit tests; -L scenario runs the in-game tests and needs the disc
    ```
 
-   The executable is `build/<preset>/app/dw3recomp`.
+The program ends up at `build/<preset>/app/dw3recomp`.
 
-If the build stops with `fatal error: 'dw3/host.h' file not found`, `generated/` is missing: do step 2.
+| Platform | Presets |
+|---|---|
+| Linux x86-64 | `linux-x64-debug`, `linux-x64-release` |
+| Linux arm64 | `linux-arm64-*` (native), `linux-arm64-cross-*` (from x86-64, tests under qemu) |
+| macOS (Apple silicon) | `macos-arm64-debug`, `macos-arm64-release` |
+| Windows x64 | `windows-x64-debug`, `windows-x64-release` (on Windows), `windows-x64-cross-*` (from Linux) |
 
-| Platform | Presets | Details |
-|---|---|---|
-| Linux x86-64 | `linux-x64-debug`, `linux-x64-release` | below |
-| Linux arm64 | `linux-arm64-*` (native), `linux-arm64-cross-*` (from x86-64, tests under qemu) | [docs/BUILDING.md](docs/BUILDING.md) |
-| macOS (Apple silicon) | `macos-arm64-debug`, `macos-arm64-release` | below |
-| Windows x64 | `windows-x64-debug`, `windows-x64-release` (on Windows), `windows-x64-cross-*` (from Linux) | [docs/BUILDING.md](docs/BUILDING.md) |
+You need clang, CMake 3.24 or newer, Ninja, glslang and SDL3. On Linux you also need the Vulkan headers and loader.
+GoogleTest, toml++, zstd and plume are fetched for you. On Bazzite or Silverblue do all of this in a distrobox. macOS and
+Windows details, cross builds and packaging are in [docs/BUILDING.md](docs/BUILDING.md) and
+[packaging/macos/README.md](packaging/macos/README.md).
 
-### Linux
+Without `generated/` everything else still builds and the unit tests run (that is what CI does), but there's no game
+code in the program. It needs a game module instead.
 
-Requirements: clang ≥ 17, lld, CMake ≥ 3.24, Ninja, glslang, SDL3 and the Vulkan headers/loader. GoogleTest, toml++,
-zstd and plume are fetched automatically if they are not installed.
+### Game modules
 
-```sh
-# On immutable distros (Bazzite/Silverblue) use a distrobox:
-distrobox create -n dw3-build -i registry.fedoraproject.org/fedora:latest
-distrobox enter dw3-build -- sudo dnf install -y clang lld cmake ninja-build glslang SDL3-devel \
-    vulkan-loader-devel vulkan-headers gtest-devel gmock-devel
-```
+The recompiled code can also be built as a shared library and loaded at run time, with `--module PATH`. The library
+gets the runtime's services through a small table when it loads, so it has no link-time dependency on the program and
+loads the same way on every OS. `-DDW3_BUILD_GAME_MODULE=ON` builds one from `generated/`.
 
-Then run the three steps above with `<preset>` = `linux-x64-release` (inside the container if you use one).
+This is how releases work. The packages contain the program and a small toolchain (a `zig` compiler plus two source
+files) and no game code. The setup recompiles your disc with the same recompiler as the build above, compiles the
+result with that toolchain and keeps the module in your user data folder, named after the recompiler version and the
+disc. `dw3recomp --prepare` does the same from the command line. Tagging `v*` runs the release workflow, which builds
+and tests every platform and publishes the packages as a pre-release.
 
-### macOS
-
-Requirements: Xcode command line tools (Apple clang), CMake ≥ 3.24, Ninja, glslang and SDL3.
-
-```sh
-brew install cmake ninja glslang sdl3        # spirv-tools is optional (shader validation)
-```
-
-Then run the three steps above with `<preset>` = `macos-arm64-release`. Rendering uses Metal. To build the `.app` and
-disk image see [packaging/macos/README.md](packaging/macos/README.md).
-
-### Windows and other targets
-
-See [docs/BUILDING.md](docs/BUILDING.md) for Windows (native and cross-compiled from Linux, including running under
-Wine), Linux arm64 cross builds and packaging.
-
-## First run
-
-The program ships without game data. On first start (or whenever no valid disc is configured) a setup window asks for
-your own disc image of Digimon World 3 (USA): choose its `.cue`, the program checks the serial (SLUS-01436) and the
-SHA-256 of the game executable, and saves the path as `system.disc_path` in `settings.toml`. `--setup` opens the window
-again. `--disc PATH` overrides the saved path for one run.
-
-The window also offers HD backgrounds, which is optional and off until you accept. Accepting downloads the
-realesrgan-ncnn-vulkan upscaler (v0.2.0, MIT, about 2 to 9 MB depending on the platform) from its official release and
-the converted Real-ESRGAN model (BSD 3-Clause) from this project's releases, using the `curl` that comes with your
-system. Every file is checked against a fixed SHA-256, unpacked into `<user data>/tools`, and then a texture pack is
-built from your disc on your own computer (this takes a long time and needs a Vulkan GPU; it can be cancelled and
-resumed). If `curl` is missing the window lists the addresses and the folder to put the files in. Options that matter
-while playing stay in the game's own settings screen. See `docs/SETTINGS.md` for details and
-`tools/models/` for how the model files are made.
-
-## Game files
-
-Put your dump at `game/Digimon World 3 (USA).bin` / `.cue`. That directory is git-ignored. Tests
-that need the disc are skipped when it is absent. `dw3extract` also lists and extracts the disc contents:
-
-```sh
-build/<preset>/tools/dw3extract/dw3extract "game/Digimon World 3 (USA).cue" extract game/extracted
-```
-
-## Layout
+### Layout
 
 | Path | Contents |
 |---|---|
 | `tools/psxdisc` | cue/bin, raw sector, ISO9660 and PS-X EXE library |
-| `tools/dw3extract` | disc file lister/extractor (includes the hidden `AAA/` tree) |
-| `tools/psxrecomp` | MIPS R3000A → C static recompiler |
-| `runtime/` | PS1 hardware and BIOS runtime, platform abstraction |
-| `app/` | game executable (window, input, settings, setup wizard, presenters) |
-| `host/` | boot/run logic shared by the app and the scenario runner (built once `generated/` exists) |
-| `render/` | GPU renderers (Metal, Vulkan, Direct3D 12) and the software rasterizer |
+| `tools/dw3extract` | disc lister and extractor, including the hidden `AAA/` tree |
+| `tools/psxrecomp` | MIPS R3000A to C recompiler |
+| `tools/texpack` | texture pack builder for HD backgrounds |
+| `runtime/` | console hardware, BIOS, game module loader, platform layer |
+| `app/` | the program: window, input, settings, setup window, presenters |
+| `host/` | boot and run logic shared by the app and the scenario runner |
+| `render/` | GPU renderers and the software rasterizer |
 | `config/` | recompiler configuration for DW3 |
-| `tests/` | GoogleTest unit and integration tests, plus in-game scenarios |
-| `packaging/` | macOS `.app`/dmg scripts and the Windows package note |
-| `docs/` | architecture notes |
+| `tests/` | unit tests and in-game scenarios |
+| `packaging/` | macOS `.app` and dmg scripts, Windows and Linux packaging |
+| `docs/` | architecture, building and settings |
 
-See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md). Options, visual presets, hotkeys and fast-forward are
-described in [docs/SETTINGS.md](docs/SETTINGS.md).
+More in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
 ## License
 
