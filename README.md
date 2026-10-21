@@ -4,14 +4,12 @@ Digimon World 3 (PS1, USA) running as a native program on your PC. It isn't an e
 translated ahead of time into code your machine runs directly, so it starts fast, sits well on handhelds and gives us
 room to do things an emulator can't do cleanly.
 
-You bring your own copy of the game. Nothing from the disc is in this repo or in any download from it.
+You need your own copy of the game. Nothing from the disc is in this repo or in any download from it.
 
 > **Status:** beta. The whole game boots and plays on Linux, macOS (Apple silicon) and Windows. Expect rough edges,
 > and please report them.
 
-## What you get
-
-**A picture that doesn't look 25 years old**
+## Features
 - Three looks: **Original** (exactly what the PlayStation showed), **Enhanced** (same look, sharper, no dither, no
   wobbling polygons) and **Remaster** (everything cranked). One key flips between Original and your pick so you can
   compare.
@@ -21,8 +19,6 @@ You bring your own copy of the game. Nothing from the disc is in this repo or in
 - Seamless maps. No more dark squares popping in at the edges of a field while you walk.
 - Widescreen at 16:9, 16:10 or 21:9 without stretching the picture.
 - HDR, FSR, SMAA, sharpening, colour grading, and a CRT look if you want scanlines.
-
-**Play it your way**
 - Save states anywhere, on top of the normal memory card saves (those are plain files you can back up).
 - Fast-forward, or run the whole game at 2x to 4x with the music staying in tune.
 - Text speed up to instant, encounter rate (half, double or off), an XP multiplier and a god mode. All of it is off by
@@ -31,8 +27,7 @@ You bring your own copy of the game. Nothing from the disc is in this repo or in
 - Controller support with Xbox, PlayStation or Nintendo button prompts, and everything is rebindable.
 - Borderless, windowed or exclusive fullscreen on whichever monitor you pick.
 
-Every option lives in an in-game settings screen, and in a plain `settings.toml` if you like editing files. The full
-list is in [docs/SETTINGS.md](docs/SETTINGS.md).
+Every option lives in an in-game settings screen, and in a plain `settings.toml`.
 
 ## Running it
 
@@ -44,9 +39,7 @@ list is in [docs/SETTINGS.md](docs/SETTINGS.md).
    fixed hashes, and builds a pack from your disc. That takes a long time and needs a Vulkan GPU, but you can cancel and
    pick it up later.
 
-Prebuilt downloads aren't up yet. Until they are, you build it yourself (below).
-
-## Under the hood
+## Technical
 
 The recompiler reads the main executable and all 263 overlays off the disc, finds every function, and writes C for
 each one. That C is compiled for your platform and linked against a runtime that does the rest of the console: GPU,
@@ -62,7 +55,7 @@ if the recompiler missed something. A missing function stops the game with a cle
 
 ### Building
 
-The recompiled code comes from your disc, so it's never committed and you generate it before building the game.
+The recompiled code comes from your disc.
 
 1. Put your disc at `game/Digimon World 3 (USA).bin` / `.cue` (git-ignored), or point `-DDW3_GAME_DIR=` at its folder.
 2. Generate the recompiled code. Do this once, and again when `config/dw3.toml` or the recompiler changes:
@@ -92,9 +85,7 @@ The program ends up at `build/<preset>/app/dw3recomp`.
 | Windows x64 | `windows-x64-debug`, `windows-x64-release` (on Windows), `windows-x64-cross-*` (from Linux) |
 
 You need clang, CMake 3.24 or newer, Ninja, glslang and SDL3. On Linux you also need the Vulkan headers and loader.
-GoogleTest, toml++, zstd and plume are fetched for you. On Bazzite or Silverblue do all of this in a distrobox. macOS and
-Windows details, cross builds and packaging are in [docs/BUILDING.md](docs/BUILDING.md) and
-[packaging/macos/README.md](packaging/macos/README.md).
+GoogleTest, toml++, zstd and plume are fetched for you. On Bazzite or Silverblue do all of this in a distrobox.
 
 Without `generated/` everything else still builds and the unit tests run (that is what CI does), but there's no game
 code in the program. It needs a game module instead.
@@ -105,7 +96,7 @@ The recompiled code can also be built as a shared library and loaded at run time
 gets the runtime's services through a small table when it loads, so it has no link-time dependency on the program and
 loads the same way on every OS. `-DDW3_BUILD_GAME_MODULE=ON` builds one from `generated/`.
 
-This is how releases work. The packages contain the program and a small toolchain (a `zig` compiler plus two source
+The packages contain the program and a small toolchain (a `zig` compiler plus two source
 files) and no game code. The setup recompiles your disc with the same recompiler as the build above, compiles the
 result with that toolchain and keeps the module in your user data folder, named after the recompiler version and the
 disc. `dw3recomp --prepare` does the same from the command line. Tagging `v*` runs the release workflow, which builds
@@ -127,8 +118,6 @@ and tests every platform and publishes the packages as a pre-release.
 | `tests/` | unit tests and in-game scenarios |
 | `packaging/` | macOS `.app` and dmg scripts, Windows and Linux packaging |
 | `docs/` | architecture, building and settings |
-
-More in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
 ## License
 
