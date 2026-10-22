@@ -1,4 +1,5 @@
 # Digimon World 3 Recomp
+[![Listed on PlayPorted](https://playported.com/badge.svg)](https://playported.com/ports/690-digimon-world-3/)
 
 Digimon World 3 (PS1, USA) running as a native program on your PC. It isn't an emulator. The game's code was
 translated ahead of time into code your machine runs directly, so it starts fast, sits well on handhelds and gives us
